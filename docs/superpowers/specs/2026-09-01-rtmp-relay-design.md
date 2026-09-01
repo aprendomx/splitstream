@@ -243,11 +243,15 @@ descartados, uptime de la conexión actual, número de reconexiones, último err
 
 ## 7. Modelo de datos
 
-- **`settings`** — clave de ingesta, puerto RTMP, hash argon2id de la contraseña, key
-  check value de la master key.
+- **`settings`** — fila única. App y clave de ingesta (la clave cifrada, más sus
+  últimos 4 caracteres en claro para poder enmascararla sin descifrar), hash argon2id
+  de la contraseña, y key check value de la master key. El puerto RTMP **no** vive
+  aquí: es configuración de despliegue y viene de `SPLITSTREAM_RTMP_ADDR` (§12).
 - **`destinations`** — `id`, `name`, `platform` (`youtube|twitch|facebook|kick|x|custom`),
-  `rtmp_url`, `stream_key_encrypted`, `enabled`, `sort_order`, `created_at`,
-  `updated_at`.
+  `rtmp_url`, `stream_key_encrypted`, `stream_key_last4`, `enabled`, `sort_order`,
+  `created_at`, `updated_at`. `stream_key_last4` está desnormalizado a propósito: el
+  listado enmascara sin necesitar la master key, así que descifrar queda confinado al
+  único endpoint que revela.
 - **`sessions`** — `id`, `started_at`, `ended_at`, resolución (del SPS) y bitrate medido
   del ingest.
 - **`events`** — log persistente de conexiones, desconexiones y errores por destino y
