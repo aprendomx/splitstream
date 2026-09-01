@@ -149,8 +149,10 @@ sin testify. Logging con `log/slog`.
 
 **Frontend:** Vue 3, Quasar 2, Pinia, `vuedraggable`. Nada más.
 
-**Herramientas de desarrollo:** Go 1.23+, Node 20+, Docker (solo para tests de
-integración y build de producción), ffmpeg (solo para tests).
+**Herramientas de desarrollo:** Go 1.25+, Node 20+, Docker (solo para tests de
+integración y build de producción), ffmpeg (solo para tests). El piso es 1.25 y no
+1.23 porque `golang.org/x/crypto` lo exige; el `Dockerfile` de la §12 fija la imagen
+de build, así que el piso no restringe el despliegue.
 
 ## 6. Arquitectura del motor
 

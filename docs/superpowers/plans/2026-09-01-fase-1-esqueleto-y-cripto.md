@@ -16,7 +16,7 @@ aplica migraciones embebidas y expone repositorios tipados. El binario de la fas
 valida la master key contra un *key check value* y espera a SIGTERM: todavía no hay ni RTMP
 ni HTTP.
 
-**Tech Stack:** Go 1.27 (piso 1.23), `modernc.org/sqlite`, `golang.org/x/crypto/argon2`,
+**Tech Stack:** Go 1.27 (piso 1.25), `modernc.org/sqlite`, `golang.org/x/crypto/argon2`,
 `log/slog`, `embed`. Sin CGO, sin frameworks.
 
 **Spec:** `docs/superpowers/specs/2026-09-01-rtmp-relay-design.md`
@@ -27,7 +27,10 @@ ni HTTP.
 - `CGO_ENABLED=0` en el **build**: el binario final debe ser estático. Los **tests**
   corren con cgo habilitado, porque `-race` lo exige en darwin/arm64 y linux/amd64.
   `modernc.org/sqlite` es puro Go y funciona igual en ambos modos.
-- Go 1.23 como piso en `go.mod`, aunque la máquina tenga 1.27.
+- Piso en `go.mod`: **`go 1.25.0`**. Subido desde 1.23 durante la Task 3 — ver la
+  Ruling en el ledger. `golang.org/x/crypto` v0.55.0 exige 1.25.0 en su propio
+  `go.mod`, y anclar la librería de criptografía a una versión vieja para sostener
+  un piso arbitrario es el peor intercambio de los dos.
 - Dependencias permitidas en toda la fase 1, y ninguna más: `modernc.org/sqlite`,
   `golang.org/x/crypto`. Sin testify, sin router HTTP, sin librería de migraciones.
 - Variables de entorno, con estos nombres exactos: `SPLITSTREAM_MASTER_KEY` (obligatoria),
