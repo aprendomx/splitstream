@@ -1,0 +1,22 @@
+# Go
+/splitstream
+/dist/
+*.test
+*.out
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# Frontend
+/web/node_modules/
+/web/dist/
+/web/.quasar/
+
+# Entorno
+.env
+.env.local
+
+# macOS
+.DS_Store
