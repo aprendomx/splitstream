@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeStore struct {
@@ -122,5 +123,77 @@ func TestEngineResetsPreambleBetweenSessions(t *testing.T) {
 	meta, _, _ := h.Preamble().Snapshot()
 	if meta != nil {
 		t.Error("el preámbulo debe vaciarse al terminar la sesión")
+	}
+}
+func TestEngineWaitIdleReturnsImmediatelyWithNoSession(t *testing.T) {
+	e := NewEngine(EngineConfig{Hub: NewHub(nil), Store: &fakeStore{}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	start := time.Now()
+	if err := e.WaitIdle(ctx); err != nil {
+		t.Fatalf("WaitIdle sin sesión = %v, quería nil", err)
+	}
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Errorf("WaitIdle sin sesión tardó %v: debería retornar de inmediato", d)
+	}
+}
+
+func TestEngineWaitIdleWaitsForSessionToClose(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+
+	// La sesión se cierra desde otra goroutine, como haría la de go-rtmp al cerrarse
+	// el socket.
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		e.OnPublishEnd()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	if err := e.WaitIdle(ctx); err != nil {
+		t.Fatalf("WaitIdle = %v, quería nil", err)
+	}
+	if d := time.Since(start); d < 100*time.Millisecond {
+		t.Errorf("WaitIdle retornó en %v: no esperó a que la sesión cerrara", d)
+	}
+	if e.SessionID() != 0 {
+		t.Error("WaitIdle retornó con una sesión todavía abierta")
+	}
+}
+
+func TestEngineWaitIdleRespectsContext(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	// La sesión NO se cierra: WaitIdle debe rendirse al vencer el contexto.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := e.WaitIdle(ctx)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitIdle = %v, quería DeadlineExceeded", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("WaitIdle tardó %v en rendirse", elapsed)
 	}
 }

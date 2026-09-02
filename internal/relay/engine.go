@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // EngineStore es lo que el motor necesita de la persistencia. Es una interfaz para que
@@ -72,6 +73,32 @@ func (e *Engine) SessionID() int64 {
 	return e.sessionID
 }
 
+// WaitIdle bloquea hasta que no haya ninguna sesión abierta, o hasta que venza el
+// contexto.
+//
+// Es lo que hace que el apagado sea limpio de verdad: cerrar la ingesta corta los
+// sockets, pero go-rtmp atiende cada conexión en su propia goroutine y es esa la que
+// todavía tiene que disparar OnPublishEnd, que cierra la sesión en la base. Salir antes
+// deja la sesión abierta para siempre con ended_at en NULL, y sin ningún aviso, porque
+// el proceso muere antes de poder loguearlo.
+func (e *Engine) WaitIdle(ctx context.Context) error {
+	const poll = 20 * time.Millisecond
+
+	t := time.NewTicker(poll)
+	defer t.Stop()
+
+	for {
+		if e.SessionID() == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
 // OnPublishStart valida al publisher y abre la sesión.
 func (e *Engine) OnPublishStart(app, streamKey string) error {
 	e.mu.Lock()
@@ -102,10 +129,14 @@ func (e *Engine) OnMessage(msg *Message) { e.hub.Publish(msg) }
 
 // OnPublishEnd cierra la sesión y olvida el preámbulo: los sequence headers de esta
 // transmisión no valen para la siguiente.
+//
+// sessionID solo se pone a 0 al final, DESPUÉS de FinishSession y LogEvent. Si se
+// pusiera a 0 al entrar (como en una versión anterior), WaitIdle vería "sin sesión"
+// mientras la escritura en la base todavía está en vuelo, y el apagado podría cerrar
+// la base antes de que termine: exactamente la carrera que WaitIdle existe para evitar.
 func (e *Engine) OnPublishEnd() {
 	e.mu.Lock()
 	id := e.sessionID
-	e.sessionID = 0
 	e.mu.Unlock()
 
 	if id == 0 {
@@ -119,6 +150,11 @@ func (e *Engine) OnPublishEnd() {
 	}
 	e.logEvent(ctx, &id, nil, "info", "publisher_disconnected", "el publisher se desconectó")
 	e.hub.Preamble().Reset()
+
+	e.mu.Lock()
+	e.sessionID = 0
+	e.mu.Unlock()
+
 	e.log.Info("sesión terminada", "sesion_id", id)
 }
 

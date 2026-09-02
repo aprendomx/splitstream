@@ -175,6 +175,17 @@ func run(ctx context.Context, out io.Writer) error {
 	if err := ingest.Close(); err != nil {
 		logger.Error("cerrar la ingesta", "err", err)
 	}
+
+	// Cerrar la ingesta corta los sockets, pero go-rtmp atiende cada conexión en su
+	// propia goroutine y esa todavía tiene que disparar OnPublishEnd, que cierra la
+	// sesión en la base. Sin esta espera, el proceso puede salir antes y dejar la sesión
+	// abierta para siempre, con código de salida 0 y sin una sola línea de error.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelShutdown()
+	if err := engine.WaitIdle(shutdownCtx); err != nil {
+		logger.Warn("la sesión no llegó a cerrarse durante el apagado", "err", err)
+	}
+
 	hub.Close()
 
 	done := make(chan struct{})
