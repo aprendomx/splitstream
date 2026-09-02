@@ -137,7 +137,7 @@ con un publisher en memoria, sin Docker y sin red.
 
 | Dependencia | Uso |
 | --- | --- |
-| `github.com/yutopp/go-rtmp` | ingesta y publicación (arrastra `go-flv`, `go-amf0`) |
+| `github.com/yutopp/go-rtmp` | ingesta y publicación (v0.0.7; arrastra `go-amf0`, `logrus`, `pkg/errors`, `mapstructure`) |
 | `modernc.org/sqlite` | driver SQLite puro Go |
 | `golang.org/x/crypto` | argon2id |
 | `golang.org/x/time` | rate limit del login |
@@ -146,6 +146,12 @@ con un publisher en memoria, sin Docker y sin red.
 Sin router HTTP (`net/http.ServeMux` de Go 1.22+ ya hace patrones con método y
 wildcards), sin librería de migraciones (runner propio de ~50 líneas sobre `embed.FS`),
 sin testify. Logging con `log/slog`.
+
+`go-rtmp` arrastra `logrus`, `pkg/errors` y `mapstructure`, que contradicen el criterio de
+"deliberadamente pocas" de esta sección. Se aceptan: son transitivas de la única librería
+RTMP viable, y evitarlas exigiría escribir el protocolo a mano — que el spike de la §16
+demostró innecesario. El binario sigue usando `log/slog`; `logrus` solo lo usa go-rtmp
+internamente.
 
 **Frontend:** Vue 3, Quasar 2, Pinia, `vuedraggable`. Nada más.
 
@@ -488,3 +494,64 @@ Genera específicamente la clave de *ingesta*. Nada impide que un handler la use
 para un destino, donde la clave la da la plataforma y no se inventa.
 
 **Acción:** renombrar a `GenerateIngestKey()`.
+
+
+## 16. Resultado del spike de `go-rtmp` (2026-09-02)
+
+Ejecutado antes de escribir el motor, como exigía la §14. **Veredicto: el cliente de
+`go-rtmp` sirve. El plan B del publisher propio no hace falta.**
+
+### Lo que se verificó, y cómo
+
+Un publicador desechable leyó un FLV real (H.264 + AAC, generado con
+`ffmpeg -f lavfi -i testsrc2`) y republicó sus tags contra `mediamtx` en Docker.
+
+| Pregunta | Resultado | Evidencia |
+| --- | --- | --- |
+| ¿Publica media real de punta a punta? | Sí | 24 s publicados; leídos de vuelta por RTSP y grabados 4,017 s de h264 640x360 + aac 44100 decodificables |
+| ¿RTMPS? | Sí | `mediamtx` con TLS en :1936 reconoció "2 tracks (H264, MPEG-4 Audio)" |
+| ¿`releaseStream` / `FCPublish` sin forkear? | Sí | `Stream.Write` acepta `*message.CommandMessage`; ambos comandos aceptados |
+| ¿`@setDataFrame` (§3.5)? | Sí | Sin él no habría reconocido los tracks |
+| ¿Verificación TLS por defecto? | Correcta | Rechaza un certificado autofirmado salvo con `InsecureSkipVerify` |
+
+### Tres hallazgos que condicionan el motor
+
+**16.1 `TLSDial` exige el literal `"rtmps"` como argumento `protocol`.**
+`DialWithTLSDialer` compara `protocol != "rtmps"` y `DialWithDialer` compara
+`protocol != "rtmp"`. Pasar `"rtmp"` a la variante TLS devuelve `Unknown protocol: rtmp`.
+No está documentado. El `Publisher` debe derivar ese literal del esquema de la URL del
+destino, no cablearlo.
+
+**16.2 `Stream.Write` tiene un timeout de 5 s cableado con `context.Background()`.**
+
+```go
+func (s *Stream) Write(chunkStreamID int, timestamp uint32, msg message.Message) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // TODO: Fix 5s
+	...
+}
+```
+
+No se puede inyectar un contexto propio. Consecuencias para el diseño del sink (§6.3, §6.4):
+
+- Un destino atascado bloquea su goroutine hasta 5 s por mensaje. Como cada sink tiene la
+  suya, no afecta al publisher ni a los demás destinos — el aislamiento del §6.2 se
+  mantiene — pero durante esos 5 s su cola se llena y se descartan GOPs. Es el
+  comportamiento deseado, pero debe ser deliberado.
+- Detectar una conexión muerta tarda **como mínimo 5 s**. El backoff del §6.5 se mide desde
+  que el write falla, no desde que la red se cayó.
+- Un `Write` que devuelve error por timeout debe tratarse como conexión perdida y disparar
+  la reconexión, no reintentarse sobre la misma conexión.
+
+**16.3 El chunk size de salida se negocia y funciona.**
+`WriteSetChunkSize(4096)` fue aceptado (`mediamtx`: "Changing chunkSize 128->4096"). Confirma
+la decisión del §6.3.
+
+### Riesgo que queda abierto
+
+`go-rtmp` está en **v0.0.7**, pre-1.0, y el `TODO: Fix 5s` del propio código sugiere que su
+autor considera provisional esa constante. La interfaz `Publisher` del §4 sigue siendo la
+decisión correcta: si alguna plataforma real rechaza el handshake, se sustituye la
+implementación sin tocar el hub.
+
+El spike probó contra `mediamtx`, no contra YouTube ni Twitch. Antes de cerrar la fase 3 hay
+que probar contra un destino real por plataforma, como dice la tabla de riesgos del §14.
