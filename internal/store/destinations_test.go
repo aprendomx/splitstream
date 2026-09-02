@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -42,6 +43,39 @@ func TestCreateDestinationStoresKeyEncrypted(t *testing.T) {
 	}
 	if strings.Contains(string(blob), "abcd-efgh") {
 		t.Error("la clave del destino está en claro en la base")
+	}
+}
+
+// Destination es lo que la fase 4 serializará en una respuesta de API. El comentario
+// del tipo promete que serializarlo nunca puede filtrar la clave; este test lo
+// convierte en invariante.
+func TestDestinationDoesNotLeakKeyAsJSON(t *testing.T) {
+	db, c := bootstrapped(t)
+	ctx := context.Background()
+
+	dest, err := db.CreateDestination(ctx, c, newDest("YouTube"))
+	if err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+
+	blob, err := json.Marshal(dest)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(blob), "abcd-efgh") {
+		t.Errorf("Destination filtró la clave al serializarse: %s", blob)
+	}
+
+	list, err := db.ListDestinations(ctx)
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	blob, err = json.Marshal(list)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(blob), "abcd-efgh") {
+		t.Errorf("el listado filtró la clave al serializarse: %s", blob)
 	}
 }
 

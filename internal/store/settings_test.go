@@ -1,8 +1,10 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -83,6 +85,55 @@ func TestBootstrapDoesNotStoreIngestKeyInClear(t *testing.T) {
 	}
 }
 
+// TestBootstrapDoesNotStoreIngestKeyInClear solo mira una columna. Esta versión busca
+// la clave en TODOS los archivos que deja la base, incluido el -wal: en modo WAL lo
+// recién escrito vive ahí, no en el .db, así que mirar solo el .db no prueba nada.
+func TestIngestKeyNeverAppearsInDatabaseFiles(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	db, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := testCipher(t, 0xAB)
+	if err := db.Bootstrap(ctx, c); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	key, err := db.RevealIngestKey(ctx, c)
+	if err != nil {
+		t.Fatalf("RevealIngestKey: %v", err)
+	}
+	// Cerrar fuerza el checkpoint del WAL al archivo principal.
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	plaintext := []byte(key.Reveal())
+	checked := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("leer %s: %v", e.Name(), err)
+		}
+		if bytes.Contains(content, plaintext) {
+			t.Errorf("%s contiene la clave de ingesta en claro", e.Name())
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no se inspeccionó ningún archivo: el test no probó nada")
+	}
+}
+
 func TestBootstrapIsIdempotent(t *testing.T) {
 	db, c := bootstrapped(t)
 	ctx := context.Background()
@@ -125,6 +176,22 @@ func TestBootstrapDetectsWrongMasterKey(t *testing.T) {
 	err = second.Bootstrap(ctx, testCipher(t, 0xCD))
 	if !errors.Is(err, crypto.ErrWrongMasterKey) {
 		t.Fatalf("Bootstrap con otra master key = %v, quería ErrWrongMasterKey", err)
+	}
+}
+
+// RotateIngestKey y SetPasswordHash son inalcanzables en el flujo normal (CHECK (id = 1)
+// y Bootstrap siempre antes), pero su modo de fallo hoy es éxito silencioso: el usuario
+// recibiría una clave nueva por HTTP sin que la base se actualizara.
+func TestSettingsWritesRequireBootstrap(t *testing.T) {
+	db := openTemp(t) // sin Bootstrap a propósito
+	c := testCipher(t, 0xAB)
+	ctx := context.Background()
+
+	if _, err := db.RotateIngestKey(ctx, c); !errors.Is(err, store.ErrSettingsNotInitialized) {
+		t.Errorf("RotateIngestKey sin Bootstrap = %v, quería ErrSettingsNotInitialized", err)
+	}
+	if err := db.SetPasswordHash(ctx, "$argon2id$fake"); !errors.Is(err, store.ErrSettingsNotInitialized) {
+		t.Errorf("SetPasswordHash sin Bootstrap = %v, quería ErrSettingsNotInitialized", err)
 	}
 }
 

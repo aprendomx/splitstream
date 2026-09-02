@@ -16,6 +16,9 @@ import (
 // en base64 seguro para URL, que es lo que se pega en OBS.
 const ingestKeyBytes = 24
 
+// ErrSettingsNotInitialized se devuelve cuando se opera sobre settings antes de Bootstrap.
+var ErrSettingsNotInitialized = errors.New("settings no inicializado: falta Bootstrap")
+
 // Settings es la configuración persistente. IngestKeyMask ya viene enmascarada: para
 // obtener la clave real hay que llamar a RevealIngestKey de forma explícita.
 type Settings struct {
@@ -118,20 +121,36 @@ func (d *DB) RotateIngestKey(ctx context.Context, c *crypto.Cipher) (crypto.Secr
 	if err != nil {
 		return "", fmt.Errorf("cifrar clave de ingesta: %w", err)
 	}
-	if _, err := d.db.ExecContext(ctx,
+	res, err := d.db.ExecContext(ctx,
 		`UPDATE settings SET ingest_key_encrypted = ?, ingest_key_last4 = ?, updated_at = ? WHERE id = 1`,
-		encrypted, key.Last4(), nowRFC3339()); err != nil {
+		encrypted, key.Last4(), nowRFC3339())
+	if err != nil {
 		return "", fmt.Errorf("rotar clave de ingesta: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return "", fmt.Errorf("rotar clave de ingesta: %w", err)
+	}
+	if n == 0 {
+		return "", ErrSettingsNotInitialized
 	}
 	return key, nil
 }
 
 // SetPasswordHash guarda el hash argon2id de la contraseña del panel.
 func (d *DB) SetPasswordHash(ctx context.Context, hash string) error {
-	if _, err := d.db.ExecContext(ctx,
+	res, err := d.db.ExecContext(ctx,
 		`UPDATE settings SET password_hash = ?, updated_at = ? WHERE id = 1`,
-		hash, nowRFC3339()); err != nil {
+		hash, nowRFC3339())
+	if err != nil {
 		return fmt.Errorf("guardar contraseña: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("guardar contraseña: %w", err)
+	}
+	if n == 0 {
+		return ErrSettingsNotInitialized
 	}
 	return nil
 }

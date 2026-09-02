@@ -2,9 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrSessionNotFound se devuelve cuando el id de sesión no existe.
+var ErrSessionNotFound = errors.New("sesión no encontrada")
 
 // Level es la severidad de un evento.
 type Level string
@@ -67,10 +71,18 @@ func (d *DB) StartSession(ctx context.Context) (int64, error) {
 
 // FinishSession cierra la sesión y guarda lo que se midió del ingest.
 func (d *DB) FinishSession(ctx context.Context, id int64, width, height, bitrateBPS int) error {
-	if _, err := d.db.ExecContext(ctx,
+	res, err := d.db.ExecContext(ctx,
 		`UPDATE sessions SET ended_at = ?, width = ?, height = ?, bitrate_bps = ? WHERE id = ?`,
-		nowRFC3339(), width, height, bitrateBPS, id); err != nil {
+		nowRFC3339(), width, height, bitrateBPS, id)
+	if err != nil {
 		return fmt.Errorf("cerrar sesión: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("cerrar sesión: %w", err)
+	}
+	if n == 0 {
+		return ErrSessionNotFound
 	}
 	return nil
 }

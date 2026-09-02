@@ -21,8 +21,10 @@ type Config struct {
 	MasterKey [MasterKeyLen]byte
 }
 
-// LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente.
-func (c *Config) LogValue() slog.Value {
+// LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente. Receptor por
+// valor a propósito: con receptor puntero, un Config logueado por valor (no *Config)
+// queda fuera del method set y slog vuelca el struct entero, incluida la master key.
+func (c Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("http_addr", c.HTTPAddr),
 		slog.String("rtmp_addr", c.RTMPAddr),

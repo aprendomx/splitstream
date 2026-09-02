@@ -2,6 +2,7 @@ package crypto_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -62,5 +63,35 @@ func TestSecretLogValueMasks(t *testing.T) {
 func TestSecretRevealReturnsPlaintext(t *testing.T) {
 	if got := crypto.Secret("live_abcdefgh1234").Reveal(); got != "live_abcdefgh1234" {
 		t.Errorf("Reveal = %q", got)
+	}
+}
+
+// encoding/json ignora fmt.Stringer: sin MarshalJSON, un Secret embebido en una
+// respuesta de API saldría en claro por el cable. Este test convierte en invariante
+// lo que hoy solo es un comentario en el tipo.
+func TestSecretMasksWhenMarshaledToJSON(t *testing.T) {
+	blob, err := json.Marshal(struct {
+		Key crypto.Secret `json:"key"`
+	}{"live_abcdefgh1234"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(blob), "abcdefgh") {
+		t.Errorf("json.Marshal filtró el secreto: %s", blob)
+	}
+	if !strings.Contains(string(blob), "1234") {
+		t.Errorf("json.Marshal debería emitir la máscara: %s", blob)
+	}
+}
+
+func TestSecretStillUnmarshalsFromPlainJSON(t *testing.T) {
+	var in struct {
+		Key crypto.Secret `json:"key"`
+	}
+	if err := json.Unmarshal([]byte(`{"key":"live_abcdefgh1234"}`), &in); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if in.Key.Reveal() != "live_abcdefgh1234" {
+		t.Errorf("Reveal = %q: la entrada debe seguir aceptando la clave en claro", in.Key.Reveal())
 	}
 }

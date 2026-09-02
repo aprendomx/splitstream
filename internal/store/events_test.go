@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/aprendomx/splitstream/internal/store"
@@ -38,6 +39,17 @@ func TestStartAndFinishSession(t *testing.T) {
 	}
 	if width != 1920 || height != 1080 || bitrate != 6_000_000 {
 		t.Errorf("got %dx%d @ %d", width, height, bitrate)
+	}
+}
+
+// FinishSession recibe un id de sesión en tiempo de ejecución (la fase 3 lo mantiene
+// en memoria a través de reconexiones del publisher). Si el id no existe, debe fallar
+// en vez de devolver éxito silencioso.
+func TestFinishSessionRejectsUnknownID(t *testing.T) {
+	db, _ := bootstrapped(t)
+	err := db.FinishSession(context.Background(), 9999, 1920, 1080, 6_000_000)
+	if !errors.Is(err, store.ErrSessionNotFound) {
+		t.Fatalf("FinishSession con id inexistente = %v, quería ErrSessionNotFound", err)
 	}
 }
 

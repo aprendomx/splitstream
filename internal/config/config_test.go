@@ -151,3 +151,27 @@ func TestConfigLogValueOmitsMasterKey(t *testing.T) {
 		t.Errorf("el log debería incluir los campos no secretos: %s", out)
 	}
 }
+
+// LogValue con receptor puntero no está en el method set de Config por valor: si algo
+// loguea un Config (no un *Config), slog no encuentra slog.LogValuer y vuelca el struct
+// entero, incluida la master key. Verificado por ejecución en la revisión final.
+func TestConfigLogValueOmitsMasterKeyWhenLoggedByValue(t *testing.T) {
+	key := testKeyB64()
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": key,
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("arranque", "config", *cfg)
+
+	out := buf.String()
+	if strings.Contains(out, "MasterKey") {
+		t.Errorf("el log filtró la master key al loguear Config por valor: %s", out)
+	}
+	if !strings.Contains(out, ":8080") {
+		t.Errorf("el log debería incluir los campos no secretos: %s", out)
+	}
+}
