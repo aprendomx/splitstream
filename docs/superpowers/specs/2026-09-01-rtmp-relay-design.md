@@ -383,3 +383,108 @@ Parada para revisión al final de cada fase.
 | Cada plataforma tiene su propio dialecto de handshake | Probar contra `mediamtx` primero, luego contra un destino real por plataforma antes de cerrar la fase 3 |
 | El VPS no tiene subida suficiente para N destinos | Documentado en el README; la UI muestra el bitrate real por destino para diagnosticarlo |
 | Pérdida de `SPLITSTREAM_MASTER_KEY` | Irrecuperable por diseño; el README lo dice explícitamente y recomienda respaldarla aparte del `.db` |
+
+## 15. Deuda heredada de la fase 1
+
+Detectada por la revisión final de la rama de la fase 1, y verificada por ejecución. No
+son defectos del código actual: son decisiones de los cimientos que las fases siguientes
+van a pagar si no se abordan a tiempo. Se listan con la fase en la que hay que actuar.
+
+### 15.1 `SetMaxOpenConns(1)` se autobloquea si se compone con transacciones — fase 2
+
+Con una transacción abierta, **cualquier** otra llamada al repositorio espera a que se
+libere la única conexión. Verificado:
+
+```go
+tx := db.SQL().BeginTx(ctx)   // toma la única conexión
+db.LogEvent(ctx, ...)         // → "context deadline exceeded" tras 2 s
+```
+
+Con `context.Background()` —perfectamente plausible en la goroutine de un sink— se cuelga
+para siempre. Ya ocurrió una vez durante la fase 1, dentro de `ReorderDestinations`.
+
+La forma que lo va a reproducir está en la propia §6.5: "error → fila en `events` +
+`state = error`". En cuanto alguien quiera que ese cambio de estado sea atómico, abrirá una
+transacción y llamará a `LogEvent` dentro. Y **ningún método de `*DB` acepta un `*sql.Tx`**,
+así que componer obliga a rodear la capa de repositorio o a colgarse.
+
+**Acción, antes de escribir el primer sink:** introducir una interfaz
+`execer { ExecContext; QueryContext; QueryRowContext }` que satisfagan tanto `*sql.DB` como
+`*sql.Tx`, y que los métodos del store la acepten. Hacerlo después significa tocar los
+cuatro repositorios con el motor ya encima.
+
+### 15.2 `Session` no puede leer la fila que ella misma crea — fase 4
+
+`Session.Width`, `Height` y `BitrateBPS` son `int`, pero las columnas son nullable y
+`StartSession` las deja en NULL. Escanear una sesión recién abierta da
+`converting NULL to int is unsupported`. No hay camino de lectura de sesiones todavía, así
+que ningún test lo cubre, pero `GET /api/status` choca con esto el primer día. Además
+`FinishSession` escribe 0,0,0 si la sesión termina antes de parsear el SPS, con lo que
+"desconocido" y "cero" quedan indistinguibles justo en el campo que muestra la UI.
+
+**Acción:** punteros (`*int`) o un tipo de lectura aparte. Coherente con `EndedAt`, que ya
+es `*time.Time`.
+
+### 15.3 El store solo distingue una clase de error — fase 4
+
+Tras el arreglo final hay tres centinelas (`ErrDestinationNotFound`, `ErrSessionNotFound`,
+`ErrSettingsNotInitialized`), pero los errores de **validación** siguen siendo
+`errors.New` pelados: `"plataforma desconocida %q"`, `"el nombre no puede estar vacío"`,
+`"reordenar: el id %d aparece más de una vez"`. Escenario: `POST /api/destinations` con
+`platform: "rumble"` devuelve un error sin tipo que `apierr` no puede distinguir de un
+fallo de disco → **500 en vez de 400**, salvo comparando cadenas.
+
+**Acción:** un centinela `ErrInvalidInput` que envuelvan todas las validaciones. También
+conviene traducir el `sql.ErrNoRows` que `Settings()` y `RevealIngestKey` filtran en crudo
+hasta la capa HTTP; `destinations.go` ya lo traduce.
+
+### 15.4 El orden lexicográfico de los timestamps no es el cronológico — fase 4
+
+`time.RFC3339Nano` recorta los ceros finales, lo que rompe la comparación como texto:
+
+```
+"2026-09-01T10:00:00.5Z"  <  "2026-09-01T10:00:00.500000001Z"   → false
+```
+
+Hoy es inocuo porque `RecentEvents` ordena por `id DESC`. Pero el esquema crea
+`idx_events_created` e `idx_sessions_started`, dos índices que nadie usa y que existen
+precisamente para invitar a la consulta que sale mal. La fase 4 escribirá
+`ORDER BY started_at DESC` para listar sesiones y el bug será invisible.
+
+**Acción:** ordenar siempre por `id`, o persistir los timestamps con ancho fijo
+(`.000000000`). Mientras tanto, esos dos índices solo cuestan escritura.
+
+### 15.5 La auditoría del revelado de claves se confía, no se obliga — fase 4
+
+La §8 exige que cada llamada a revelar una clave deje una fila en `events`. El código lo
+delega a un comentario: `// quien lo llame debe registrar un evento`. Si el handler se
+olvida, la garantía desaparece y **ningún test posible lo detecta**, porque el store no
+sabe que debía pasar.
+
+**Acción:** que `RevealDestinationKey` escriba el evento él mismo. Ya tiene el handle de la
+base, y así la auditoría pasa de convención a invariante.
+
+### 15.6 `CreateDestination` no valida el esquema de la URL — fase 2
+
+Valida nombre, plataforma y que `rtmp_url` no esté vacía, pero no que empiece por `rtmp://`
+o `rtmps://` — que es justo el campo del que la §3.1 dice que sale la decisión de usar TLS.
+Se puede persistir `rtmp_url: "http://169.254.169.254/"`.
+
+**Acción:** validar el esquema al crear y al modificar, cuando la fase 2 defina cómo se
+traduce el esquema a la elección de `Dial` frente a `TLSDial`.
+
+### 15.7 `-race` no verifica nada todavía — fase 3
+
+`make test` activa el detector de carreras, pero ningún test lanza una goroutine. La premisa
+entera de `SetMaxOpenConns(1)` —"evita `SQLITE_BUSY` sin reintentos"— no está verificada por
+nada, y es el cimiento sobre el que la fase 3 pone una goroutine por destino.
+
+**Acción:** un test con varias goroutines haciendo `LogEvent` y `ListDestinations` en
+paralelo. Validaría la decisión y de paso cazaría el autobloqueo de §15.1.
+
+### 15.8 `store.GenerateKey()` tiene nombre demasiado genérico — fase 4
+
+Genera específicamente la clave de *ingesta*. Nada impide que un handler la use por error
+para un destino, donde la clave la da la plataforma y no se inventa.
+
+**Acción:** renombrar a `GenerateIngestKey()`.
