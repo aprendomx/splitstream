@@ -36,10 +36,10 @@ const (
 	csVideo   = 5
 )
 
-// connectTimeout acota el handshake cuando el destino acepta la conexión TCP y luego no
-// responde — un firewall que descarta paquetes en silencio, por ejemplo. go-rtmp no
-// acepta un contexto en Dial (v0.0.7), así que el contexto se traduce a un deadline sobre
-// el dialer y además la espera se envuelve en un select para poder abandonarla.
+// connectTimeout acota Connect para todo el que llame, incluso si pasa un contexto sin
+// deadline propio (el camino real: cmd/splitstream/main.go pasa el contexto de señales,
+// que es cancelable pero no tiene plazo). Connect deriva su propio contexto con este
+// timeout en vez de confiar en el ajeno.
 const connectTimeout = 15 * time.Second
 
 // target es una URL de destino ya descompuesta en lo que necesita go-rtmp.
@@ -136,10 +136,14 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 
 // Connect abre la conexión y deja el stream listo para recibir media.
 func (p *Publisher) Connect(ctx context.Context) error {
-	deadline := time.Now().Add(connectTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
+	// connectTimeout acota Connect para TODO el que llame, incluso si pasa un contexto
+	// sin deadline: derivamos el nuestro en vez de confiar en el ajeno. Sin esto, la
+	// rama ctx.Done() del select de abajo nunca dispararía con un context.Background()
+	// y un destino que acepta el TCP y luego se calla colgaría para siempre.
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+
+	deadline, _ := ctx.Deadline()
 
 	type dialResult struct {
 		conn *rtmp.ClientConn
@@ -171,12 +175,12 @@ func (p *Publisher) Connect(ctx context.Context) error {
 		results <- dialResult{conn: conn, err: err}
 	}()
 
-	// net.Dialer.Deadline acota la conexión TCP, no el handshake RTMP que go-rtmp hace
-	// después. Un peer que complete el TCP y luego se quede callado deja esa goroutine
-	// viva hasta que el sistema operativo mate el socket. Connect sí retorna a tiempo —que
-	// es lo que le importa a quien llama— pero la goroutine sobrevive. Eliminar eso del
-	// todo exigiría que go-rtmp expusiera un constructor a partir de un net.Conn ya
-	// abierto, para poder fijarle un SetDeadline. La v0.0.7 no lo expone.
+	// LIMITACIÓN CONOCIDA: el deadline del dialer acota la conexión TCP, no los reads del
+	// handshake RTMP que go-rtmp hace después. Connect siempre retorna acotado, porque
+	// deriva su propio contexto con connectTimeout — pero la goroutine que quedó haciendo
+	// el dial sobrevive hasta que el peer cierre o el sistema mate el socket. Eliminar eso
+	// exigiría que go-rtmp expusiera un constructor a partir de un net.Conn ya abierto,
+	// para fijarle un SetDeadline; la v0.0.7 no lo expone.
 	var conn *rtmp.ClientConn
 	select {
 	case <-ctx.Done():

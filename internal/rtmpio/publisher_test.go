@@ -189,3 +189,57 @@ func TestConnectTimeoutIsBounded(t *testing.T) {
 		t.Errorf("connectTimeout = %v: debe ser positivo y acotado", connectTimeout)
 	}
 }
+
+// connectTimeout debe acotar Connect aunque quien llama pase un contexto sin deadline:
+// es el caso real, porque main.go pasa el contexto de señales, que es cancelable pero
+// no tiene plazo.
+func TestConnectBoundedWithoutCallerDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("tarda connectTimeout")
+	}
+
+	// Un listener que acepta y se calla, sin cerrar: el caso malo.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c // retener la referencia para que no se cierre sola
+		}
+	}()
+
+	p, err := NewPublisher(PublisherConfig{
+		URL:       "rtmp://" + ln.Addr().String() + "/live",
+		StreamKey: crypto.Secret("k"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	defer p.Close()
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- p.Connect(context.Background()) }()
+
+	select {
+	case err := <-done:
+		elapsed := time.Since(start)
+		if err == nil {
+			t.Fatal("Connect debería fallar contra un peer que no responde")
+		}
+		// Debe rondar connectTimeout, no colgarse.
+		if elapsed > connectTimeout+5*time.Second {
+			t.Errorf("Connect tardó %v, connectTimeout es %v", elapsed, connectTimeout)
+		}
+		t.Logf("Connect retornó en %v con: %v", elapsed, err)
+	case <-time.After(connectTimeout + 10*time.Second):
+		t.Fatalf("Connect no retornó en %v: connectTimeout no acota nada", connectTimeout+10*time.Second)
+	}
+}
