@@ -2000,6 +2000,43 @@ func TestReorderDestinationsRejectsIncompleteList(t *testing.T) {
 	}
 }
 
+func TestReorderDestinationsRejectsDuplicateIDs(t *testing.T) {
+	db, c := bootstrapped(t)
+	ctx := context.Background()
+
+	var ids []int64
+	for _, name := range []string{"A", "B", "C"} {
+		d, err := db.CreateDestination(ctx, c, newDest(name))
+		if err != nil {
+			t.Fatalf("CreateDestination: %v", err)
+		}
+		ids = append(ids, d.ID)
+	}
+
+	// Longitud correcta (3), pero repite A y omite C.
+	if err := db.ReorderDestinations(ctx, []int64{ids[0], ids[0], ids[1]}); err == nil {
+		t.Fatal("quería error: la lista repite un id y omite otro")
+	}
+
+	// Nada debe haber cambiado: la transacción no se comiteó.
+	list, err := db.ListDestinations(ctx)
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	for i, want := range []string{"A", "B", "C"} {
+		if list[i].Name != want {
+			t.Errorf("posición %d = %q, quería %q: un reorden inválido no debe modificar nada", i, list[i].Name, want)
+		}
+	}
+	seen := map[int]bool{}
+	for _, dest := range list {
+		if seen[dest.SortOrder] {
+			t.Errorf("sort_order duplicado: %d", dest.SortOrder)
+		}
+		seen[dest.SortOrder] = true
+	}
+}
+
 func TestUpdateDestinationPatchesOnlyGivenFields(t *testing.T) {
 	db, c := bootstrapped(t)
 	ctx := context.Background()
@@ -2306,7 +2343,10 @@ func (d *DB) DeleteDestination(ctx context.Context, id int64) error {
 }
 
 // ReorderDestinations fija el orden a partir de la secuencia de ids recibida.
-// Exige la lista completa: un reorden parcial dejaría huecos silenciosos.
+// Exige exactamente el conjunto completo de destinos existentes, sin repetidos y sin
+// omisiones. Validar solo la longitud no basta: una lista como [a, a, b] sobre tres
+// destinos pasa el conteo, deja a c con su sort_order viejo y lo empata con b — y como
+// no hay UNIQUE sobre sort_order, SQLite lo comitea sin quejarse.
 func (d *DB) ReorderDestinations(ctx context.Context, ids []int64) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -2314,28 +2354,53 @@ func (d *DB) ReorderDestinations(ctx context.Context, ids []int64) error {
 	}
 	defer tx.Rollback()
 
-	var total int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM destinations`).Scan(&total); err != nil {
-		return fmt.Errorf("reordenar: %w", err)
+	existing, err := destinationIDs(ctx, tx)
+	if err != nil {
+		return err
 	}
-	if total != len(ids) {
-		return fmt.Errorf("reordenar exige los %d destinos, se recibieron %d", total, len(ids))
+
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			return fmt.Errorf("reordenar: el id %d aparece más de una vez", id)
+		}
+		if !existing[id] {
+			return fmt.Errorf("reordenar: %w (id %d)", ErrDestinationNotFound, id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != len(existing) {
+		return fmt.Errorf("reordenar exige los %d destinos, se recibieron %d", len(existing), len(seen))
 	}
 
 	for i, id := range ids {
-		res, err := tx.ExecContext(ctx, `UPDATE destinations SET sort_order = ? WHERE id = ?`, i, id)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE destinations SET sort_order = ? WHERE id = ?`, i, id); err != nil {
 			return fmt.Errorf("reordenar: %w", err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("reordenar: %w", err)
-		}
-		if n == 0 {
-			return fmt.Errorf("reordenar: %w (id %d)", ErrDestinationNotFound, id)
 		}
 	}
 	return tx.Commit()
+}
+
+// destinationIDs devuelve el conjunto de ids de destino existentes.
+func destinationIDs(ctx context.Context, tx *sql.Tx) (map[int64]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM destinations`)
+	if err != nil {
+		return nil, fmt.Errorf("reordenar: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("reordenar: %w", err)
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reordenar: %w", err)
+	}
+	return out, nil
 }
 
 // RevealDestinationKey descifra y devuelve la clave del destino en claro.
@@ -2424,7 +2489,7 @@ func joinComma(parts []string) string {
 - [ ] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/store/ -v -count=1`
-Expected: PASS en los 24 tests del paquete.
+Expected: PASS en los 25 tests del paquete.
 
 - [ ] **Step 5: Commit**
 
@@ -2794,7 +2859,7 @@ varios eventos del mismo milisegundo empatarían y el orden quedaría indefinido
 - [ ] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/store/ -v -count=1`
-Expected: PASS en los 29 tests del paquete.
+Expected: PASS en los 30 tests del paquete.
 
 - [ ] **Step 5: Commit**
 
