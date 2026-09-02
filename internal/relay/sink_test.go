@@ -279,3 +279,35 @@ func TestSinkMetricsCountBytes(t *testing.T) {
 	s.Enqueue(videoKey(1000))
 	waitFor(t, func() bool { return s.Metrics().BytesSent > 0 }, "se contaron bytes")
 }
+
+// Start es idempotente. Sin eso, la segunda goroutine cerraba el mismo canal `done` y se
+// llevaba por delante el proceso entero con "close of closed channel".
+func TestSinkStartIsIdempotent(t *testing.T) {
+	pub := &fakePublisher{}
+	s := NewSink(SinkConfig{ID: 1, Name: "dos veces", Pub: pub})
+
+	s.Start(context.Background(), preambleWith())
+	s.Start(context.Background(), preambleWith()) // no debe entrar en pánico
+	defer s.Stop()
+
+	waitFor(t, func() bool { return s.State() == StateLive }, "estado live")
+
+	// Y sigue habiendo un solo sink: una sola conexión, no dos.
+	s.Enqueue(videoKey(1000))
+	waitFor(t, func() bool { return len(pub.snapshot()) >= 4 }, "preámbulo + keyframe")
+
+	pub.mu.Lock()
+	connects := pub.connects
+	pub.mu.Unlock()
+	if connects != 1 {
+		t.Errorf("connects = %d: la segunda llamada a Start abrió otra conexión", connects)
+	}
+}
+
+// Y arrancar un sink ya parado tampoco deja una goroutine suelta ni entra en pánico.
+func TestSinkStartAfterStopDoesNothing(t *testing.T) {
+	s := NewSink(SinkConfig{ID: 1, Name: "parado", Pub: &fakePublisher{}})
+	s.Stop()
+	s.Start(context.Background(), preambleWith())
+	s.Stop() // no debe colgarse esperando a una goroutine que no existe
+}

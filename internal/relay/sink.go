@@ -75,10 +75,11 @@ type Sink struct {
 	bo      *backoff
 	onEvent func(EngineEvent)
 
-	quit    chan struct{}
-	done    chan struct{}
-	once    sync.Once
-	started atomic.Bool
+	quit      chan struct{}
+	done      chan struct{}
+	once      sync.Once
+	startOnce sync.Once
+	started   atomic.Bool
 
 	state  atomic.Uint32
 	errMu  sync.Mutex
@@ -155,10 +156,21 @@ func (s *Sink) emit(level, kind, msg string) {
 	s.onEvent(EngineEvent{DestinationID: &id, Level: level, Kind: kind, Message: msg})
 }
 
-// Start lanza la goroutine del sink.
+// Start lanza la goroutine del sink. Es idempotente igual que Stop: una segunda llamada
+// no hace nada. Sin esto, dos goroutines cerraban el mismo canal `done` y el proceso
+// entero moría con "close of closed channel"; hoy solo se llama desde OnPublishStart,
+// pero un pánico no recuperable por una llamada de más no es un contrato aceptable.
 func (s *Sink) Start(ctx context.Context, pre *Preamble) {
-	s.started.Store(true)
-	go s.run(ctx, pre)
+	s.startOnce.Do(func() {
+		// Arrancar un sink ya parado dejaría una goroutine que nadie espera.
+		select {
+		case <-s.quit:
+			return
+		default:
+		}
+		s.started.Store(true)
+		go s.run(ctx, pre)
+	})
 }
 
 // Enqueue entrega un mensaje. Nunca bloquea: la cola aplica su política de descarte.
