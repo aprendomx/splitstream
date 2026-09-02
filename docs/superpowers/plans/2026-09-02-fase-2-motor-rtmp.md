@@ -3692,8 +3692,11 @@ git commit -m "feat: motor de retransmisión de punta a punta con un destino"
 - El sink no reconecta: al fallar se queda en `StateError` hasta que lo paren. La fase 3
   añade el backoff de 1 s a 30 s con jitter (spec §6.5) y el `reset()` del timebase, que ya
   existe y está testeado precisamente para eso.
-- `main.go` arranca **un** destino y hace `break`. La fase 3 los arranca todos y reacciona
-  a los cambios de la API.
+- El `SinkProvider` del Engine construye **un** destino y hace `break`. La fase 3 los
+  arranca todos y reacciona a los cambios de la API.
+- Los sinks se crean por sesión de ingesta, no al arrancar el proceso: la revisión final de
+  la fase 2 encontró que mantenerlos vivos entre sesiones hacía que la segunda transmisión
+  reutilizara el timebase de la primera y que su sequence header nunca llegara al destino.
 - `FinishSession` se llama con ceros. La fase 3 parsea el SPS del AVC sequence header para
   la resolución y mide el bitrate real (spec §3.8 y §15.2).
 - `Stream.Write` de go-rtmp bloquea hasta 5 s con un contexto que no controlamos
