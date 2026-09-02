@@ -137,7 +137,7 @@ con un publisher en memoria, sin Docker y sin red.
 
 | Dependencia | Uso |
 | --- | --- |
-| `github.com/yutopp/go-rtmp` | ingesta y publicación (v0.0.7; arrastra `go-amf0`, `logrus`, `pkg/errors`, `mapstructure`) |
+| `github.com/yutopp/go-rtmp` | ingesta y publicación (v0.0.7; arrastra `go-amf0`, `logrus`, `pkg/errors`, `mapstructure`, `hashicorp/errwrap` y `hashicorp/go-multierror`) |
 | `modernc.org/sqlite` | driver SQLite puro Go |
 | `golang.org/x/crypto` | argon2id |
 | `golang.org/x/time` | rate limit del login |
