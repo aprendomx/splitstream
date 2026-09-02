@@ -13,15 +13,18 @@ import (
 const (
 	DefaultMaxBytes      = 16 << 20 // 16 MiB
 	DefaultMaxSpanMillis = 3000     // 3 s de media encolada
-)
+	DefaultMaxItems      = 8192
 
-// DefaultMaxItems es la cota dura de mensajes encolados.
-//
-// Es una red de seguridad, no el mecanismo principal: los límites que importan son los de
-// bytes y duración. Existe porque tirar todo el vídeo no siempre basta —un destino caído
-// mientras la transmisión continúa acumula audio, que no se descarta— y una cola sin cota
-// dura acaba reteniendo cientos de megabytes y encareciendo cada push.
-const DefaultMaxItems = 8192
+	// hardBytesFactor es cuánto puede excederse el límite de bytes antes de que la red de
+	// seguridad empiece a tirar audio.
+	//
+	// El límite blando dispara el descarte de vídeo, que es el sacrificio barato: se ve
+	// como un salto y el audio sigue. Solo si ni tirando todo el vídeo se baja —lo que
+	// ocurre con un destino caído mientras la transmisión continúa, porque el sink deja de
+	// drenar la cola durante el backoff— se toca el audio. Perder audio antiguo, que de
+	// todos modos llegaría tarde, es preferible a una cola sin tope.
+	hardBytesFactor = 4
+)
 
 type queueConfig struct {
 	MaxBytes int
@@ -29,10 +32,17 @@ type queueConfig struct {
 	MaxItems int
 }
 
-// queue es la cola de un sink: un deque acotado con política de descarte por GOP.
+// queue es la cola de un sink: un deque acotado con dos niveles de descarte.
 //
 // No es un canal porque la decisión de descarte necesita inspeccionar lo ya encolado:
 // al desbordar hay que tirar todo el vídeo pendiente, no solo rechazar el que llega.
+//
+// Nivel blando (maxBytes, maxSpan): tira vídeo por GOP. El audio, la metadata y los
+// sequence headers se conservan siempre — es el mecanismo normal del spec (§3.3, §6.4).
+// Nivel duro (maxItems, hardBytes): red de seguridad para cuando tirar todo el vídeo no
+// basta —un destino caído mientras la transmisión continúa acumula audio sin límite—, y
+// aquí sí se tiran los no esenciales más antiguos, audio incluido. La metadata y los
+// sequence headers no se tiran en ningún nivel.
 type queue struct {
 	mu         sync.Mutex
 	signal     chan struct{}
@@ -40,10 +50,10 @@ type queue struct {
 	bytes      int
 	videoItems int // mensajes de vídeo descartables encolados
 	maxBytes   int
+	hardBytes  int
 	maxSpan    uint32
 	maxItems   int
 	dropping   bool
-	hardCapped bool // la cota dura de ítems ya se ha activado alguna vez en esta cola
 	drops      uint64
 	closed     bool
 }
@@ -61,11 +71,13 @@ func newQueue(cfg queueConfig) *queue {
 	if maxItems <= 0 {
 		maxItems = DefaultMaxItems
 	}
+	hardBytes := maxBytes * hardBytesFactor
 	return &queue{
-		signal:   make(chan struct{}, 1),
-		maxBytes: maxBytes,
-		maxSpan:  maxSpan,
-		maxItems: maxItems,
+		signal:    make(chan struct{}, 1),
+		maxBytes:  maxBytes,
+		hardBytes: hardBytes,
+		maxSpan:   maxSpan,
+		maxItems:  maxItems,
 	}
 }
 
@@ -103,27 +115,29 @@ func (q *queue) push(msg *Message) {
 		q.videoItems++
 	}
 
+	// Nivel blando: tirar todo el vídeo pendiente. El guardia sobre videoItems evita
+	// reescanear la cola entera en cada push cuando no hay vídeo que tirar.
 	if q.over() {
-		// Primero el sacrificio barato: todo el vídeo pendiente. Solo se recorre la cola
-		// si hay algo que tirar; sin este guardia, una saturación por audio reescanearía
-		// la cola entera en cada push sin liberar nada.
 		if q.videoItems > 0 {
 			q.dropQueuedVideo()
 		}
 		q.dropping = true
 	}
 
-	// Red de seguridad: si ni tirando todo el vídeo se baja de la cota dura, se tiran los
-	// mensajes más antiguos no esenciales. Perder audio que de todos modos llegaría tarde
-	// es mejor que una cola sin tope.
-	q.shedToItemCap()
+	// Nivel duro: si ni así se baja, se tiran los no esenciales más antiguos.
+	q.shedToHardLimits()
 
 	q.wake()
 }
 
-// over indica si la cola supera alguno de sus dos límites.
+// over indica si la cola supera alguno de sus dos límites blandos.
 func (q *queue) over() bool {
 	return q.bytes > q.maxBytes || q.spanMillis() > q.maxSpan
+}
+
+// overHard indica si la cola supera alguno de sus límites duros.
+func (q *queue) overHard() bool {
+	return len(q.items) > q.maxItems || q.bytes > q.hardBytes
 }
 
 // spanMillis es la duración de media encolada, del primer mensaje al último.
@@ -164,47 +178,37 @@ func (q *queue) dropQueuedVideo() {
 	q.videoItems = 0
 }
 
-// shedToItemCap tira los mensajes no esenciales más antiguos hasta bajar de la cota dura.
+// shedToHardLimits devuelve la cola dentro de sus límites duros.
 //
-// El disparador es exclusivamente el número de ítems: mientras la cola quepa dentro de
-// MaxItems, el audio nunca se toca por bytes, ni siquiera con un MaxBytes ridículamente
-// bajo (ver TestQueueNeverDropsAudio) — eso es competencia del descarte de vídeo, no de
-// esta red de seguridad.
-//
-// Pero una vez que la cota dura de ítems se ha activado alguna vez, la cola queda marcada
-// (hardCapped) y desde ese momento cada pasada también recorta por bytes. Sin ese enganche,
-// una saturación pura de audio que ya disparó la cota dura seguiría oscilando: se recorta
-// hasta caber en bytes, vuelve a crecer sin control hasta el siguiente ítem 8193.º (o el
-// que corresponda), y así indefinidamente sin que MaxBytes pese de verdad (spec de esta
-// ronda: "una cola sin cota dura acaba reteniendo cientos de megabytes").
-//
-// Es una sola pasada sobre la cola, y solo se ejecuta cuando alguna cota se supera de
-// verdad. La metadata y los sequence headers nunca se tiran: sin ellos el destino no puede
-// decodificar nada al reconectar.
-func (q *queue) shedToItemCap() {
-	excessItems := len(q.items) - q.maxItems
-	if excessItems > 0 {
-		q.hardCapped = true
-	}
-	excessBytes := 0
-	if q.hardCapped {
-		excessBytes = q.bytes - q.maxBytes
-	}
-	if excessItems <= 0 && excessBytes <= 0 {
+// Lo hace en dos pasos y el orden importa: primero tira TODO el vídeo pendiente de golpe,
+// que es atómico y por tanto no puede dejar frames intermedios huérfanos de su keyframe;
+// solo después recorta el audio más antiguo. Recortar por antigüedad mezclando vídeo y
+// audio sí dejaría huérfanos, y el destino vería bloques corruptos: exactamente el fallo
+// que el descarte por GOP existe para evitar.
+func (q *queue) shedToHardLimits() {
+	if !q.overHard() {
 		return
 	}
 
+	// Paso 1: todo el vídeo, de una vez. Tras esto videoItems es 0, así que el paso 2
+	// solo puede tocar audio.
+	if q.videoItems > 0 {
+		q.dropQueuedVideo()
+		q.dropping = true
+	}
+	if !q.overHard() {
+		return
+	}
+
+	// Paso 2: el audio más antiguo. Ya no queda vídeo que pueda quedar huérfano.
+	items, bytes := len(q.items), q.bytes
 	kept := q.items[:0]
 	for _, m := range q.items {
-		if (excessItems > 0 || excessBytes > 0) && !essential(m) {
-			sz := len(m.Payload)
+		tooMany := items > q.maxItems || bytes > q.hardBytes
+		if tooMany && m.Kind == KindAudio && !essential(m) {
 			q.drops++
-			q.bytes -= sz
-			if m.Kind == KindVideo {
-				q.videoItems--
-			}
-			excessItems--
-			excessBytes -= sz
+			items--
+			bytes -= len(m.Payload)
 			continue
 		}
 		kept = append(kept, m)
@@ -213,6 +217,7 @@ func (q *queue) shedToItemCap() {
 		q.items[i] = nil
 	}
 	q.items = kept
+	q.bytes = bytes
 }
 
 // wake avisa a pop de que hay algo. El canal tiene capacidad 1 y el envío es no
@@ -272,7 +277,7 @@ func (q *queue) close() {
 }
 
 // dropped devuelve cuántos mensajes se han descartado en total: vídeo por la política de
-// GOP, y audio por la cota dura de ítems cuando esta ya se activó.
+// GOP en el nivel blando, y no esenciales (audio incluido) por el nivel duro.
 func (q *queue) dropped() uint64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()

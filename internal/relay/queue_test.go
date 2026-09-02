@@ -150,9 +150,13 @@ func TestQueueResyncsOnNextKeyframe(t *testing.T) {
 	}
 }
 
-// El audio nunca se descarta: es barato y su corte se nota mucho más que un salto de vídeo.
+// El audio no se descarta en el nivel blando: es barato y su corte se nota mucho más que
+// un salto de vídeo. (El nivel duro sí lo tira, pero eso es la red de seguridad y tiene
+// su propio test.)
 func TestQueueNeverDropsAudio(t *testing.T) {
-	q := newQueue(queueConfig{MaxBytes: 20, MaxSpan: 1_000_000})
+	// MaxBytes 200 dispara el nivel blando con 500 bytes de audio, pero se queda muy por
+	// debajo del duro (800), así que nada de audio debe perderse.
+	q := newQueue(queueConfig{MaxBytes: 200, MaxSpan: 1_000_000})
 	defer q.close()
 
 	for i := 0; i < 50; i++ {
@@ -160,7 +164,7 @@ func TestQueueNeverDropsAudio(t *testing.T) {
 	}
 	got := drain(t, q)
 	if len(got) != 50 {
-		t.Errorf("sobrevivieron %d mensajes de audio de 50: el audio no debe descartarse", len(got))
+		t.Errorf("sobrevivieron %d mensajes de audio de 50: el nivel blando no debe tirar audio", len(got))
 	}
 }
 
@@ -305,7 +309,8 @@ func TestQueueConcurrentPushPop(t *testing.T) {
 // Una saturación causada solo por audio también tiene que acotarse: un destino caído
 // mientras la transmisión continúa acumularía audio para siempre.
 func TestQueueBoundedUnderAudioOnlySaturation(t *testing.T) {
-	q := newQueue(queueConfig{MaxBytes: 1000, MaxSpan: 1_000_000, MaxItems: 64})
+	const maxBytes, maxItems = 1000, 64
+	q := newQueue(queueConfig{MaxBytes: maxBytes, MaxSpan: 1_000_000, MaxItems: maxItems})
 	defer q.close()
 
 	for i := 0; i < 20_000; i++ {
@@ -313,11 +318,13 @@ func TestQueueBoundedUnderAudioOnlySaturation(t *testing.T) {
 	}
 
 	items, bytes, _ := q.stats()
-	if items > 64 {
-		t.Errorf("la cola tiene %d ítems con una cota de 64: no está acotada", items)
+	if items > maxItems {
+		t.Errorf("la cola tiene %d ítems con una cota de %d: no está acotada", items, maxItems)
 	}
-	if bytes > 1000*2 {
-		t.Errorf("la cola retiene %d bytes con un límite de 1000", bytes)
+	// El límite duro de bytes es maxBytes * hardBytesFactor.
+	if bytes > maxBytes*hardBytesFactor {
+		t.Errorf("la cola retiene %d bytes con un límite duro de %d",
+			bytes, maxBytes*hardBytesFactor)
 	}
 	if q.dropped() == 0 {
 		t.Error("no se descartó nada pese a la saturación")
@@ -338,15 +345,15 @@ func TestQueueAudioOnlySaturationIsCheap(t *testing.T) {
 	}
 }
 
-// Ni siquiera la cota dura tira la metadata ni los sequence headers.
-func TestQueueItemCapKeepsEssentials(t *testing.T) {
-	q := newQueue(queueConfig{MaxBytes: 1 << 30, MaxSpan: 1_000_000, MaxItems: 8})
+// Ni el nivel duro tira la metadata ni los sequence headers.
+func TestQueueHardLimitKeepsEssentials(t *testing.T) {
+	q := newQueue(queueConfig{MaxBytes: 100, MaxSpan: 1_000_000, MaxItems: 8})
 	defer q.close()
 
 	q.push(metaMsg())
 	q.push(vSeq())
-	for i := 0; i < 200; i++ {
-		q.push(aRaw(uint32(i*20), 10))
+	for i := 0; i < 500; i++ {
+		q.push(aRaw(uint32(i*20), 50))
 	}
 
 	got := drain(t, q)
@@ -360,7 +367,8 @@ func TestQueueItemCapKeepsEssentials(t *testing.T) {
 		}
 	}
 	if !seenMeta || !seenSeq {
-		t.Errorf("meta=%v seq=%v: la cota dura no puede tirar los esenciales", seenMeta, seenSeq)
+		t.Errorf("meta=%v seq=%v: el nivel duro tampoco puede tirar los esenciales",
+			seenMeta, seenSeq)
 	}
 }
 
@@ -396,5 +404,44 @@ func TestQueueVideoCounterStaysConsistent(t *testing.T) {
 
 	if counted != tracked {
 		t.Errorf("videoItems = %d pero hay %d de vídeo en la cola", tracked, counted)
+	}
+}
+
+// La integridad del GOP se mantiene incluso bajo el límite duro: nunca puede quedar un
+// frame intermedio delante de su keyframe, porque el destino lo decodificaría como bloques.
+func TestQueueHardLimitPreservesGOPIntegrity(t *testing.T) {
+	q := newQueue(queueConfig{MaxBytes: 4000, MaxSpan: 1_000_000, MaxItems: 200})
+	defer q.close()
+
+	// Patrón realista: keyframe cada 30 frames, audio intercalado.
+	ts := uint32(0)
+	for gop := 0; gop < 200; gop++ {
+		for f := 0; f < 30; f++ {
+			if f == 0 {
+				q.push(vKey(ts, 500))
+			} else {
+				q.push(vInter(ts, 200))
+			}
+			if f%3 == 0 {
+				q.push(aRaw(ts, 40))
+			}
+			ts += 33
+		}
+	}
+
+	got := drain(t, q)
+	var seenKeyframe bool
+	for i, m := range got {
+		if m.Kind != KindVideo || m.IsSeqHeader {
+			continue
+		}
+		if m.IsKeyframe {
+			seenKeyframe = true
+			continue
+		}
+		if !seenKeyframe {
+			t.Fatalf("el mensaje %d es un inter frame (ts=%d) sin keyframe previo: el destino vería bloques",
+				i, m.Timestamp)
+		}
 	}
 }
