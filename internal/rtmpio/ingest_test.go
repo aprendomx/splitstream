@@ -19,13 +19,25 @@ type recorder struct {
 	starts   int
 	ends     int
 	startErr error
+	apps     []string
 }
 
 func (r *recorder) OnPublishStart(app, key string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.starts++
+	r.apps = append(r.apps, app)
 	return r.startErr
+}
+
+// lastApp es la app con la que conectó el último publisher, o "" si no hubo ninguno.
+func (r *recorder) lastApp() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.apps) == 0 {
+		return ""
+	}
+	return r.apps[len(r.apps)-1]
 }
 
 func (r *recorder) OnMessage(msg *relay.Message) {

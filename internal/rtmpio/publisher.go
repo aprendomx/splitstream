@@ -43,10 +43,20 @@ const (
 const connectTimeout = 15 * time.Second
 
 // target es una URL de destino ya descompuesta en lo que necesita go-rtmp.
+//
+// `app` y `logApp` son dos valores distintos a propósito, y no son intercambiables:
+//
+//   - `app` es el protocolo. La app RTMP es el path entero de la URL del servidor, así
+//     que con rtmp://host/a/b la app es "a/b". Recortarla rompería cualquier destino con
+//     app anidada, como un nginx-rtmp propio. Es lo que viaja en el connect y en el tcURL.
+//   - `logApp` es lo que se puede escribir en disco: solo el primer segmento. La clave va
+//     en un campo aparte (PublisherConfig.StreamKey) y no debería estar en la URL, pero
+//     si el usuario la pegó ahí, el path entero en un log la filtraría para siempre.
 type target struct {
 	scheme string // exactamente "rtmp" o "rtmps": go-rtmp compara con estos literales
 	addr   string // host:puerto, con el puerto por defecto ya resuelto
-	app    string // la app RTMP: SOLO el primer segmento del path, sin barras
+	app    string // la app RTMP: el path completo, sin barras al principio ni al final
+	logApp string // solo el primer segmento de la app: lo único que se loguea
 }
 
 // parseTarget descompone una URL de destino.
@@ -85,15 +95,21 @@ func parseTarget(rawURL string) (target, error) {
 		port = defaultPort
 	}
 
-	// La app RTMP es el PRIMER segmento del path y nada más: lo que venga detrás es el
-	// nombre del stream, que en varias plataformas ES la clave. Quedarse con el path
-	// completo la metía en `destino_app` y la escupía en claro en cada línea de log.
-	app, _, _ := strings.Cut(strings.Trim(u.Path, "/"), "/")
+	// El path entero es la app: la URL del destino es la URL del servidor y la clave va
+	// aparte. Para el log se deriva el primer segmento, que no puede llevar dentro una
+	// clave pegada por el usuario.
+	app := strings.Trim(u.Path, "/")
 	if app == "" {
-		return target{}, errors.New("la URL del destino no tiene app (el primer segmento tras el host)")
+		return target{}, errors.New("la URL del destino no tiene app (la parte tras el host)")
 	}
+	logApp, _, _ := strings.Cut(app, "/")
 
-	return target{scheme: u.Scheme, addr: net.JoinHostPort(host, port), app: app}, nil
+	return target{
+		scheme: u.Scheme,
+		addr:   net.JoinHostPort(host, port),
+		app:    app,
+		logApp: logApp,
+	}, nil
 }
 
 // PublisherConfig son los datos para construir un Publisher.
@@ -138,13 +154,13 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 		tgt:       tgt,
 		key:       cfg.StreamKey,
 		chunkSize: size,
-		// Se loguean el host y la app —solo el primer segmento del path—, nunca la URL
-		// original ni el path completo: si el usuario pegó la clave dentro de la URL,
-		// cualquiera de los dos la filtraría. La clave tampoco va enmascarada: el spec §8
-		// dice que jamás aparece en los logs, y los últimos 4 caracteres son para la
-		// interfaz, que tiene otro control de acceso. Para identificar el destino en los
-		// logs está su ID numérico, que ya lleva el logger del sink.
-		log: log.With("destino_addr", tgt.addr, "destino_app", tgt.app),
+		// Al log va `logApp`, no `app`: la app que viaja por el cable es el path entero y
+		// puede llevar dentro una clave que el usuario pegó ahí. Tampoco va la URL
+		// original ni la clave enmascarada: el spec §8 dice que jamás aparece en los
+		// logs, y los últimos 4 caracteres son para la interfaz, que tiene otro control
+		// de acceso. Para identificar el destino está su ID numérico, que ya lleva el
+		// logger del sink.
+		log: log.With("destino_addr", tgt.addr, "destino_app", tgt.logApp),
 	}, nil
 }
 
@@ -261,7 +277,9 @@ func (p *Publisher) Connect(ctx context.Context) error {
 	p.stream = stream
 	p.mu.Unlock()
 
-	p.log.Info("publicando en el destino", "app", p.tgt.app)
+	// Sin atributos extra: `destino_app` ya identifica el destino, y `app` es el path
+	// completo, que es justo lo que no puede salir al log.
+	p.log.Info("publicando en el destino")
 	return nil
 }
 

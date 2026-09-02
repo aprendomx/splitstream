@@ -57,30 +57,38 @@ func TestParseTargetRTMPSDefaultPort(t *testing.T) {
 	}
 }
 
-// La app es el PRIMER segmento del path. Lo que venga detrás es el nombre del stream y,
-// en varias plataformas, la clave: no forma parte de la app y no se guarda.
-func TestParseTargetAppIsFirstPathSegmentOnly(t *testing.T) {
+// La app RTMP es el PATH ENTERO de la URL del servidor: con rtmp://host/a/b la app es
+// "a/b". Recortarla al primer segmento rompería los destinos con app anidada, como un
+// nginx-rtmp propio. Lo que se recorta es lo que se loguea, que es otro valor.
+func TestParseTargetNestedApp(t *testing.T) {
 	got, err := parseTarget("rtmp://example.com/live/sub")
 	if err != nil {
 		t.Fatalf("parseTarget: %v", err)
 	}
-	if got.app != "live" {
-		t.Errorf("app = %q, quería \"live\"", got.app)
+	if got.app != "live/sub" {
+		t.Errorf("app = %q, quería \"live/sub\"", got.app)
+	}
+	if got.logApp != "live" {
+		t.Errorf("logApp = %q, quería \"live\": al log solo va el primer segmento", got.logApp)
 	}
 }
 
-// El caso real que filtraba: una clave pegada al final de la URL del destino.
-func TestParseTargetDropsStreamKeyPastedInPath(t *testing.T) {
+// El caso real que filtraba: una clave pegada al final de la URL del destino. Por el cable
+// va tal cual —es lo que el usuario configuró— pero al log solo va el primer segmento.
+func TestParseTargetKeepsPastedKeyOffTheLogApp(t *testing.T) {
 	const key = "live_987654_SUPERSECRETSTREAMKEY"
 	got, err := parseTarget("rtmp://a.rtmp.youtube.com/live2/" + key)
 	if err != nil {
 		t.Fatalf("parseTarget: %v", err)
 	}
-	if got.app != "live2" {
-		t.Errorf("app = %q, quería \"live2\": la app no puede arrastrar la clave", got.app)
+	if got.app != "live2/"+key {
+		t.Errorf("app = %q: por el cable va el path entero, sin recortar", got.app)
 	}
-	if strings.Contains(got.app, "SUPERSECRETSTREAMKEY") {
-		t.Errorf("la app lleva la clave dentro: %q", got.app)
+	if got.logApp != "live2" {
+		t.Errorf("logApp = %q, quería \"live2\"", got.logApp)
+	}
+	if strings.Contains(got.logApp, "SUPERSECRETSTREAMKEY") {
+		t.Errorf("lo que se loguea lleva la clave dentro: %q", got.logApp)
 	}
 }
 
@@ -357,7 +365,7 @@ func TestPublisherLogsNeverContainTheKey(t *testing.T) {
 	defer p.Close()
 
 	// Los atributos fijos del publisher salen en todas sus líneas: basta con provocar una.
-	p.log.Info("publicando en el destino", "app", p.tgt.app)
+	p.log.Info("publicando en el destino")
 
 	out := buf.String()
 	if strings.Contains(out, "SUPERSECRETSTREAMKEY") {
@@ -368,5 +376,52 @@ func TestPublisherLogsNeverContainTheKey(t *testing.T) {
 	}
 	if !strings.Contains(out, "destino_app=live2") {
 		t.Errorf("el log debería identificar la app (el primer segmento): %s", out)
+	}
+}
+
+// La app que viaja por el cable es el path entero de la URL del destino, no su primer
+// segmento: es la URL de un servidor RTMP y la clave va en un campo aparte. Recortarla
+// rompería un nginx-rtmp propio con la app anidada, que es el caso "RTMP genérico" del
+// spec. Este es el test que faltaba cuando el recorte se coló.
+func TestConnectUsesFullPathAsApp(t *testing.T) {
+	rec := &recorder{}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: rec})
+	go ing.Serve(ln)
+	defer ing.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	p, err := NewPublisher(PublisherConfig{
+		URL:       "rtmp://" + ln.Addr().String() + "/a/b",
+		StreamKey: crypto.Secret("clave"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	defer p.Close()
+
+	if p.tgt.app != "a/b" {
+		t.Errorf("target.app = %q, quería \"a/b\"", p.tgt.app)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Stream.Publish no espera el onStatus, así que el servidor puede no haber procesado
+	// todavía el comando cuando Connect retorna.
+	deadline := time.Now().Add(5 * time.Second)
+	for rec.lastApp() == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Lo que recibió el servidor es lo único que zanja la pregunta.
+	if got := rec.lastApp(); got != "a/b" {
+		t.Errorf("el servidor recibió la app %q, quería \"a/b\": el recorte volvió a colarse", got)
 	}
 }
