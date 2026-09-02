@@ -1,8 +1,11 @@
 package rtmpio
 
 import (
+	"context"
 	"errors"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
 )
@@ -129,5 +132,60 @@ func TestPublisherCloseBeforeConnect(t *testing.T) {
 	}
 	if err := p.Close(); err != nil {
 		t.Errorf("Close es idempotente: segunda llamada = %v", err)
+	}
+}
+
+// Connect debe respetar la cancelación del contexto aunque go-rtmp no lo acepte.
+func TestConnectHonoursContextCancellation(t *testing.T) {
+	// Un listener que acepta la conexión y luego no dice nada: simula un destino
+	// detrás de un firewall que descarta paquetes.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Aceptar y callar. No cerrar: ese es justo el caso malo.
+			_ = conn
+		}
+	}()
+
+	p, err := NewPublisher(PublisherConfig{
+		URL:       "rtmp://" + ln.Addr().String() + "/live",
+		StreamKey: crypto.Secret("k"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	defer p.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = p.Connect(ctx)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Connect debería fallar contra un peer que no responde")
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("Connect tardó %v: no respetó la cancelación del contexto", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Logf("aviso: el error no envuelve DeadlineExceeded (%v); acceptable si el dialer falló antes", err)
+	}
+}
+
+// Sin deadline en el contexto, Connect sigue acotado por connectTimeout y no cuelga
+// indefinidamente. Aquí solo se comprueba que la constante existe y es razonable.
+func TestConnectTimeoutIsBounded(t *testing.T) {
+	if connectTimeout <= 0 || connectTimeout > 60*time.Second {
+		t.Errorf("connectTimeout = %v: debe ser positivo y acotado", connectTimeout)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yutopp/go-rtmp"
 	"github.com/yutopp/go-rtmp/message"
@@ -34,6 +35,12 @@ const (
 	csAudio   = 4
 	csVideo   = 5
 )
+
+// connectTimeout acota el handshake cuando el destino acepta la conexión TCP y luego no
+// responde — un firewall que descarta paquetes en silencio, por ejemplo. go-rtmp no
+// acepta un contexto en Dial (v0.0.7), así que el contexto se traduce a un deadline sobre
+// el dialer y además la espera se envuelve en un select para poder abandonarla.
+const connectTimeout = 15 * time.Second
 
 // target es una URL de destino ya descompuesta en lo que necesita go-rtmp.
 type target struct {
@@ -129,21 +136,63 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 
 // Connect abre la conexión y deja el stream listo para recibir media.
 func (p *Publisher) Connect(ctx context.Context) error {
-	var (
+	deadline := time.Now().Add(connectTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+
+	type dialResult struct {
 		conn *rtmp.ClientConn
 		err  error
-	)
-	switch p.tgt.scheme {
-	case "rtmps":
-		conn, err = rtmp.TLSDial("rtmps", p.tgt.addr, &rtmp.ConnConfig{}, &tls.Config{
-			ServerName: hostOf(p.tgt.addr),
-			MinVersion: tls.VersionTLS12,
-		})
-	default:
-		conn, err = rtmp.Dial("rtmp", p.tgt.addr, &rtmp.ConnConfig{})
 	}
-	if err != nil {
-		return fmt.Errorf("conectar a %s: %w", p.tgt.addr, err)
+	// Con buffer: si abandonamos la espera, la goroutine puede escribir y terminar en
+	// vez de quedarse bloqueada para siempre.
+	results := make(chan dialResult, 1)
+
+	go func() {
+		var (
+			conn *rtmp.ClientConn
+			err  error
+		)
+		switch p.tgt.scheme {
+		case "rtmps":
+			conn, err = rtmp.DialWithTLSDialer(&tls.Dialer{
+				NetDialer: &net.Dialer{Deadline: deadline},
+				Config: &tls.Config{
+					ServerName: hostOf(p.tgt.addr),
+					MinVersion: tls.VersionTLS12,
+				},
+			}, "rtmps", p.tgt.addr, &rtmp.ConnConfig{})
+		default:
+			conn, err = rtmp.DialWithDialer(
+				&net.Dialer{Deadline: deadline},
+				"rtmp", p.tgt.addr, &rtmp.ConnConfig{})
+		}
+		results <- dialResult{conn: conn, err: err}
+	}()
+
+	// net.Dialer.Deadline acota la conexión TCP, no el handshake RTMP que go-rtmp hace
+	// después. Un peer que complete el TCP y luego se quede callado deja esa goroutine
+	// viva hasta que el sistema operativo mate el socket. Connect sí retorna a tiempo —que
+	// es lo que le importa a quien llama— pero la goroutine sobrevive. Eliminar eso del
+	// todo exigiría que go-rtmp expusiera un constructor a partir de un net.Conn ya
+	// abierto, para poder fijarle un SetDeadline. La v0.0.7 no lo expone.
+	var conn *rtmp.ClientConn
+	select {
+	case <-ctx.Done():
+		// Se abandona la espera, pero no la limpieza: cuando la goroutine termine por su
+		// cuenta, se cierra la conexión que haya podido abrir.
+		go func() {
+			if r := <-results; r.conn != nil {
+				r.conn.Close()
+			}
+		}()
+		return fmt.Errorf("conectar a %s: %w", p.tgt.addr, ctx.Err())
+	case r := <-results:
+		if r.err != nil {
+			return fmt.Errorf("conectar a %s: %w", p.tgt.addr, r.err)
+		}
+		conn = r.conn
 	}
 
 	p.mu.Lock()
