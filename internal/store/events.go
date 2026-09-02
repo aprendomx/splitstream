@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -33,14 +34,16 @@ const (
 	maxEventLimit     = 1000
 )
 
-// Session es una transmisión: desde que OBS conecta hasta que se va.
+// Session es una transmisión: desde que OBS conecta hasta que se va. Los campos de
+// resolución y bitrate son punteros porque una sesión abierta los tiene en NULL, y
+// porque "desconocido" y "cero" no deben ser indistinguibles.
 type Session struct {
 	ID         int64
 	StartedAt  time.Time
 	EndedAt    *time.Time
-	Width      int
-	Height     int
-	BitrateBPS int
+	Width      *int
+	Height     *int
+	BitrateBPS *int
 }
 
 // Event es una entrada del log persistente. SessionID y DestinationID son
@@ -85,6 +88,36 @@ func (d *DB) FinishSession(ctx context.Context, id int64, width, height, bitrate
 		return ErrSessionNotFound
 	}
 	return nil
+}
+
+// SessionByID devuelve una sesión por su id.
+func (d *DB) SessionByID(ctx context.Context, id int64) (*Session, error) {
+	var (
+		s         Session
+		startedAt string
+		endedAt   *string
+	)
+	err := d.ex.QueryRowContext(ctx,
+		`SELECT id, started_at, ended_at, width, height, bitrate_bps FROM sessions WHERE id = ?`, id).
+		Scan(&s.ID, &startedAt, &endedAt, &s.Width, &s.Height, &s.BitrateBPS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrSessionNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("leer sesión: %w", err)
+	}
+
+	if s.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); err != nil {
+		return nil, fmt.Errorf("started_at inválido: %w", err)
+	}
+	if endedAt != nil {
+		t, err := time.Parse(time.RFC3339Nano, *endedAt)
+		if err != nil {
+			return nil, fmt.Errorf("ended_at inválido: %w", err)
+		}
+		s.EndedAt = &t
+	}
+	return &s, nil
 }
 
 // LogEvent persiste un evento y devuelve su id. Ignora e.ID y e.CreatedAt.

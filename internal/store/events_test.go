@@ -53,6 +53,71 @@ func TestFinishSessionRejectsUnknownID(t *testing.T) {
 	}
 }
 
+func TestSessionByIDReadsOpenSession(t *testing.T) {
+	db, _ := bootstrapped(t)
+	ctx := context.Background()
+
+	id, err := db.StartSession(ctx)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	// Una sesión recién abierta tiene resolución y bitrate en NULL.
+	s, err := db.SessionByID(ctx, id)
+	if err != nil {
+		t.Fatalf("SessionByID sobre una sesión abierta: %v", err)
+	}
+	if s.ID != id {
+		t.Errorf("ID = %d, quería %d", s.ID, id)
+	}
+	if s.EndedAt != nil {
+		t.Errorf("EndedAt = %v, quería nil en una sesión abierta", s.EndedAt)
+	}
+	if s.Width != nil || s.Height != nil || s.BitrateBPS != nil {
+		t.Errorf("quería nil en Width/Height/BitrateBPS: %v %v %v", s.Width, s.Height, s.BitrateBPS)
+	}
+	if s.StartedAt.IsZero() {
+		t.Error("StartedAt sin parsear")
+	}
+}
+
+func TestSessionByIDReadsFinishedSession(t *testing.T) {
+	db, _ := bootstrapped(t)
+	ctx := context.Background()
+
+	id, err := db.StartSession(ctx)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if err := db.FinishSession(ctx, id, 1920, 1080, 6_000_000); err != nil {
+		t.Fatalf("FinishSession: %v", err)
+	}
+
+	s, err := db.SessionByID(ctx, id)
+	if err != nil {
+		t.Fatalf("SessionByID: %v", err)
+	}
+	if s.EndedAt == nil {
+		t.Fatal("EndedAt = nil tras FinishSession")
+	}
+	if s.Width == nil || *s.Width != 1920 {
+		t.Errorf("Width = %v, quería 1920", s.Width)
+	}
+	if s.Height == nil || *s.Height != 1080 {
+		t.Errorf("Height = %v, quería 1080", s.Height)
+	}
+	if s.BitrateBPS == nil || *s.BitrateBPS != 6_000_000 {
+		t.Errorf("BitrateBPS = %v, quería 6000000", s.BitrateBPS)
+	}
+}
+
+func TestSessionByIDNotFound(t *testing.T) {
+	db, _ := bootstrapped(t)
+	if _, err := db.SessionByID(context.Background(), 9999); !errors.Is(err, store.ErrSessionNotFound) {
+		t.Fatalf("SessionByID(9999) = %v, quería ErrSessionNotFound", err)
+	}
+}
+
 func TestLogEventAndRecentEventsAreNewestFirst(t *testing.T) {
 	db, c := bootstrapped(t)
 	ctx := context.Background()
