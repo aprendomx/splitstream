@@ -95,12 +95,18 @@ func run(ctx context.Context, out io.Writer) error {
 		return err
 	}
 
+	// Los sinks NO heredan el contexto de señales: si lo hicieran, un SIGTERM los mataría
+	// antes de que el cierre ordenado del spec §6.5 pudiera mandar su FCUnpublish. Este
+	// contexto se cancela al final, tras la espera.
+	sinkCtx, cancelSinks := context.WithCancel(context.Background())
+	defer cancelSinks()
+
 	hub := relay.NewHub(logger)
 	engine := relay.NewEngine(relay.EngineConfig{
 		Hub:         hub,
 		Store:       storeAdapter{db: db},
 		Logger:      logger,
-		BaseContext: ctx,
+		BaseContext: sinkCtx,
 	})
 
 	// La clave se compara descifrada y en tiempo constante no hace falta aquí: es un
@@ -119,7 +125,6 @@ func run(ctx context.Context, out io.Writer) error {
 		return nil
 	})
 
-	// Fase 2: un solo destino, el primero habilitado. La fase 3 los gestiona todos.
 	// Los sinks se construyen por sesión, no al arrancar el proceso: cada sesión de
 	// ingesta abre su propia conexión con cada destino (spec §6.5). Arrancarlos una sola
 	// vez aquí hacía que la segunda transmisión reutilizara el timebase de la primera.
@@ -128,6 +133,7 @@ func run(ctx context.Context, out io.Writer) error {
 		if err != nil {
 			return nil, err
 		}
+
 		var out []*relay.Sink
 		for _, d := range dests {
 			if !d.Enabled {
@@ -138,21 +144,38 @@ func run(ctx context.Context, out io.Writer) error {
 				logger.Error("no se pudo leer la clave del destino", "destino", d.Name, "err", err)
 				continue
 			}
-			pub, err := rtmpio.NewPublisher(rtmpio.PublisherConfig{
-				URL:       d.RTMPURL,
-				StreamKey: key,
-				Logger:    logger,
-			})
-			if err != nil {
+			// Validar aquí evita crear un sink que no podría conectar nunca.
+			if _, err := rtmpio.NewPublisher(rtmpio.PublisherConfig{
+				URL: d.RTMPURL, StreamKey: key, Logger: logger,
+			}); err != nil {
 				logger.Error("destino mal configurado", "destino", d.Name, "err", err)
 				continue
 			}
+
+			url, name, id := d.RTMPURL, d.Name, d.ID
 			out = append(out, relay.NewSink(relay.SinkConfig{
-				ID: d.ID, Name: d.Name, Pub: pub, Logger: logger,
+				ID:   id,
+				Name: name,
+				// Cada reconexión necesita un publisher nuevo: uno cerrado no se reabre.
+				NewPub: func() (relay.Publisher, error) {
+					return rtmpio.NewPublisher(rtmpio.PublisherConfig{
+						URL: url, StreamKey: key, Logger: logger,
+					})
+				},
+				Logger: logger,
+				OnEvent: func(ev relay.EngineEvent) {
+					if _, err := db.LogEvent(ctx, store.Event{
+						DestinationID: ev.DestinationID,
+						Level:         store.Level(ev.Level),
+						Kind:          ev.Kind,
+						Message:       ev.Message,
+					}); err != nil {
+						logger.Error("no se pudo registrar el evento del destino", "err", err)
+					}
+				},
 			}))
-			// Fase 2: un solo destino. La fase 3 los arranca todos.
-			break
 		}
+		logger.Info("destinos de la sesión", "n", len(out))
 		return out, nil
 	})
 
@@ -184,8 +207,8 @@ func run(ctx context.Context, out io.Writer) error {
 
 	// Cerrar la ingesta corta los sockets, pero go-rtmp atiende cada conexión en su
 	// propia goroutine y esa todavía tiene que disparar OnPublishEnd, que cierra la
-	// sesión en la base. Sin esta espera, el proceso puede salir antes y dejar la sesión
-	// abierta para siempre, con código de salida 0 y sin una sola línea de error.
+	// sesión en la base y para los sinks. Sin esta espera el proceso puede salir antes,
+	// dejando la sesión abierta para siempre.
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelShutdown()
 	if err := engine.WaitIdle(shutdownCtx); err != nil {
@@ -193,6 +216,7 @@ func run(ctx context.Context, out io.Writer) error {
 	}
 
 	hub.Close()
+	cancelSinks()
 
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()

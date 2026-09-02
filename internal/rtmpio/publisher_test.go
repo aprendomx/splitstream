@@ -243,3 +243,43 @@ func TestConnectBoundedWithoutCallerDeadline(t *testing.T) {
 		t.Fatalf("Connect no retornó en %v: connectTimeout no acota nada", connectTimeout+10*time.Second)
 	}
 }
+
+// El cierre ordenado manda FCUnpublish antes de deleteStream (spec §6.5). Sin conexión,
+// Close debe seguir siendo seguro.
+func TestCloseSendsFCUnpublishWhenConnected(t *testing.T) {
+	rec := &recorder{}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: rec})
+	go ing.Serve(ln)
+	defer ing.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	p, err := NewPublisher(PublisherConfig{
+		URL:       "rtmp://" + ln.Addr().String() + "/live",
+		StreamKey: crypto.Secret("clave"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Close no debe fallar ni colgarse mandando FCUnpublish.
+	done := make(chan error, 1)
+	go func() { done <- p.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Close = %v, quería nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close se colgó")
+	}
+}

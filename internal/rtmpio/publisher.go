@@ -329,6 +329,12 @@ func (p *Publisher) Close() error {
 	p.mu.Unlock()
 
 	if conn != nil && stream != nil {
+		// FCUnpublish antes de deleteStream: es lo que espera el cierre ordenado del
+		// spec §6.5, y varias plataformas lo usan para liberar el slot de emisión sin
+		// esperar al timeout. Que falle no es motivo para no seguir cerrando.
+		if err := p.writeCommand(stream, "FCUnpublish"); err != nil {
+			p.log.Debug("FCUnpublish falló al cerrar", "err", err)
+		}
 		if err := conn.DeleteStream(&message.NetStreamDeleteStream{StreamID: stream.StreamID()}); err != nil {
 			p.log.Debug("deleteStream falló al cerrar", "err", err)
 		}
