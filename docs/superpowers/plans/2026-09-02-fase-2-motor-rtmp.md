@@ -1708,8 +1708,10 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 	s.setState(StateConnecting)
 	if err := s.pub.Connect(ctx); err != nil {
 		s.fail(err)
-		<-s.quit
-		s.setState(StateIdle)
+		// Se sale de inmediato en vez de esperar a Stop(). Esperar en <-s.quit dejaba
+		// la goroutine viva para siempre si nadie paraba el sink, y con ella la conexión
+		// sin cerrar, porque no se llegaba al defer. El estado queda en error, que es lo
+		// que el consumidor necesita saber; la fase 3 reconectará desde aquí.
 		return
 	}
 	s.setState(StateLive)
@@ -1727,10 +1729,8 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 		case msg := <-s.ch:
 			if err := s.handle(msg, pre, &tb); err != nil {
 				s.fail(err)
-				// La reconexión llega en la fase 3. Aquí el sink se queda en error
-				// hasta que lo paren, sin consumir más mensajes.
-				<-s.quit
-				s.setState(StateIdle)
+				// Salir libera la goroutine y cierra el Publisher por el defer. El
+				// estado se queda en error. La reconexión llega en la fase 3.
 				return
 			}
 		}
@@ -1823,15 +1823,35 @@ func NewHub(logger *slog.Logger) *Hub {
 // Preamble devuelve el preámbulo de la sesión, que los sinks leen al arrancar.
 func (h *Hub) Preamble() *Preamble { return &h.pre }
 
-// Add registra un sink ya arrancado.
+// Add registra un sink ya arrancado. Si ya había uno con el mismo id, lo para por
+// completo ANTES de registrar el nuevo: pararlo en una goroutine suelta dejaba una
+// ventana en la que el viejo seguía conectado mientras el nuevo ya escribía, y los dos
+// publicaban al mismo endpoint RTMP a la vez.
 func (h *Hub) Add(s *Sink) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if old, ok := h.sinks[s.ID()]; ok {
-		go old.Stop()
+	old, existed := h.sinks[s.ID()]
+	if existed {
+		delete(h.sinks, s.ID())
 	}
+	h.mu.Unlock()
+
+	// Fuera del mutex: Stop bloquea hasta que la goroutine del sink termina, y retener
+	// el lock aquí frenaría a Publish.
+	if existed {
+		old.Stop()
+	}
+
+	h.mu.Lock()
 	h.sinks[s.ID()] = s
-	h.log.Info("destino registrado en el hub", "destino_id", s.ID())
+	h.mu.Unlock()
+
+	// Distinguir reemplazo de alta nueva no es cosmético: sin ello, un solapamiento
+	// sería indistinguible de un alta normal al leer los logs.
+	if existed {
+		h.log.Info("destino reemplazado en el hub", "destino_id", s.ID())
+	} else {
+		h.log.Info("destino registrado en el hub", "destino_id", s.ID())
+	}
 }
 
 // Remove quita un sink y lo detiene. No hace nada si el id no está registrado.
@@ -1878,7 +1898,7 @@ func (h *Hub) Close() {
 - [ ] **Step 6: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/relay/ -race -count=1 -v`
-Expected: PASS en los 19 tests del paquete.
+Expected: PASS en los 22 tests del paquete.
 
 - [ ] **Step 7: Commit**
 
@@ -3153,7 +3173,7 @@ func (e *Engine) logEvent(ctx context.Context, sessionID, destID *int64, level, 
 - [ ] **Step 4: Ejecutar los tests del relay**
 
 Run: `go test ./internal/relay/ -race -count=1`
-Expected: PASS en los 23 tests.
+Expected: PASS en los 26 tests.
 
 - [ ] **Step 5: Conectar todo en `cmd/splitstream/main.go`**
 
