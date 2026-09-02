@@ -27,15 +27,32 @@ func NewHub(logger *slog.Logger) *Hub {
 // Preamble devuelve el preámbulo de la sesión, que los sinks leen al arrancar.
 func (h *Hub) Preamble() *Preamble { return &h.pre }
 
-// Add registra un sink ya arrancado.
+// Add registra un sink ya arrancado. Si ya había uno con el mismo id, lo para por
+// completo ANTES de registrar el nuevo: solaparlos haría que dos sinks escribieran al
+// mismo endpoint RTMP a la vez.
 func (h *Hub) Add(s *Sink) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if old, ok := h.sinks[s.ID()]; ok {
-		go old.Stop()
+	old, existed := h.sinks[s.ID()]
+	if existed {
+		delete(h.sinks, s.ID())
 	}
+	h.mu.Unlock()
+
+	// Fuera del mutex: Stop bloquea hasta que la goroutine del sink termina, y
+	// retener el lock aquí frenaría a Publish.
+	if existed {
+		old.Stop()
+	}
+
+	h.mu.Lock()
 	h.sinks[s.ID()] = s
-	h.log.Info("destino registrado en el hub", "destino_id", s.ID())
+	h.mu.Unlock()
+
+	if existed {
+		h.log.Info("destino reemplazado en el hub", "destino_id", s.ID())
+	} else {
+		h.log.Info("destino registrado en el hub", "destino_id", s.ID())
+	}
 }
 
 // Remove quita un sink y lo detiene. No hace nada si el id no está registrado.

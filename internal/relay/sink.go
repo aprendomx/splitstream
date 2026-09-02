@@ -143,8 +143,10 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 	s.setState(StateConnecting)
 	if err := s.pub.Connect(ctx); err != nil {
 		s.fail(err)
-		<-s.quit
-		s.setState(StateIdle)
+		// Se sale de inmediato en vez de esperar a Stop(). Esperar en <-s.quit dejaba
+		// la goroutine viva para siempre si nadie paraba el sink, y con ella la conexión
+		// sin cerrar. El estado se queda en error, que es lo que el consumidor necesita
+		// saber; la fase 3 reconectará desde aquí.
 		return
 	}
 	s.setState(StateLive)
@@ -162,10 +164,8 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 		case msg := <-s.ch:
 			if err := s.handle(msg, pre, &tb); err != nil {
 				s.fail(err)
-				// La reconexión llega en la fase 3. Aquí el sink se queda en error
-				// hasta que lo paren, sin consumir más mensajes.
-				<-s.quit
-				s.setState(StateIdle)
+				// Igual que arriba: salir libera la goroutine y cierra el Publisher.
+				// La reconexión llega en la fase 3.
 				return
 			}
 		}

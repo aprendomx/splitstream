@@ -190,3 +190,52 @@ func TestSinkStopIsIdempotentAndClosesPublisher(t *testing.T) {
 		t.Error("Stop debe cerrar el Publisher")
 	}
 }
+
+// Un Connect fallido no puede dejar la goroutine viva esperando un Stop que quizá nunca
+// llegue, ni la conexión sin cerrar.
+func TestSinkConnectFailureReleasesGoroutine(t *testing.T) {
+	pub := &fakePublisher{connectErr: errFakeWrite}
+	s := NewSink(SinkConfig{ID: 1, Name: "X", Pub: pub})
+	s.Start(context.Background(), preambleWith())
+
+	waitFor(t, func() bool { return s.State() == StateError }, "estado error")
+
+	// Sin llamar a Stop: la goroutine debe haber terminado sola.
+	select {
+	case <-s.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("la goroutine sigue viva tras fallar Connect y nadie paró el sink")
+	}
+
+	pub.mu.Lock()
+	closes := pub.closes
+	pub.mu.Unlock()
+	if closes == 0 {
+		t.Error("el Publisher debe cerrarse aunque Connect falle")
+	}
+
+	// Stop después de que la goroutine salió no debe colgarse ni borrar el error.
+	s.Stop()
+	if s.State() != StateError {
+		t.Errorf("State = %v, quería que se conservara el error", s.State())
+	}
+	if s.LastError() == nil {
+		t.Error("LastError se perdió")
+	}
+}
+
+// Lo mismo para el fallo de escritura.
+func TestSinkWriteFailureReleasesGoroutine(t *testing.T) {
+	pub := &fakePublisher{writeErr: errFakeWrite}
+	s := NewSink(SinkConfig{ID: 1, Name: "X", Pub: pub})
+	s.Start(context.Background(), preambleWith())
+	waitFor(t, func() bool { return s.State() == StateLive }, "estado live")
+
+	s.Enqueue(videoKey(1000))
+	select {
+	case <-s.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("la goroutine sigue viva tras fallar una escritura")
+	}
+	s.Stop()
+}

@@ -81,3 +81,38 @@ func TestHubPublishWithNoSinks(t *testing.T) {
 	defer h.Close()
 	h.Publish(videoKey(1000))
 }
+
+// Reemplazar un sink debe parar el viejo por completo antes de registrar el nuevo.
+func TestHubAddReplacesWithoutOverlap(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+
+	oldPub := &fakePublisher{}
+	old := NewSink(SinkConfig{ID: 5, Name: "viejo", Pub: oldPub})
+	old.Start(context.Background(), h.Preamble())
+	h.Add(old)
+	waitFor(t, func() bool { return old.State() == StateLive }, "el viejo está live")
+
+	newPub := &fakePublisher{}
+	fresh := NewSink(SinkConfig{ID: 5, Name: "nuevo", Pub: newPub})
+	fresh.Start(context.Background(), h.Preamble())
+	h.Add(fresh)
+
+	// Al volver de Add, el viejo ya no puede estar vivo.
+	if got := old.State(); got == StateLive {
+		t.Errorf("el sink viejo sigue en %v tras reemplazarlo: ventana de escritura doble", got)
+	}
+	oldPub.mu.Lock()
+	closes := oldPub.closes
+	oldPub.mu.Unlock()
+	if closes == 0 {
+		t.Error("reemplazar un sink debe cerrar el Publisher del viejo")
+	}
+
+	// Y el nuevo debe seguir funcionando.
+	h.Publish(&Message{Kind: KindMeta, Payload: []byte{0xFF}})
+	h.Publish(&Message{Kind: KindVideo, Payload: []byte{0x17, 0x00}, IsSeqHeader: true, IsKeyframe: true})
+	h.Publish(&Message{Kind: KindAudio, Payload: []byte{0xAF, 0x00}, IsSeqHeader: true})
+	h.Publish(videoKey(1000))
+	waitFor(t, func() bool { return len(newPub.snapshot()) >= 4 }, "el sink nuevo recibe media")
+}
