@@ -8,13 +8,14 @@ Un solo binario: servidor RTMP de ingesta, API HTTP y panel web embebido.
 Sin transcodificación — los paquetes se reenvían tal cual, así que el consumo de
 CPU es despreciable y el de subida es `bitrate × número de destinos`.
 
-> **Estado:** en diseño. Todavía no hay implementación.
-> Ver [el documento de diseño](docs/superpowers/specs/2026-09-01-rtmp-relay-design.md).
-
 ## Estado
 
 Fase 1 completa: configuración, cifrado, base de datos y esqueleto del binario.
 Todavía no hay servidor RTMP ni panel web.
+
+Ver [el documento de diseño](docs/superpowers/specs/2026-09-01-rtmp-relay-design.md)
+para la arquitectura completa y [el plan de la fase 1](docs/superpowers/plans/2026-09-01-fase-1-esqueleto-y-cripto.md)
+para el detalle de lo ya implementado.
 
 ## Desarrollo
 
