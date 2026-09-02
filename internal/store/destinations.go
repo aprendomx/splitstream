@@ -204,7 +204,9 @@ func (d *DB) DeleteDestination(ctx context.Context, id int64) error {
 }
 
 // ReorderDestinations fija el orden a partir de la secuencia de ids recibida.
-// Exige la lista completa: un reorden parcial dejaría huecos silenciosos.
+// Exige exactamente el conjunto completo de destinos existentes, sin repetidos y sin
+// omisiones: validar solo la longitud dejaría pasar una lista con un id duplicado, que
+// dejaría sort_order empatados en silencio.
 func (d *DB) ReorderDestinations(ctx context.Context, ids []int64) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -212,28 +214,53 @@ func (d *DB) ReorderDestinations(ctx context.Context, ids []int64) error {
 	}
 	defer tx.Rollback()
 
-	var total int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM destinations`).Scan(&total); err != nil {
-		return fmt.Errorf("reordenar: %w", err)
+	existing, err := destinationIDs(ctx, tx)
+	if err != nil {
+		return err
 	}
-	if total != len(ids) {
-		return fmt.Errorf("reordenar exige los %d destinos, se recibieron %d", total, len(ids))
+
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			return fmt.Errorf("reordenar: el id %d aparece más de una vez", id)
+		}
+		if !existing[id] {
+			return fmt.Errorf("reordenar: %w (id %d)", ErrDestinationNotFound, id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != len(existing) {
+		return fmt.Errorf("reordenar exige los %d destinos, se recibieron %d", len(existing), len(seen))
 	}
 
 	for i, id := range ids {
-		res, err := tx.ExecContext(ctx, `UPDATE destinations SET sort_order = ? WHERE id = ?`, i, id)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE destinations SET sort_order = ? WHERE id = ?`, i, id); err != nil {
 			return fmt.Errorf("reordenar: %w", err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("reordenar: %w", err)
-		}
-		if n == 0 {
-			return fmt.Errorf("reordenar: %w (id %d)", ErrDestinationNotFound, id)
 		}
 	}
 	return tx.Commit()
+}
+
+// destinationIDs devuelve el conjunto de ids de destino existentes.
+func destinationIDs(ctx context.Context, tx *sql.Tx) (map[int64]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM destinations`)
+	if err != nil {
+		return nil, fmt.Errorf("reordenar: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("reordenar: %w", err)
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reordenar: %w", err)
+	}
+	return out, nil
 }
 
 // RevealDestinationKey descifra y devuelve la clave del destino en claro.

@@ -153,6 +153,43 @@ func TestReorderDestinations(t *testing.T) {
 	}
 }
 
+func TestReorderDestinationsRejectsDuplicateIDs(t *testing.T) {
+	db, c := bootstrapped(t)
+	ctx := context.Background()
+
+	var ids []int64
+	for _, name := range []string{"A", "B", "C"} {
+		d, err := db.CreateDestination(ctx, c, newDest(name))
+		if err != nil {
+			t.Fatalf("CreateDestination: %v", err)
+		}
+		ids = append(ids, d.ID)
+	}
+
+	// Longitud correcta (3), pero repite A y omite C.
+	if err := db.ReorderDestinations(ctx, []int64{ids[0], ids[0], ids[1]}); err == nil {
+		t.Fatal("quería error: la lista repite un id y omite otro")
+	}
+
+	// Nada debe haber cambiado: la transacción no se comiteó.
+	list, err := db.ListDestinations(ctx)
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	for i, want := range []string{"A", "B", "C"} {
+		if list[i].Name != want {
+			t.Errorf("posición %d = %q, quería %q: un reorden inválido no debe modificar nada", i, list[i].Name, want)
+		}
+	}
+	seen := map[int]bool{}
+	for _, dest := range list {
+		if seen[dest.SortOrder] {
+			t.Errorf("sort_order duplicado: %d", dest.SortOrder)
+		}
+		seen[dest.SortOrder] = true
+	}
+}
+
 func TestReorderDestinationsRejectsIncompleteList(t *testing.T) {
 	db, c := bootstrapped(t)
 	ctx := context.Background()
