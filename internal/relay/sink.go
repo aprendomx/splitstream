@@ -75,9 +75,10 @@ type Sink struct {
 	bo      *backoff
 	onEvent func(EngineEvent)
 
-	quit chan struct{}
-	done chan struct{}
-	once sync.Once
+	quit    chan struct{}
+	done    chan struct{}
+	once    sync.Once
+	started atomic.Bool
 
 	state  atomic.Uint32
 	errMu  sync.Mutex
@@ -156,6 +157,7 @@ func (s *Sink) emit(level, kind, msg string) {
 
 // Start lanza la goroutine del sink.
 func (s *Sink) Start(ctx context.Context, pre *Preamble) {
+	s.started.Store(true)
 	go s.run(ctx, pre)
 }
 
@@ -171,13 +173,16 @@ func (s *Sink) Enqueue(msg *Message) {
 	}
 }
 
-// Stop detiene el sink y espera a que su goroutine termine. Es idempotente.
+// Stop detiene el sink y espera a que su goroutine termine. Es idempotente, y es seguro
+// sobre un sink que nunca se arrancó: en ese caso no hay goroutine a la que esperar.
 func (s *Sink) Stop() {
 	s.once.Do(func() {
 		close(s.quit)
 		s.q.close()
 	})
-	<-s.done
+	if s.started.Load() {
+		<-s.done
+	}
 }
 
 // run es el bucle de vida del destino: conectar, transmitir, y reconectar al caer.

@@ -79,6 +79,32 @@ func (h *Hub) Publish(msg *Message) {
 	}
 }
 
+// Len devuelve cuántos destinos hay registrados.
+func (h *Hub) Len() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.sinks)
+}
+
+// Snapshot devuelve las métricas de todos los destinos, indexadas por id. Es lo que la
+// fase 4 empujará por WebSocket cada segundo.
+func (h *Hub) Snapshot() map[int64]Metrics {
+	h.mu.RLock()
+	sinks := make([]*Sink, 0, len(h.sinks))
+	for _, s := range h.sinks {
+		sinks = append(sinks, s)
+	}
+	h.mu.RUnlock()
+
+	// Fuera del lock: Metrics() toma los mutex del sink y no queremos encadenarlos con
+	// el del hub, que bloquearía a Publish.
+	out := make(map[int64]Metrics, len(sinks))
+	for _, s := range sinks {
+		out[s.ID()] = s.Metrics()
+	}
+	return out
+}
+
 // Close detiene todos los sinks y olvida el preámbulo. El hub queda reutilizable.
 func (h *Hub) Close() {
 	h.mu.Lock()

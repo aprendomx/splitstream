@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestHubFansOutToAllSinks(t *testing.T) {
@@ -115,4 +116,92 @@ func TestHubAddReplacesWithoutOverlap(t *testing.T) {
 	h.Publish(&Message{Kind: KindAudio, Payload: []byte{0xAF, 0x00}, IsSeqHeader: true})
 	h.Publish(videoKey(1000))
 	waitFor(t, func() bool { return len(newPub.snapshot()) >= 4 }, "el sink nuevo recibe media")
+}
+
+func TestHubSnapshotHasEveryDestination(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+
+	for i := 1; i <= 3; i++ {
+		s := NewSink(SinkConfig{ID: int64(i), Name: "dest", Pub: &fakePublisher{}})
+		s.Start(context.Background(), h.Preamble())
+		h.Add(s)
+	}
+	waitFor(t, func() bool { return h.Len() == 3 }, "tres destinos registrados")
+
+	snap := h.Snapshot()
+	if len(snap) != 3 {
+		t.Fatalf("Snapshot tiene %d destinos, quería 3", len(snap))
+	}
+	for id := int64(1); id <= 3; id++ {
+		if _, ok := snap[id]; !ok {
+			t.Errorf("falta el destino %d en el snapshot", id)
+		}
+	}
+}
+
+// Añadir un sink que nunca se arrancó no debe colgar el hub.
+func TestHubAddNeverStartedSinkDoesNotHang(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+
+	old := NewSink(SinkConfig{ID: 1, Name: "sin arrancar", Pub: &fakePublisher{}})
+	// A propósito: no se llama a old.Start.
+	h.Add(old)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fresh := NewSink(SinkConfig{ID: 1, Name: "nuevo", Pub: &fakePublisher{}})
+		fresh.Start(context.Background(), h.Preamble())
+		h.Add(fresh)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Add se colgó al reemplazar un sink que nunca se arrancó")
+	}
+}
+
+// Un destino lento no debe frenar la entrega a los demás.
+func TestHubSlowSinkDoesNotBlockOthers(t *testing.T) {
+	h := NewHub(nil)
+	block := make(chan struct{})
+	defer func() { close(block); h.Close() }()
+
+	slow := &fakePublisher{blockWrites: block}
+	fast := &fakePublisher{}
+
+	sSlow := NewSink(SinkConfig{ID: 1, Name: "lento", Pub: slow,
+		Queue: queueConfig{MaxBytes: 1024, MaxSpan: 1_000_000}})
+	sSlow.Start(context.Background(), h.Preamble())
+	h.Add(sSlow)
+
+	sFast := NewSink(SinkConfig{ID: 2, Name: "rápido", Pub: fast})
+	sFast.Start(context.Background(), h.Preamble())
+	h.Add(sFast)
+
+	waitFor(t, func() bool { return sFast.State() == StateLive }, "el rápido está live")
+
+	h.Publish(&Message{Kind: KindMeta, Payload: []byte{0xFF}})
+	h.Publish(&Message{Kind: KindVideo, Payload: []byte{0x17, 0x00}, IsSeqHeader: true, IsKeyframe: true})
+	h.Publish(&Message{Kind: KindAudio, Payload: []byte{0xAF, 0x00}, IsSeqHeader: true})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 300; i++ {
+			h.Publish(&Message{Kind: KindVideo, Timestamp: uint32(i * 33),
+				Payload: make([]byte, 512), IsKeyframe: i%10 == 0})
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Publish se bloqueó por culpa del destino lento")
+	}
+
+	waitFor(t, func() bool { return len(fast.snapshot()) > 10 }, "el destino rápido siguió recibiendo")
 }
