@@ -3,6 +3,7 @@ package config_test
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -173,5 +174,53 @@ func TestConfigLogValueOmitsMasterKeyWhenLoggedByValue(t *testing.T) {
 	}
 	if !strings.Contains(out, ":8080") {
 		t.Errorf("el log debería incluir los campos no secretos: %s", out)
+	}
+}
+
+// json.Marshal no puede volcar la master key, ni desde un Config ni desde un *Config.
+// El receptor importa: en la fase 1, con LogValue declarado sobre puntero, loguear un
+// Config por valor volcaba los 32 bytes.
+func TestConfigMarshalJSONMasksMasterKey(t *testing.T) {
+	var cfg config.Config
+	cfg.HTTPAddr = ":8080"
+	cfg.RTMPAddr = ":1935"
+	cfg.DBPath = "splitstream.db"
+	cfg.LogLevel = slog.LevelInfo
+	for i := range cfg.MasterKey {
+		cfg.MasterKey[i] = byte(i + 1)
+	}
+
+	// Las dos formas en que la clave podría aparecer: el array de bytes que emite
+	// encoding/json y el base64 con el que se configura.
+	asNumbers := "1,2,3,4,5,6,7,8"
+	asBase64 := base64.StdEncoding.EncodeToString(cfg.MasterKey[:])
+
+	for _, tc := range []struct {
+		name string
+		v    any
+	}{
+		{"por valor", cfg},
+		{"por puntero", &cfg},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.v)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			out := string(raw)
+			if strings.Contains(out, asNumbers) {
+				t.Errorf("el JSON lleva los bytes de la master key: %s", out)
+			}
+			if strings.Contains(out, asBase64) {
+				t.Errorf("el JSON lleva la master key en base64: %s", out)
+			}
+			if strings.Contains(out, "MasterKey") || strings.Contains(out, "master_key") {
+				t.Errorf("el JSON menciona la master key: %s", out)
+			}
+			// Y sigue sirviendo para lo que se serializa un Config.
+			if !strings.Contains(out, `"db_path":"splitstream.db"`) {
+				t.Errorf("el JSON perdió el resto de la configuración: %s", out)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,8 +12,8 @@ import (
 // MasterKeyLen es el tamaño exacto, en bytes, de la master key de AES-256.
 const MasterKeyLen = 32
 
-// Config es la configuración del proceso. Implementa slog.LogValuer para que
-// MasterKey no pueda escaparse a un log por accidente.
+// Config es la configuración del proceso. Implementa slog.LogValuer y json.Marshaler
+// para que MasterKey no pueda escaparse ni a un log ni a una respuesta de la API.
 type Config struct {
 	HTTPAddr  string
 	RTMPAddr  string
@@ -31,6 +32,27 @@ func (c Config) LogValue() slog.Value {
 		slog.String("db_path", c.DBPath),
 		slog.String("log_level", c.LogLevel.String()),
 	)
+}
+
+// MarshalJSON implementa json.Marshaler. Omite MasterKey igual que LogValue: sin este
+// método, json.Marshal vuelca el array de 32 bytes entero. Hoy nadie serializa un Config,
+// pero la fase 4 es precisamente una API JSON y el fallo llegaría con ella.
+//
+// Receptor por valor por el mismo motivo que LogValue, y no es teórico: en la fase 1 este
+// mismo enmascarado se declaró sobre puntero y un Config logueado por valor volcó la
+// clave. Con receptor por valor el método está tanto en Config como en *Config.
+func (c Config) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		HTTPAddr string `json:"http_addr"`
+		RTMPAddr string `json:"rtmp_addr"`
+		DBPath   string `json:"db_path"`
+		LogLevel string `json:"log_level"`
+	}{
+		HTTPAddr: c.HTTPAddr,
+		RTMPAddr: c.RTMPAddr,
+		DBPath:   c.DBPath,
+		LogLevel: c.LogLevel.String(),
+	})
 }
 
 // Load lee la configuración del entorno del proceso.
