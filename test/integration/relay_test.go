@@ -76,7 +76,16 @@ func TestRelayEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	defer db.Close()
+	// La base se cierra a mano al final, después de la ingesta: si se cerrara antes, el
+	// OnPublishEnd que dispara el cierre de la conexión fallaría al registrar su evento.
+	var ingest *rtmpio.Ingest
+	defer func() {
+		if ingest != nil {
+			ingest.Close()
+		}
+		time.Sleep(300 * time.Millisecond)
+		db.Close()
+	}()
 
 	cipher := testCipher(t)
 	if err := db.Bootstrap(ctx, cipher); err != nil {
@@ -116,9 +125,8 @@ func TestRelayEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{Addr: addr, Handler: engine})
+	ingest = rtmpio.NewIngest(rtmpio.IngestConfig{Addr: addr, Handler: engine})
 	go ingest.Serve(ln)
-	defer ingest.Close()
 	time.Sleep(300 * time.Millisecond)
 
 	// OBS simulado: patrón de prueba con audio, en tiempo real.

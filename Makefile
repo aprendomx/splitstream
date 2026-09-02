@@ -27,6 +27,7 @@ sinks-up:
 sinks-down:
 	docker compose -f deploy/test-compose.yml down
 
-# Requiere sinks-up, ffmpeg y ffprobe.
+# Requiere sinks-up, ffmpeg y ffprobe. El test de reconexión espera al backoff, que llega
+# a 30 s entre intentos.
 test-integration:
-	go test -tags integration ./test/integration/ -v -count=1 -timeout 5m
+	go test -tags integration ./test/integration/ -v -count=1 -timeout 15m
