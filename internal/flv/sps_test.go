@@ -3,6 +3,7 @@ package flv_test
 import (
 	"encoding/hex"
 	"errors"
+	"math/rand"
 	"testing"
 
 	"github.com/aprendomx/splitstream/internal/flv"
@@ -111,5 +112,31 @@ func TestParseResolutionRejectsGarbageSPS(t *testing.T) {
 	_, _, err := flv.ParseResolution(avcSeqHeader(garbage))
 	if err == nil {
 		t.Fatal("un SPS ilegible debe dar error")
+	}
+}
+
+// La basura no debe producir resoluciones inventadas: una resolución falsa sin error es
+// peor que un fallo, porque se muestra como buena.
+func TestParseResolutionRejectsMostGarbage(t *testing.T) {
+	// Semilla fija: el test tiene que ser reproducible.
+	rnd := rand.New(rand.NewSource(1))
+
+	const samples = 5000
+	accepted := 0
+	for i := 0; i < samples; i++ {
+		sps := make([]byte, 25)
+		rnd.Read(sps)
+		sps[0] = 0x67 // cabecera NAL de SPS, para pasar el filtro trivial
+
+		if _, _, err := flv.ParseResolution(avcSeqHeader(sps)); err == nil {
+			accepted++
+		}
+	}
+
+	// Con profile_idc, level_idc y reserved_zero_2bits validados debe quedar por debajo
+	// del 1%. Antes de esas comprobaciones pasaba el 21%.
+	if rate := float64(accepted) / samples; rate > 0.01 {
+		t.Errorf("el %.1f%% de la basura aleatoria produjo una resolución sin error, quería <1%%",
+			rate*100)
 	}
 }

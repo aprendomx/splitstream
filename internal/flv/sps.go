@@ -1,6 +1,9 @@
 package flv
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // ErrNotAVCSequenceHeader indica que el tag no es un AVC sequence header.
 var ErrNotAVCSequenceHeader = errors.New("no es un AVC sequence header")
@@ -13,6 +16,12 @@ var ErrMalformedSPS = errors.New("SPS malformado")
 //
 // Se prefiere al onMetaData porque este es declarativo y puede mentir: OBS lo suele mandar
 // bien, pero nada obliga a que coincida con lo que realmente codifica (spec §3.8).
+//
+// LIMITACIÓN CONOCIDA: unos bytes corruptos que resulten estructuralmente plausibles
+// pueden producir una resolución equivocada sin error. Validarlo del todo exigiría parsear
+// el RBSP entero hasta rbsp_trailing_bits, lo que no compensa para un dato informativo.
+// Las comprobaciones de profile_idc, level_idc y reserved_zero_2bits reducen ese caso a
+// menos del 1% de las entradas aleatorias.
 func ParseResolution(tag []byte) (int, int, error) {
 	sps, err := extractSPS(tag)
 	if err != nil {
@@ -136,6 +145,25 @@ func removeEmulationPrevention(b []byte) []byte {
 	return out
 }
 
+// validProfileIDC comprueba que el perfil sea uno de los que define H.264 (Anexo A).
+//
+// No es una comprobación de estilo: junto con reserved_zero_2bits y el rango de level_idc,
+// es lo que impide que unos bytes corruptos produzcan una resolución inventada que la
+// interfaz mostraría como buena. Un parser que devuelve 42x12 sin error es peor que uno
+// que falla.
+func validProfileIDC(p uint) bool {
+	switch p {
+	case 66, 77, 88, // Baseline, Main, Extended
+		100, 110, 122, 244, // High, High 10, High 4:2:2, High 4:4:4 Predictive
+		44,                 // CAVLC 4:4:4 Intra
+		83, 86,             // Scalable Baseline, Scalable High
+		118, 128,           // Multiview High, Stereo High
+		138, 139, 134, 135: // MFC / 3D
+		return true
+	}
+	return false
+}
+
 // parseSPS decodifica el SPS hasta los campos que dan la resolución.
 func parseSPS(sps []byte) (int, int, error) {
 	if len(sps) < 4 {
@@ -149,6 +177,13 @@ func parseSPS(sps []byte) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	// profile_idc debe ser uno de los que define el Anexo A de H.264. Junto con
+	// reserved_zero_2bits y el rango de level_idc, es lo que impide que unos bytes
+	// corruptos produzcan una resolución inventada que se mostraría como buena. Un
+	// parser que devuelve, por ejemplo, 42x12 sin error es peor que uno que falla.
+	if !validProfileIDC(profileIDC) {
+		return 0, 0, fmt.Errorf("%w: profile_idc %d no está definido en H.264", ErrMalformedSPS, profileIDC)
+	}
 	constraintFlags, err := r.bits(8) // constraint flags + reserved_zero_2bits
 	if err != nil {
 		return 0, 0, err
@@ -160,8 +195,14 @@ func parseSPS(sps []byte) (int, int, error) {
 	if constraintFlags&0x03 != 0 {
 		return 0, 0, ErrMalformedSPS
 	}
-	if _, err := r.bits(8); err != nil { // level_idc
+	levelIDC, err := r.bits(8)
+	if err != nil {
 		return 0, 0, err
+	}
+	// Los niveles definidos van de 1 (10) a 6.2 (62), más el 1b que algunos
+	// codificadores escriben como 9. Fuera de ahí no es un SPS.
+	if levelIDC < 9 || levelIDC > 62 {
+		return 0, 0, fmt.Errorf("%w: level_idc %d fuera del rango definido", ErrMalformedSPS, levelIDC)
 	}
 	if _, err := r.ue(); err != nil { // seq_parameter_set_id
 		return 0, 0, err
