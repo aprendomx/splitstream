@@ -49,14 +49,18 @@ const connectTimeout = 15 * time.Second
 //   - `app` es el protocolo. La app RTMP es el path entero de la URL del servidor, así
 //     que con rtmp://host/a/b la app es "a/b". Recortarla rompería cualquier destino con
 //     app anidada, como un nginx-rtmp propio. Es lo que viaja en el connect y en el tcURL.
-//   - `logApp` es lo que se puede escribir en disco: solo el primer segmento. La clave va
-//     en un campo aparte (PublisherConfig.StreamKey) y no debería estar en la URL, pero
-//     si el usuario la pegó ahí, el path entero en un log la filtraría para siempre.
+//   - `logApp` es lo que se puede escribir en disco, y está VACÍO salvo que el path sea
+//     anidado. La clave va en un campo aparte (PublisherConfig.StreamKey) y no debería
+//     estar en la URL, pero si el usuario la pegó ahí, el path en un log la filtraría para
+//     siempre. Con dos o más segmentos el primero es inequívocamente la app y nunca el
+//     nombre del stream; con uno solo es ambiguo —`rtmp://host/live2` y
+//     `rtmp://host/live_987_CLAVE` son indistinguibles desde aquí— y la §8 del spec no
+//     admite un "casi nunca", así que no se loguea nada.
 type target struct {
 	scheme string // exactamente "rtmp" o "rtmps": go-rtmp compara con estos literales
 	addr   string // host:puerto, con el puerto por defecto ya resuelto
 	app    string // la app RTMP: el path completo, sin barras al principio ni al final
-	logApp string // solo el primer segmento de la app: lo único que se loguea
+	logApp string // el primer segmento, solo si el path es anidado; "" si no se puede loguear
 }
 
 // parseTarget descompone una URL de destino.
@@ -96,13 +100,20 @@ func parseTarget(rawURL string) (target, error) {
 	}
 
 	// El path entero es la app: la URL del destino es la URL del servidor y la clave va
-	// aparte. Para el log se deriva el primer segmento, que no puede llevar dentro una
-	// clave pegada por el usuario.
+	// aparte.
 	app := strings.Trim(u.Path, "/")
 	if app == "" {
 		return target{}, errors.New("la URL del destino no tiene app (la parte tras el host)")
 	}
-	logApp, _, _ := strings.Cut(app, "/")
+
+	// Y lo logueable es el primer segmento SOLO si hay más de uno. `strings.Cut` sin
+	// separador devuelve la cadena entera, así que derivarlo sin más dejaba pasar el path
+	// plano con la clave pegada (`rtmp://host/live_987_CLAVE`, y también el `%2f` que
+	// url.Parse decodifica a un único segmento). Un path plano es ambiguo y no se loguea.
+	logApp := ""
+	if first, rest, nested := strings.Cut(app, "/"); nested && rest != "" {
+		logApp = first
+	}
 
 	return target{
 		scheme: u.Scheme,
@@ -154,14 +165,24 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 		tgt:       tgt,
 		key:       cfg.StreamKey,
 		chunkSize: size,
-		// Al log va `logApp`, no `app`: la app que viaja por el cable es el path entero y
-		// puede llevar dentro una clave que el usuario pegó ahí. Tampoco va la URL
-		// original ni la clave enmascarada: el spec §8 dice que jamás aparece en los
-		// logs, y los últimos 4 caracteres son para la interfaz, que tiene otro control
-		// de acceso. Para identificar el destino está su ID numérico, que ya lleva el
-		// logger del sink.
-		log: log.With("destino_addr", tgt.addr, "destino_app", tgt.logApp),
+		log:       log.With(logAttrs(tgt)...),
 	}, nil
+}
+
+// logAttrs son los atributos fijos del logger del publisher.
+//
+// No van ni la URL original, ni el path completo, ni la clave enmascarada: el spec §8 dice
+// que las claves jamás aparecen en los logs, y los últimos 4 caracteres son para la
+// interfaz, que es otra superficie con otro control de acceso. `destino_app` se omite
+// entero cuando el path no es anidado, porque entonces podría ser la clave. No se pierde
+// gran cosa: `destino_addr` ya identifica la plataforma y el destino lleva su ID numérico
+// en el logger del sink.
+func logAttrs(tgt target) []any {
+	attrs := []any{"destino_addr", tgt.addr}
+	if tgt.logApp != "" {
+		attrs = append(attrs, "destino_app", tgt.logApp)
+	}
+	return attrs
 }
 
 // Connect abre la conexión y deja el stream listo para recibir media.

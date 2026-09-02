@@ -92,6 +92,31 @@ func TestParseTargetKeepsPastedKeyOffTheLogApp(t *testing.T) {
 	}
 }
 
+// Un path de un solo segmento es AMBIGUO: puede ser una app normal (`/live2`) o una app
+// con la clave pegada (`/live_987_CLAVE`), y desde el código no se distinguen. Como la §8
+// no admite un "casi nunca", en ese caso no hay nada que loguear.
+func TestParseTargetHasNoLogAppForFlatPaths(t *testing.T) {
+	for _, tc := range []struct{ name, url, wantApp string }{
+		{"app plana normal", "rtmp://a.rtmp.youtube.com/live2", "live2"},
+		{"clave pegada sin barra", "rtmp://live.example.com/live_987_SUPERSECRETSTREAMKEY9x7", "live_987_SUPERSECRETSTREAMKEY9x7"},
+		{"barra escapada", "rtmp://example.com/%2fSUPERSECRETSTREAMKEY9x7", "SUPERSECRETSTREAMKEY9x7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseTarget(tc.url)
+			if err != nil {
+				t.Fatalf("parseTarget: %v", err)
+			}
+			// Lo que va por el cable no cambia: es lo que el usuario configuró.
+			if got.app != tc.wantApp {
+				t.Errorf("app = %q, quería %q: la app de red no se toca", got.app, tc.wantApp)
+			}
+			if got.logApp != "" {
+				t.Errorf("logApp = %q: un path de un solo segmento no se puede loguear", got.logApp)
+			}
+		})
+	}
+}
+
 func TestParseTargetRejectsBadScheme(t *testing.T) {
 	for _, raw := range []string{
 		"http://example.com/live",
@@ -423,5 +448,58 @@ func TestConnectUsesFullPathAsApp(t *testing.T) {
 	// Lo que recibió el servidor es lo único que zanja la pregunta.
 	if got := rec.lastApp(); got != "a/b" {
 		t.Errorf("el servidor recibió la app %q, quería \"a/b\": el recorte volvió a colarse", got)
+	}
+}
+
+// Con el path plano no se emite `destino_app` en ninguna línea, así que la clave pegada no
+// puede salir por ahí. Es el hueco que dejaba `strings.Cut` sin separador.
+func TestPublisherOmitsLogAppForFlatPaths(t *testing.T) {
+	const key = "SUPERSECRETSTREAMKEY9x7"
+	for _, tc := range []struct {
+		name       string
+		url        string
+		wantApp    string // lo que va por el cable, que no puede cambiar
+		wantLogApp string // "" = no se emite el atributo
+	}{
+		{"clave pegada sin barra", "rtmp://live.example.com/live_987_" + key, "live_987_" + key, ""},
+		{"barra escapada", "rtmp://example.com/%2f" + key, key, ""},
+		{"app anidada", "rtmp://example.com/live/sub", "live/sub", "live"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			p, err := NewPublisher(PublisherConfig{
+				URL:       tc.url,
+				StreamKey: crypto.Secret("otra-clave"),
+				Logger:    logger,
+			})
+			if err != nil {
+				t.Fatalf("NewPublisher: %v", err)
+			}
+			defer p.Close()
+
+			if p.tgt.app != tc.wantApp {
+				t.Errorf("la app de red cambió: %q, quería %q", p.tgt.app, tc.wantApp)
+			}
+
+			// Los atributos fijos salen en todas las líneas: basta con provocar una.
+			p.log.Info("publicando en el destino")
+			out := buf.String()
+
+			if strings.Contains(out, key) {
+				t.Errorf("el log filtró la clave pegada en la URL: %s", out)
+			}
+			if tc.wantLogApp == "" {
+				if strings.Contains(out, "destino_app") {
+					t.Errorf("con un path plano no se puede emitir destino_app: %s", out)
+				}
+			} else if !strings.Contains(out, "destino_app="+tc.wantLogApp) {
+				t.Errorf("faltó destino_app=%s: %s", tc.wantLogApp, out)
+			}
+			if !strings.Contains(out, "destino_addr=") {
+				t.Errorf("el log debería seguir identificando el destino por su addr: %s", out)
+			}
+		})
 	}
 }
