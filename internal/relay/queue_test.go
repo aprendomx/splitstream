@@ -301,3 +301,100 @@ func TestQueueConcurrentPushPop(t *testing.T) {
 	cancel()
 	<-consumed // no se comprueba el número: con descarte, es no determinista
 }
+
+// Una saturación causada solo por audio también tiene que acotarse: un destino caído
+// mientras la transmisión continúa acumularía audio para siempre.
+func TestQueueBoundedUnderAudioOnlySaturation(t *testing.T) {
+	q := newQueue(queueConfig{MaxBytes: 1000, MaxSpan: 1_000_000, MaxItems: 64})
+	defer q.close()
+
+	for i := 0; i < 20_000; i++ {
+		q.push(aRaw(uint32(i*20), 100))
+	}
+
+	items, bytes, _ := q.stats()
+	if items > 64 {
+		t.Errorf("la cola tiene %d ítems con una cota de 64: no está acotada", items)
+	}
+	if bytes > 1000*2 {
+		t.Errorf("la cola retiene %d bytes con un límite de 1000", bytes)
+	}
+	if q.dropped() == 0 {
+		t.Error("no se descartó nada pese a la saturación")
+	}
+}
+
+// Y ese caso no puede costar O(n²): 20 000 push deben tardar milisegundos, no segundos.
+func TestQueueAudioOnlySaturationIsCheap(t *testing.T) {
+	q := newQueue(queueConfig{MaxBytes: 1000, MaxSpan: 1_000_000, MaxItems: 64})
+	defer q.close()
+
+	start := time.Now()
+	for i := 0; i < 20_000; i++ {
+		q.push(aRaw(uint32(i*20), 100))
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Errorf("20 000 push de audio tardaron %v: hay un reescaneo O(n) por push", d)
+	}
+}
+
+// Ni siquiera la cota dura tira la metadata ni los sequence headers.
+func TestQueueItemCapKeepsEssentials(t *testing.T) {
+	q := newQueue(queueConfig{MaxBytes: 1 << 30, MaxSpan: 1_000_000, MaxItems: 8})
+	defer q.close()
+
+	q.push(metaMsg())
+	q.push(vSeq())
+	for i := 0; i < 200; i++ {
+		q.push(aRaw(uint32(i*20), 10))
+	}
+
+	got := drain(t, q)
+	var seenMeta, seenSeq bool
+	for _, m := range got {
+		if m.Kind == KindMeta {
+			seenMeta = true
+		}
+		if m.IsSeqHeader {
+			seenSeq = true
+		}
+	}
+	if !seenMeta || !seenSeq {
+		t.Errorf("meta=%v seq=%v: la cota dura no puede tirar los esenciales", seenMeta, seenSeq)
+	}
+}
+
+// El contador de vídeo no se descuadra con push, pop y descartes mezclados.
+func TestQueueVideoCounterStaysConsistent(t *testing.T) {
+	q := newQueue(queueConfig{MaxBytes: 1 << 30, MaxSpan: 1_000_000, MaxItems: 1 << 20})
+	defer q.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for i := 0; i < 100; i++ {
+		if i%10 == 0 {
+			q.push(vKey(uint32(i*33), 10))
+		} else {
+			q.push(vInter(uint32(i*33), 10))
+		}
+		q.push(aRaw(uint32(i*33), 5))
+	}
+	for i := 0; i < 150; i++ {
+		q.pop(ctx)
+	}
+
+	q.mu.Lock()
+	counted := 0
+	for _, m := range q.items {
+		if m.Kind == KindVideo && !essential(m) {
+			counted++
+		}
+	}
+	tracked := q.videoItems
+	q.mu.Unlock()
+
+	if counted != tracked {
+		t.Errorf("videoItems = %d pero hay %d de vídeo en la cola", tracked, counted)
+	}
+}
