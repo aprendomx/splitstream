@@ -2109,6 +2109,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yutopp/go-rtmp"
 	"github.com/yutopp/go-rtmp/message"
@@ -2122,6 +2123,10 @@ var ErrUnsupportedScheme = errors.New("esquema no soportado: usa rtmp:// o rtmps
 // DefaultChunkSize es el tamaño de chunk que se negocia con el destino. Subirlo desde los
 // 128 por defecto reduce el overhead de cabeceras; el spike lo verificó (spec §16.3).
 const DefaultChunkSize = 4096
+
+// connectTimeout acota el handshake cuando el destino acepta la conexión TCP y luego no
+// responde. Ver el comentario de Connect.
+const connectTimeout = 15 * time.Second
 
 // Identificadores de chunk stream. Separar audio y video es la convención habitual.
 const (
@@ -2223,22 +2228,69 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 }
 
 // Connect abre la conexión y deja el stream listo para recibir media.
+//
+// go-rtmp v0.0.7 no acepta un contexto en Dial, así que el contexto se traduce a un
+// deadline sobre el dialer y además la espera se envuelve en un select para poder
+// abandonarla. Sin esto, un destino detrás de un firewall que descarta paquetes en
+// silencio colgaría durante el timeout TCP del sistema —minutos— y cancelar el contexto
+// no tendría ningún efecto.
+//
+// LIMITACIÓN CONOCIDA: net.Dialer.Deadline acota la conexión TCP, no el handshake RTMP
+// que go-rtmp hace después. Un peer que complete el TCP y luego se calle deja viva la
+// goroutine del dial hasta que el sistema mate el socket; Connect sí retorna a tiempo.
+// Eliminarlo del todo exigiría que go-rtmp expusiera un constructor a partir de un
+// net.Conn ya abierto, para fijarle un SetDeadline. La v0.0.7 no lo expone.
 func (p *Publisher) Connect(ctx context.Context) error {
-	var (
+	deadline := time.Now().Add(connectTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+
+	type dialResult struct {
 		conn *rtmp.ClientConn
 		err  error
-	)
-	switch p.tgt.scheme {
-	case "rtmps":
-		conn, err = rtmp.TLSDial("rtmps", p.tgt.addr, &rtmp.ConnConfig{}, &tls.Config{
-			ServerName: hostOf(p.tgt.addr),
-			MinVersion: tls.VersionTLS12,
-		})
-	default:
-		conn, err = rtmp.Dial("rtmp", p.tgt.addr, &rtmp.ConnConfig{})
 	}
-	if err != nil {
-		return fmt.Errorf("conectar a %s: %w", p.tgt.addr, err)
+	// Con buffer: si abandonamos la espera, la goroutine escribe y termina en vez de
+	// quedarse bloqueada para siempre.
+	results := make(chan dialResult, 1)
+
+	go func() {
+		var (
+			conn *rtmp.ClientConn
+			err  error
+		)
+		switch p.tgt.scheme {
+		case "rtmps":
+			conn, err = rtmp.DialWithTLSDialer(&tls.Dialer{
+				NetDialer: &net.Dialer{Deadline: deadline},
+				Config: &tls.Config{
+					ServerName: hostOf(p.tgt.addr),
+					MinVersion: tls.VersionTLS12,
+				},
+			}, "rtmps", p.tgt.addr, &rtmp.ConnConfig{})
+		default:
+			conn, err = rtmp.DialWithDialer(
+				&net.Dialer{Deadline: deadline},
+				"rtmp", p.tgt.addr, &rtmp.ConnConfig{})
+		}
+		results <- dialResult{conn: conn, err: err}
+	}()
+
+	var conn *rtmp.ClientConn
+	select {
+	case <-ctx.Done():
+		// Se abandona la espera, pero no la limpieza.
+		go func() {
+			if r := <-results; r.conn != nil {
+				r.conn.Close()
+			}
+		}()
+		return fmt.Errorf("conectar a %s: %w", p.tgt.addr, ctx.Err())
+	case r := <-results:
+		if r.err != nil {
+			return fmt.Errorf("conectar a %s: %w", p.tgt.addr, r.err)
+		}
+		conn = r.conn
 	}
 
 	p.mu.Lock()
