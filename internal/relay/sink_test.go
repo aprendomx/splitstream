@@ -304,10 +304,30 @@ func TestSinkStartIsIdempotent(t *testing.T) {
 	}
 }
 
-// Y arrancar un sink ya parado tampoco deja una goroutine suelta ni entra en pánico.
+// Y arrancar un sink ya parado no lanza nada: ni goroutine, ni conexión, ni pánico. Sin
+// el guardia, Start dejaría una goroutine que nadie espera y que además abre una conexión
+// con el destino justo después de haber pedido cerrarlo.
 func TestSinkStartAfterStopDoesNothing(t *testing.T) {
-	s := NewSink(SinkConfig{ID: 1, Name: "parado", Pub: &fakePublisher{}})
+	pub := &fakePublisher{}
+	s := NewSink(SinkConfig{ID: 1, Name: "parado", Pub: pub})
+
 	s.Stop()
 	s.Start(context.Background(), preambleWith())
 	s.Stop() // no debe colgarse esperando a una goroutine que no existe
+
+	if s.started.Load() {
+		t.Error("Start marcó el sink como arrancado después de pararlo: falta el guardia")
+	}
+
+	// Margen para que una goroutine indebida hubiera llegado a conectar.
+	time.Sleep(50 * time.Millisecond)
+	pub.mu.Lock()
+	connects := pub.connects
+	pub.mu.Unlock()
+	if connects != 0 {
+		t.Errorf("connects = %d: arrancar un sink ya parado abrió una conexión", connects)
+	}
+	if s.State() != StateIdle {
+		t.Errorf("estado = %v, quería idle", s.State())
+	}
 }

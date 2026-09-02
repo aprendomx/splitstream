@@ -9,6 +9,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/store"
 )
 
 func TestGenerateMasterKeyIsDecodableAnd32Bytes(t *testing.T) {
@@ -61,15 +64,16 @@ func (w *syncWriter) String() string {
 	return w.buf.String()
 }
 
-// El arranque no puede escribir la clave de ingesta, ni siquiera enmascarada: el spec §8
-// no admite matices, y la máscara con los últimos 4 es para la interfaz. `ingest_app` sí.
+// El arranque no puede escribir la clave de ingesta, ni en claro ni enmascarada: el spec
+// §8 no admite matices, y la máscara con los últimos 4 es para la interfaz. `ingest_app` sí.
 func TestRunStartupLogNeverContainsTheIngestKey(t *testing.T) {
-	key, err := generateMasterKey()
+	master, err := generateMasterKey()
 	if err != nil {
 		t.Fatalf("generateMasterKey: %v", err)
 	}
-	t.Setenv("SPLITSTREAM_MASTER_KEY", key)
-	t.Setenv("SPLITSTREAM_DB_PATH", filepath.Join(t.TempDir(), "arranque.db"))
+	dbPath := filepath.Join(t.TempDir(), "arranque.db")
+	t.Setenv("SPLITSTREAM_MASTER_KEY", master)
+	t.Setenv("SPLITSTREAM_DB_PATH", dbPath)
 	t.Setenv("SPLITSTREAM_RTMP_ADDR", "127.0.0.1:0")
 	t.Setenv("SPLITSTREAM_HTTP_ADDR", "127.0.0.1:0")
 
@@ -87,6 +91,22 @@ func TestRunStartupLogNeverContainsTheIngestKey(t *testing.T) {
 	if !strings.Contains(logged, "splitstream arrancado") {
 		t.Fatalf("no se llegó a la línea de arranque: %s", logged)
 	}
+
+	// El valor real de la clave: la genera el bootstrap, así que se lee de la base
+	// DESPUÉS de arrancar y se exige que esa cadena concreta no esté en la salida. Sin
+	// esto el test solo vigilaba el nombre del atributo, y no habría visto la clave
+	// volcada bajo otro nombre.
+	ingestKey := revealIngestKey(t, dbPath, master)
+	if len(ingestKey.Reveal()) < 8 {
+		t.Fatalf("la clave de ingesta leída es sospechosamente corta (%d)", len(ingestKey.Reveal()))
+	}
+	if strings.Contains(logged, ingestKey.Reveal()) {
+		t.Errorf("el arranque volcó la clave de ingesta en claro: %s", logged)
+	}
+	if strings.Contains(logged, ingestKey.Mask()) {
+		t.Errorf("el arranque volcó la clave de ingesta enmascarada: %s", logged)
+	}
+
 	if strings.Contains(logged, "ingest_key") {
 		t.Errorf("el arranque loguea la clave de ingesta: %s", logged)
 	}
@@ -96,4 +116,34 @@ func TestRunStartupLogNeverContainsTheIngestKey(t *testing.T) {
 	if !strings.Contains(logged, "ingest_app") {
 		t.Errorf("el arranque debería seguir diciendo la app de ingesta: %s", logged)
 	}
+}
+
+// revealIngestKey abre la base que dejó run() y descifra la clave de ingesta.
+func revealIngestKey(t *testing.T, dbPath, masterB64 string) crypto.Secret {
+	t.Helper()
+
+	raw, err := base64.StdEncoding.DecodeString(masterB64)
+	if err != nil {
+		t.Fatalf("decodificar la master key: %v", err)
+	}
+	var master [32]byte
+	copy(master[:], raw)
+
+	cipher, err := crypto.NewCipher(master)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+
+	ctx := context.Background()
+	db, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer db.Close()
+
+	key, err := db.RevealIngestKey(ctx, cipher)
+	if err != nil {
+		t.Fatalf("RevealIngestKey: %v", err)
+	}
+	return key
 }
