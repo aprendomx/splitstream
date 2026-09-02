@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/aprendomx/splitstream/internal/flv"
 )
 
 // EngineStore es lo que el motor necesita de la persistencia. Es una interfaz para que
@@ -58,6 +60,11 @@ type Engine struct {
 	validate  func(app, key string) error
 	newSinks  SinkProvider
 	sessionID int64
+
+	sessionWidth   int
+	sessionHeight  int
+	sessionBytes   uint64
+	sessionStarted time.Time
 }
 
 // NewEngine construye el motor. Hasta que se llame a SetValidator, rechaza a todo
@@ -151,6 +158,9 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 
 	e.mu.Lock()
 	e.sessionID = id
+	e.sessionWidth, e.sessionHeight = 0, 0
+	e.sessionBytes = 0
+	e.sessionStarted = time.Now()
 	e.mu.Unlock()
 
 	// Los destinos se conectan al empezar la sesión, no al arrancar el proceso.
@@ -170,8 +180,35 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 	return nil
 }
 
-// OnMessage reparte un mensaje de media a los destinos.
-func (e *Engine) OnMessage(msg *Message) { e.hub.Publish(msg) }
+// OnMessage reparte un mensaje a los destinos y acumula lo que la sesión necesita medir.
+func (e *Engine) OnMessage(msg *Message) {
+	e.observe(msg)
+	e.hub.Publish(msg)
+}
+
+// observe acumula el tamaño para el bitrate medido y saca la resolución del primer AVC
+// sequence header. Se prefiere el SPS al onMetaData porque este es declarativo y puede
+// mentir (spec §3.8).
+func (e *Engine) observe(msg *Message) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.sessionID == 0 {
+		return
+	}
+	e.sessionBytes += uint64(len(msg.Payload))
+
+	if msg.Kind != KindVideo || !msg.IsSeqHeader || e.sessionWidth != 0 {
+		return
+	}
+	w, h, err := flv.ParseResolution(msg.Payload)
+	if err != nil {
+		e.log.Warn("no se pudo leer la resolución del sequence header", "err", err)
+		return
+	}
+	e.sessionWidth, e.sessionHeight = w, h
+	e.log.Info("resolución detectada", "ancho", w, "alto", h)
+}
 
 // OnPublishEnd cierra la sesión y olvida el preámbulo: los sequence headers de esta
 // transmisión no valen para la siguiente.
@@ -183,15 +220,23 @@ func (e *Engine) OnMessage(msg *Message) { e.hub.Publish(msg) }
 func (e *Engine) OnPublishEnd() {
 	e.mu.Lock()
 	id := e.sessionID
+	width, height := e.sessionWidth, e.sessionHeight
+	bytes := e.sessionBytes
+	started := e.sessionStarted
 	e.mu.Unlock()
 
 	if id == 0 {
 		return
 	}
 
+	// Bitrate medio real de la sesión, no el declarado.
+	bitrate := 0
+	if elapsed := time.Since(started); elapsed > 0 {
+		bitrate = int(float64(bytes*8) / elapsed.Seconds())
+	}
+
 	ctx := context.Background()
-	// La resolución y el bitrate medidos llegan en la fase 3; aquí se cierra con ceros.
-	if err := e.store.FinishSession(ctx, id, 0, 0, 0); err != nil {
+	if err := e.store.FinishSession(ctx, id, width, height, bitrate); err != nil {
 		e.log.Error("no se pudo cerrar la sesión", "sesion_id", id, "err", err)
 	}
 	e.logEvent(ctx, &id, nil, "info", "publisher_disconnected", "el publisher se desconectó")
@@ -217,3 +262,6 @@ func (e *Engine) logEvent(ctx context.Context, sessionID, destID *int64, level, 
 		e.log.Error("no se pudo registrar el evento", "kind", kind, "err", err)
 	}
 }
+
+// Snapshot devuelve las métricas de todos los destinos. La fase 4 la sirve por WebSocket.
+func (e *Engine) Snapshot() map[int64]Metrics { return e.hub.Snapshot() }

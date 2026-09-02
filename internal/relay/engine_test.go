@@ -16,6 +16,10 @@ type fakeStore struct {
 	ended   int
 	events  []EngineEvent
 	nextID  int64
+
+	lastWidth   int
+	lastHeight  int
+	lastBitrate int
 }
 
 func (f *fakeStore) StartSession(ctx context.Context) (int64, error) {
@@ -30,6 +34,7 @@ func (f *fakeStore) FinishSession(ctx context.Context, id int64, w, h, b int) er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ended++
+	f.lastWidth, f.lastHeight, f.lastBitrate = w, h, b
 	return nil
 }
 
@@ -294,4 +299,65 @@ func TestEngineRejectsSecondPublisher(t *testing.T) {
 		t.Errorf("tras cerrar la sesión debería aceptarse otro publisher: %v", err)
 	}
 	e.OnPublishEnd()
+}
+
+// La resolución sale del SPS del AVC sequence header, no del onMetaData (spec §3.8).
+func TestEngineRecordsResolutionFromSPS(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	st := &fakeStore{}
+	e := NewEngine(EngineConfig{Hub: h, Store: st, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+
+	// AVC sequence header real de 640x360.
+	seq := mustAVCSeqHeader()
+	e.OnMessage(&Message{Kind: KindVideo, Payload: seq, IsSeqHeader: true, IsKeyframe: true})
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 0, Payload: make([]byte, 1000), IsKeyframe: true})
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 1000, Payload: make([]byte, 1000)})
+	e.OnPublishEnd()
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.lastWidth != 640 || st.lastHeight != 360 {
+		t.Errorf("resolución = %dx%d, quería 640x360", st.lastWidth, st.lastHeight)
+	}
+	if st.lastBitrate <= 0 {
+		t.Errorf("bitrate = %d, quería un valor medido positivo", st.lastBitrate)
+	}
+}
+
+// Sin sequence header no se inventa una resolución: se cierra con ceros.
+func TestEngineRecordsZeroResolutionWithoutSPS(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	st := &fakeStore{}
+	e := NewEngine(EngineConfig{Hub: h, Store: st, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 0, Payload: []byte{0x17, 0x01}, IsKeyframe: true})
+	e.OnPublishEnd()
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.lastWidth != 0 || st.lastHeight != 0 {
+		t.Errorf("resolución = %dx%d, quería 0x0 sin sequence header", st.lastWidth, st.lastHeight)
+	}
+}
+
+// mustAVCSeqHeader devuelve un AVC sequence header real de 640x360.
+func mustAVCSeqHeader() []byte {
+	sps := []byte{
+		0x67, 0x64, 0x00, 0x1e, 0xac, 0xd9, 0x40, 0xa0, 0x2f, 0xf9, 0x61, 0x00,
+		0x00, 0x03, 0x00, 0x01, 0x00, 0x00, 0x03, 0x00, 0x3c, 0x8f, 0x16, 0x2d, 0x96,
+	}
+	out := []byte{0x17, 0x00, 0, 0, 0, 0x01, sps[1], sps[2], sps[3], 0xFF, 0xE1}
+	out = append(out, byte(len(sps)>>8), byte(len(sps)))
+	return append(out, sps...)
 }
