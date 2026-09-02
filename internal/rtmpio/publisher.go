@@ -46,7 +46,7 @@ const connectTimeout = 15 * time.Second
 type target struct {
 	scheme string // exactamente "rtmp" o "rtmps": go-rtmp compara con estos literales
 	addr   string // host:puerto, con el puerto por defecto ya resuelto
-	app    string // la app RTMP, sin barras al principio ni al final
+	app    string // la app RTMP: SOLO el primer segmento del path, sin barras
 }
 
 // parseTarget descompone una URL de destino.
@@ -54,10 +54,16 @@ type target struct {
 // El esquema decide si se usa Dial o TLSDial, y go-rtmp compara contra los literales
 // "rtmp" y "rtmps" respectivamente: pasar el equivocado devuelve "Unknown protocol"
 // (spec §16.1).
+//
+// NINGÚN error de aquí reproduce la URL. Varias plataformas piden pegar la clave dentro
+// de la URL, así que la URL entera —y el path, y la query— son material secreto: el error
+// dice qué está mal, y como mucho con el esquema y el host por contexto (spec §8).
 func parseTarget(rawURL string) (target, error) {
+	// El error de url.Parse es un *url.Error que incluye la URL entera, así que no se
+	// envuelve ni se reproduce: solo se dice que no se pudo interpretar.
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return target{}, fmt.Errorf("%w: %s", ErrUnsupportedScheme, rawURL)
+		return target{}, fmt.Errorf("%w: la URL del destino está mal formada", ErrUnsupportedScheme)
 	}
 
 	var defaultPort string
@@ -79,9 +85,12 @@ func parseTarget(rawURL string) (target, error) {
 		port = defaultPort
 	}
 
-	app := strings.Trim(u.Path, "/")
+	// La app RTMP es el PRIMER segmento del path y nada más: lo que venga detrás es el
+	// nombre del stream, que en varias plataformas ES la clave. Quedarse con el path
+	// completo la metía en `destino_app` y la escupía en claro en cada línea de log.
+	app, _, _ := strings.Cut(strings.Trim(u.Path, "/"), "/")
 	if app == "" {
-		return target{}, errors.New("la URL del destino no tiene app (la parte tras el host)")
+		return target{}, errors.New("la URL del destino no tiene app (el primer segmento tras el host)")
 	}
 
 	return target{scheme: u.Scheme, addr: net.JoinHostPort(host, port), app: app}, nil
@@ -129,9 +138,13 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 		tgt:       tgt,
 		key:       cfg.StreamKey,
 		chunkSize: size,
-		// Se loguean host y app por separado, no la URL original: si el usuario pegó la
-		// clave dentro de la URL, la URL entera en los logs la filtraría.
-		log: log.With("destino_addr", tgt.addr, "destino_app", tgt.app, "clave", cfg.StreamKey),
+		// Se loguean el host y la app —solo el primer segmento del path—, nunca la URL
+		// original ni el path completo: si el usuario pegó la clave dentro de la URL,
+		// cualquiera de los dos la filtraría. La clave tampoco va enmascarada: el spec §8
+		// dice que jamás aparece en los logs, y los últimos 4 caracteres son para la
+		// interfaz, que tiene otro control de acceso. Para identificar el destino en los
+		// logs está su ID numérico, que ya lleva el logger del sink.
+		log: log.With("destino_addr", tgt.addr, "destino_app", tgt.app),
 	}, nil
 }
 

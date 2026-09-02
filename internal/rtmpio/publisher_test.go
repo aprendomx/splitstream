@@ -1,9 +1,12 @@
 package rtmpio
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,13 +57,30 @@ func TestParseTargetRTMPSDefaultPort(t *testing.T) {
 	}
 }
 
-func TestParseTargetNestedApp(t *testing.T) {
+// La app es el PRIMER segmento del path. Lo que venga detrás es el nombre del stream y,
+// en varias plataformas, la clave: no forma parte de la app y no se guarda.
+func TestParseTargetAppIsFirstPathSegmentOnly(t *testing.T) {
 	got, err := parseTarget("rtmp://example.com/live/sub")
 	if err != nil {
 		t.Fatalf("parseTarget: %v", err)
 	}
-	if got.app != "live/sub" {
-		t.Errorf("app = %q, quería \"live/sub\"", got.app)
+	if got.app != "live" {
+		t.Errorf("app = %q, quería \"live\"", got.app)
+	}
+}
+
+// El caso real que filtraba: una clave pegada al final de la URL del destino.
+func TestParseTargetDropsStreamKeyPastedInPath(t *testing.T) {
+	const key = "live_987654_SUPERSECRETSTREAMKEY"
+	got, err := parseTarget("rtmp://a.rtmp.youtube.com/live2/" + key)
+	if err != nil {
+		t.Fatalf("parseTarget: %v", err)
+	}
+	if got.app != "live2" {
+		t.Errorf("app = %q, quería \"live2\": la app no puede arrastrar la clave", got.app)
+	}
+	if strings.Contains(got.app, "SUPERSECRETSTREAMKEY") {
+		t.Errorf("la app lleva la clave dentro: %q", got.app)
 	}
 }
 
@@ -281,5 +301,72 @@ func TestCloseSendsFCUnpublishWhenConnected(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close se colgó")
+	}
+}
+
+// El error de parseTarget no puede reproducir la URL: la clave suele ir pegada dentro.
+// Se comprueba en el texto del error y en la línea de log que main.go escribe con él.
+func TestParseTargetErrorNeverLeaksURL(t *testing.T) {
+	const key = "SUPERSECRETSTREAMKEY"
+	malformed := []string{
+		"rtmp://exa mple.com/live/" + key,   // carácter inválido en el host
+		"rtmp://%zz/live/" + key,            // escape inválido
+		"rtmp://host:puerto/live/" + key,    // puerto inválido
+		"://host/live/" + key,               // sin esquema
+		"rtmp://[::1/live/" + key,           // corchete sin cerrar
+		"http://example.com/live/" + key,    // esquema no soportado
+		"live2/live_" + key,                 // sin esquema ni host
+		"rtmp://example.com/?stream=" + key, // la clave en la query, sin app
+	}
+
+	for _, raw := range malformed {
+		_, err := parseTarget(raw)
+		if err == nil {
+			t.Errorf("parseTarget(<url malformada>) = nil, quería error")
+			continue
+		}
+		if strings.Contains(err.Error(), key) {
+			t.Errorf("el error filtró la clave: %s", err)
+		}
+		// Y tampoco puede filtrarla al escribirse en el log, que es lo que hace
+		// cmd/splitstream/main.go con el error de NewPublisher.
+		var buf bytes.Buffer
+		slog.New(slog.NewTextHandler(&buf, nil)).Error("destino mal configurado", "err", err)
+		if strings.Contains(buf.String(), key) {
+			t.Errorf("la línea de log filtró la clave: %s", buf.String())
+		}
+	}
+}
+
+// Ninguna línea del publisher lleva la clave, ni en claro ni enmascarada (spec §8). El
+// caso malo es el destino con la clave pegada en el path, que acababa en `destino_app`.
+func TestPublisherLogsNeverContainTheKey(t *testing.T) {
+	const key = "live_987654_SUPERSECRETSTREAMKEY"
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	p, err := NewPublisher(PublisherConfig{
+		URL:       "rtmp://a.rtmp.youtube.com/live2/" + key,
+		StreamKey: crypto.Secret(key),
+		Logger:    logger,
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	defer p.Close()
+
+	// Los atributos fijos del publisher salen en todas sus líneas: basta con provocar una.
+	p.log.Info("publicando en el destino", "app", p.tgt.app)
+
+	out := buf.String()
+	if strings.Contains(out, "SUPERSECRETSTREAMKEY") {
+		t.Errorf("el log filtró la clave: %s", out)
+	}
+	if strings.Contains(out, crypto.Secret(key).Mask()) || strings.Contains(out, crypto.Secret(key).Last4()) {
+		t.Errorf("el log lleva la clave enmascarada, y el spec §8 no admite matices: %s", out)
+	}
+	if !strings.Contains(out, "destino_app=live2") {
+		t.Errorf("el log debería identificar la app (el primer segmento): %s", out)
 	}
 }
