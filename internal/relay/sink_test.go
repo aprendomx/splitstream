@@ -123,18 +123,23 @@ func TestSinkDropsAudioOlderThanBase(t *testing.T) {
 	}
 }
 
+// Fase 3: un Connect fallido ya no deja el sink en StateError para siempre, sino que pasa
+// a StateReconnecting y reintenta con backoff (spec §6.5). Adaptado desde la fase 2, donde
+// este test esperaba StateError como estado final.
 func TestSinkConnectFailureSetsErrorState(t *testing.T) {
 	pub := &fakePublisher{connectErr: errFakeWrite}
 	s := NewSink(SinkConfig{ID: 1, Name: "X", Pub: pub})
 	s.Start(context.Background(), preambleWith())
 	defer s.Stop()
 
-	waitFor(t, func() bool { return s.State() == StateError }, "estado error")
+	waitFor(t, func() bool { return s.State() == StateReconnecting }, "estado reconnecting")
 	if s.LastError() == nil {
 		t.Error("LastError = nil tras fallar Connect")
 	}
 }
 
+// Fase 3: igual que arriba pero para un fallo de escritura sobre una conexión ya viva: la
+// conexión se pierde y el sink pasa a reconectar, no se queda en StateError.
 func TestSinkWriteFailureSetsErrorState(t *testing.T) {
 	pub := &fakePublisher{writeErr: errFakeWrite}
 	s := NewSink(SinkConfig{ID: 1, Name: "X", Pub: pub})
@@ -143,14 +148,17 @@ func TestSinkWriteFailureSetsErrorState(t *testing.T) {
 	waitFor(t, func() bool { return s.State() == StateLive }, "estado live")
 
 	s.Enqueue(videoKey(1000))
-	waitFor(t, func() bool { return s.State() == StateError }, "estado error tras fallar el write")
+	waitFor(t, func() bool { return s.State() == StateReconnecting }, "estado reconnecting tras fallar el write")
+	if s.LastError() == nil {
+		t.Error("LastError = nil tras fallar el write")
+	}
 }
 
 // Un sink lento no debe bloquear a quien encola: se descarta y se cuenta.
 func TestSinkEnqueueNeverBlocks(t *testing.T) {
 	block := make(chan struct{})
 	pub := &fakePublisher{blockWrites: block}
-	s := NewSink(SinkConfig{ID: 1, Name: "X", Pub: pub, Queue: 4})
+	s := NewSink(SinkConfig{ID: 1, Name: "X", Pub: pub, Queue: queueConfig{MaxItems: 4}})
 	s.Start(context.Background(), preambleWith())
 	defer func() { close(block); s.Stop() }()
 	waitFor(t, func() bool { return s.State() == StateLive }, "estado live")
@@ -191,20 +199,26 @@ func TestSinkStopIsIdempotentAndClosesPublisher(t *testing.T) {
 	}
 }
 
-// Un Connect fallido no puede dejar la goroutine viva esperando un Stop que quizá nunca
-// llegue, ni la conexión sin cerrar.
-func TestSinkConnectFailureReleasesGoroutine(t *testing.T) {
+// Fase 3: TestSinkConnectFailureReleasesGoroutine y TestSinkWriteFailureReleasesGoroutine
+// de la fase 2 se eliminan aquí. Su premisa era que un Connect o un Write fallidos dejaban
+// la goroutine terminando sola, sin Stop, para no dejarla viva para siempre. Eso ya no es
+// cierto por diseño (decisión 3 de esta tarea): el sink reintenta indefinidamente en vez de
+// rendirse (spec §6.5), así que la goroutine sigue viva hasta que alguien llama a Stop.
+// La propiedad que a esos tests les interesaba de verdad —que la goroutine no queda huérfana
+// para siempre— la cubre ahora TestSinkStopInterruptsBackoff en
+// sink_reconnect_test.go: Stop corta la espera del backoff en vez de esperar a que venza.
+
+// Un sink parado cierra el Publisher, tanto si estaba conectado como si fallaba en bucle.
+func TestSinkStopClosesPublisherAfterConnectFailure(t *testing.T) {
 	pub := &fakePublisher{connectErr: errFakeWrite}
 	s := NewSink(SinkConfig{ID: 1, Name: "X", Pub: pub})
 	s.Start(context.Background(), preambleWith())
 
-	waitFor(t, func() bool { return s.State() == StateError }, "estado error")
+	waitFor(t, func() bool { return s.State() == StateReconnecting }, "estado reconnecting")
 
-	// Sin llamar a Stop: la goroutine debe haber terminado sola.
-	select {
-	case <-s.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("la goroutine sigue viva tras fallar Connect y nadie paró el sink")
+	s.Stop()
+	if s.LastError() == nil {
+		t.Error("LastError se perdió")
 	}
 
 	pub.mu.Lock()
@@ -213,29 +227,55 @@ func TestSinkConnectFailureReleasesGoroutine(t *testing.T) {
 	if closes == 0 {
 		t.Error("el Publisher debe cerrarse aunque Connect falle")
 	}
+}
 
-	// Stop después de que la goroutine salió no debe colgarse ni borrar el error.
-	s.Stop()
-	if s.State() != StateError {
-		t.Errorf("State = %v, quería que se conservara el error", s.State())
+// Un destino lento descarta GOPs y se marca degradado, sin bloquear a quien encola.
+func TestSinkDegradesUnderBackpressure(t *testing.T) {
+	block := make(chan struct{})
+	pub := &fakePublisher{blockWrites: block}
+
+	s := NewSink(SinkConfig{
+		ID: 1, Name: "X", Pub: pub,
+		Queue: queueConfig{MaxBytes: 4096, MaxSpan: 1_000_000},
+	})
+	s.Start(context.Background(), preambleWith())
+	defer func() { close(block); s.Stop() }()
+	waitFor(t, func() bool { return s.State() == StateLive }, "estado live")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 400; i++ {
+			if i%10 == 0 {
+				s.Enqueue(&Message{Kind: KindVideo, Timestamp: uint32(i * 33),
+					Payload: make([]byte, 256), IsKeyframe: true})
+			} else {
+				s.Enqueue(&Message{Kind: KindVideo, Timestamp: uint32(i * 33),
+					Payload: make([]byte, 256)})
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Enqueue se bloqueó bajo presión")
 	}
-	if s.LastError() == nil {
-		t.Error("LastError se perdió")
+
+	waitFor(t, func() bool { return s.Dropped() > 0 }, "hubo descartes")
+	waitFor(t, func() bool { return s.Metrics().Degraded }, "se marcó degradado")
+	if s.State() != StateLive {
+		t.Errorf("State = %v: degraded es un atributo, no un estado (spec §3.7)", s.State())
 	}
 }
 
-// Lo mismo para el fallo de escritura.
-func TestSinkWriteFailureReleasesGoroutine(t *testing.T) {
-	pub := &fakePublisher{writeErr: errFakeWrite}
+func TestSinkMetricsCountBytes(t *testing.T) {
+	pub := &fakePublisher{}
 	s := NewSink(SinkConfig{ID: 1, Name: "X", Pub: pub})
 	s.Start(context.Background(), preambleWith())
+	defer s.Stop()
 	waitFor(t, func() bool { return s.State() == StateLive }, "estado live")
 
 	s.Enqueue(videoKey(1000))
-	select {
-	case <-s.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("la goroutine sigue viva tras fallar una escritura")
-	}
-	s.Stop()
+	waitFor(t, func() bool { return s.Metrics().BytesSent > 0 }, "se contaron bytes")
 }

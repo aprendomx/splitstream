@@ -2,28 +2,23 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-// DefaultQueueSize es la capacidad por defecto de la cola de un sink.
-//
-// La fase 3 sustituye esta cola por un deque acotado por bytes y duración, con descarte
-// por GOP completo (spec §3.3 y §3.4). Mientras tanto, un canal con descarte simple basta
-// para el objetivo de la fase 2: un destino de punta a punta.
-const DefaultQueueSize = 512
-
-// State es el estado de un destino. `degraded` es un atributo aparte y llega en la fase 3
-// (spec §3.7); aquí solo están los estados de esta fase.
+// State es el estado de un destino. `degraded` va aparte, en Metrics, porque estando
+// degradado la conexión sigue arriba (spec §3.7).
 type State uint8
 
 const (
 	StateIdle State = iota
 	StateConnecting
 	StateLive
-	StateError
 	StateReconnecting
+	StateError
 )
 
 func (s State) String() string {
@@ -34,76 +29,111 @@ func (s State) String() string {
 		return "connecting"
 	case StateLive:
 		return "live"
-	case StateError:
-		return "error"
 	case StateReconnecting:
 		return "reconnecting"
+	case StateError:
+		return "error"
 	default:
 		return "desconocido"
 	}
 }
 
+// suspectThreshold es el número de reconexiones seguidas sin haber llegado a transmitir
+// tras las que se registra un evento de sospecha.
+//
+// El spec §6.5 pide reintentos indefinidos, así que NO se deja de reintentar. Pero
+// `Stream.Publish` de go-rtmp no espera el onStatus, así que una clave rechazada por la
+// plataforma parece un éxito y solo falla en la primera escritura: sin esto, una clave
+// mal pegada produce un bucle silencioso para siempre.
+const suspectThreshold = 5
+
 // SinkConfig son los datos para construir un sink.
 type SinkConfig struct {
-	ID     int64
-	Name   string
-	Pub    Publisher
-	Queue  int          // capacidad de la cola; 0 usa DefaultQueueSize
-	Logger *slog.Logger // nil usa slog.Default()
+	ID   int64
+	Name string
+	// Pub es el publisher inicial. Si NewPub es nil, se reutiliza en cada reconexión.
+	Pub Publisher
+	// NewPub construye un publisher nuevo para cada intento de conexión. Es lo correcto
+	// en producción: un Publisher cerrado no se puede reabrir.
+	NewPub  func() (Publisher, error)
+	Queue   queueConfig
+	Logger  *slog.Logger
+	Now     func() time.Time
+	Seed    int64
+	OnEvent func(EngineEvent)
 }
 
-// Sink atiende a un destino desde su propia goroutine. Posee su Publisher, su timebase y
-// su estado; nadie más los toca.
+// Sink atiende a un destino desde su propia goroutine: conecta, reenvía, y reconecta con
+// backoff cuando se cae. Posee su publisher, su cola, su timebase y sus métricas.
 type Sink struct {
-	id     int64
-	name   string
-	pub    Publisher
-	log    *slog.Logger
-	ch     chan *Message
-	quit   chan struct{}
-	done   chan struct{}
-	once   sync.Once
+	id      int64
+	name    string
+	newPub  func() (Publisher, error)
+	log     *slog.Logger
+	q       *queue
+	met     *metrics
+	bo      *backoff
+	onEvent func(EngineEvent)
+
+	quit chan struct{}
+	done chan struct{}
+	once sync.Once
+
 	state  atomic.Uint32
-	drops  atomic.Uint64
 	errMu  sync.Mutex
 	lastEr error
 }
 
-// NewSink construye un sink parado. Hay que llamar a Start para que atienda.
+// NewSink construye un sink parado.
 func NewSink(cfg SinkConfig) *Sink {
-	size := cfg.Queue
-	if size <= 0 {
-		size = DefaultQueueSize
-	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
 	}
+	seed := cfg.Seed
+	if seed == 0 {
+		seed = cfg.ID
+	}
+
+	newPub := cfg.NewPub
+	if newPub == nil {
+		pub := cfg.Pub
+		newPub = func() (Publisher, error) {
+			if pub == nil {
+				return nil, errors.New("el sink no tiene publisher")
+			}
+			return pub, nil
+		}
+	}
+
 	return &Sink{
-		id:   cfg.ID,
-		name: cfg.Name,
-		pub:  cfg.Pub,
-		log:  log.With("destino_id", cfg.ID, "destino", cfg.Name),
-		ch:   make(chan *Message, size),
-		quit: make(chan struct{}),
-		done: make(chan struct{}),
+		id:      cfg.ID,
+		name:    cfg.Name,
+		newPub:  newPub,
+		log:     log.With("destino_id", cfg.ID, "destino", cfg.Name),
+		q:       newQueue(cfg.Queue),
+		met:     newMetrics(cfg.Now),
+		bo:      newBackoff(seed),
+		onEvent: cfg.OnEvent,
+		quit:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 }
 
-// ID devuelve el identificador del destino.
-func (s *Sink) ID() int64 { return s.id }
+func (s *Sink) ID() int64       { return s.id }
+func (s *Sink) State() State    { return State(s.state.Load()) }
+func (s *Sink) Dropped() uint64 { return s.q.dropped() }
 
-// State devuelve el estado actual.
-func (s *Sink) State() State { return State(s.state.Load()) }
-
-// Dropped devuelve cuántos mensajes se han descartado por cola llena.
-func (s *Sink) Dropped() uint64 { return s.drops.Load() }
-
-// LastError devuelve el último error observado, o nil.
 func (s *Sink) LastError() error {
 	s.errMu.Lock()
 	defer s.errMu.Unlock()
 	return s.lastEr
+}
+
+// Metrics devuelve la instantánea del destino.
+func (s *Sink) Metrics() Metrics {
+	msgs, bytes, _ := s.q.stats()
+	return s.met.snapshot(s.State(), s.q.dropped(), msgs, bytes)
 }
 
 func (s *Sink) setState(st State) { s.state.Store(uint32(st)) }
@@ -112,50 +142,48 @@ func (s *Sink) fail(err error) {
 	s.errMu.Lock()
 	s.lastEr = err
 	s.errMu.Unlock()
-	s.setState(StateError)
-	s.log.Error("destino en error", "err", err)
+	s.met.setError(err)
+	s.log.Warn("destino caído", "err", err)
 }
 
-// Start lanza la goroutine del sink. pre es el preámbulo de la sesión: el sink lo lee
-// justo antes de mandar su primer keyframe.
+func (s *Sink) emit(level, kind, msg string) {
+	if s.onEvent == nil {
+		return
+	}
+	id := s.id
+	s.onEvent(EngineEvent{DestinationID: &id, Level: level, Kind: kind, Message: msg})
+}
+
+// Start lanza la goroutine del sink.
 func (s *Sink) Start(ctx context.Context, pre *Preamble) {
 	go s.run(ctx, pre)
 }
 
-// Enqueue entrega un mensaje al sink sin bloquear nunca. Si la cola está llena, el
-// mensaje se descarta y se cuenta: un destino lento no puede frenar al publisher ni a
-// sus hermanos (spec §6.2).
+// Enqueue entrega un mensaje. Nunca bloquea: la cola aplica su política de descarte.
+//
+// La marca de degradado va aquí y no en el bucle de envío porque el caso que interesa es
+// justo aquel en el que el envío está atascado: si se marcara ahí, un destino bloqueado
+// escribiendo nunca llegaría a marcarse.
 func (s *Sink) Enqueue(msg *Message) {
-	select {
-	case s.ch <- msg:
-	default:
-		s.drops.Add(1)
+	s.q.push(msg)
+	if s.q.droppingVideo() {
+		s.met.markDegraded()
 	}
 }
 
 // Stop detiene el sink y espera a que su goroutine termine. Es idempotente.
 func (s *Sink) Stop() {
-	s.once.Do(func() { close(s.quit) })
+	s.once.Do(func() {
+		close(s.quit)
+		s.q.close()
+	})
 	<-s.done
 }
 
+// run es el bucle de vida del destino: conectar, transmitir, y reconectar al caer.
 func (s *Sink) run(ctx context.Context, pre *Preamble) {
 	defer close(s.done)
-	defer s.pub.Close()
 
-	s.setState(StateConnecting)
-	if err := s.pub.Connect(ctx); err != nil {
-		s.fail(err)
-		// Se sale de inmediato en vez de esperar a Stop(). Esperar en <-s.quit dejaba
-		// la goroutine viva para siempre si nadie paraba el sink, y con ella la conexión
-		// sin cerrar. El estado se queda en error, que es lo que el consumidor necesita
-		// saber; la fase 3 reconectará desde aquí.
-		return
-	}
-	s.setState(StateLive)
-	s.log.Info("destino conectado")
-
-	var tb timebase
 	for {
 		select {
 		case <-s.quit:
@@ -164,66 +192,170 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 		case <-ctx.Done():
 			s.setState(StateIdle)
 			return
-		case msg := <-s.ch:
-			if err := s.handle(msg, pre, &tb); err != nil {
-				s.fail(err)
-				// Igual que arriba: salir libera la goroutine y cierra el Publisher.
-				// La reconexión llega en la fase 3.
-				return
-			}
+		default:
+		}
+
+		if s.bo.attempts() == 0 {
+			s.setState(StateConnecting)
+		} else {
+			s.setState(StateReconnecting)
+		}
+
+		transmitted, err := s.session(ctx, pre)
+		if err == nil {
+			// Solo se sale sin error al pararse.
+			s.setState(StateIdle)
+			return
+		}
+
+		s.fail(err)
+		s.met.disconnected()
+
+		if transmitted {
+			// La conexión llegó a transmitir, así que la configuración es buena: se
+			// reinicia el backoff para que una caída puntual reconecte rápido.
+			s.bo.reset()
+			s.emit("warn", "destination_disconnected", "el destino se desconectó: "+err.Error())
+		} else if s.bo.attempts() == suspectThreshold {
+			// Nunca llegó a transmitir en varios intentos seguidos. Se sigue
+			// reintentando (spec §6.5), pero se deja constancia: lo más probable es una
+			// clave incorrecta, y go-rtmp no la reporta como tal.
+			s.emit("error", "destination_suspect",
+				"el destino falla siempre antes de transmitir; revisa la URL y la clave")
+			s.log.Error("el destino nunca llega a transmitir: revisa la URL y la clave")
+		}
+
+		wait := s.bo.next()
+		s.setState(StateReconnecting)
+		s.log.Info("reintentando el destino", "espera", wait, "intento", s.bo.attempts())
+
+		select {
+		case <-s.quit:
+			s.setState(StateIdle)
+			return
+		case <-ctx.Done():
+			s.setState(StateIdle)
+			return
+		case <-time.After(wait):
 		}
 	}
 }
 
-// handle procesa un mensaje. Antes del primer keyframe descarta todo; en el keyframe
-// manda el preámbulo y ancla el timebase; después traduce y reenvía.
-func (s *Sink) handle(msg *Message, pre *Preamble, tb *timebase) error {
-	if !tb.started() {
-		// Solo un keyframe de video real arranca el envío. Un sequence header trae el
-		// bit de keyframe puesto pero no es un frame decodificable.
-		if msg.Kind != KindVideo || !msg.IsKeyframe || msg.IsSeqHeader {
-			return nil
+// session abre una conexión y transmite hasta que falla o se para el sink.
+//
+// Devuelve transmitted=true si llegó a escribir media, y err=nil solo si el sink se paró
+// de forma ordenada.
+func (s *Sink) session(ctx context.Context, pre *Preamble) (bool, error) {
+	pub, err := s.newPub()
+	if err != nil {
+		return false, err
+	}
+	defer pub.Close()
+
+	if err := pub.Connect(ctx); err != nil {
+		return false, err
+	}
+
+	s.met.connected()
+	s.met.setError(nil)
+	s.setState(StateLive)
+	// El backoff NO se reinicia aquí, sino en run() y solo si la conexión llegó a
+	// transmitir. Reiniciarlo al conectar anularía la detección de clave rechazada: con
+	// una clave mala, `Connect` tiene éxito y el fallo llega en la primera escritura, así
+	// que el contador de intentos volvería a cero cada vez y nunca alcanzaría el umbral.
+	s.log.Info("destino conectado")
+	s.emit("info", "destination_connected", "el destino conectó")
+
+	var (
+		tb          timebase
+		transmitted bool
+	)
+
+	for {
+		select {
+		case <-s.quit:
+			return transmitted, nil
+		case <-ctx.Done():
+			return transmitted, nil
+		default:
 		}
-		if err := s.sendPreamble(pre); err != nil {
-			return err
+
+		msg, ok := s.q.pop(ctx)
+		if !ok {
+			// La cola se cerró o venció el contexto: parada ordenada.
+			return transmitted, nil
+		}
+
+		sent, err := s.deliver(pub, msg, pre, &tb)
+		if err != nil {
+			// Un fallo de escritura es una conexión perdida, no algo que reintentar
+			// sobre la misma conexión: el Write de go-rtmp ya trae su propio timeout de
+			// 5 s (spec §16.2).
+			return transmitted, err
+		}
+		if sent {
+			transmitted = true
+		}
+	}
+}
+
+// deliver procesa un mensaje. Antes del primer keyframe descarta; en el keyframe manda el
+// preámbulo y ancla el timebase; después traduce y reenvía. Devuelve si escribió algo.
+func (s *Sink) deliver(pub Publisher, msg *Message, pre *Preamble, tb *timebase) (bool, error) {
+	if !tb.started() {
+		// Solo un keyframe real arranca. El sequence header trae el bit de keyframe
+		// puesto pero no es un frame decodificable.
+		if msg.Kind != KindVideo || !msg.IsKeyframe || msg.IsSeqHeader {
+			return false, nil
+		}
+		if err := s.sendPreamble(pub, pre); err != nil {
+			return false, err
 		}
 		tb.start(msg.Timestamp)
 	}
 
 	ts, ok := tb.translate(msg.Timestamp)
 	if !ok {
-		return nil // anterior a la base: se descarta (spec §3.2)
+		return false, nil // anterior a la base: se descarta (spec §3.2)
 	}
 
+	var err error
 	switch msg.Kind {
 	case KindVideo:
-		return s.pub.WriteVideo(ts, msg.Payload)
+		err = pub.WriteVideo(ts, msg.Payload)
 	case KindAudio:
-		return s.pub.WriteAudio(ts, msg.Payload)
+		err = pub.WriteAudio(ts, msg.Payload)
 	case KindMeta:
-		return s.pub.WriteMeta(ts, msg.Payload)
+		err = pub.WriteMeta(ts, msg.Payload)
 	}
-	return nil
+	if err != nil {
+		return false, err
+	}
+	s.met.sent(len(msg.Payload))
+	return true, nil
 }
 
 // sendPreamble manda onMetaData, AVC sequence header y AAC sequence header, los tres con
 // ts=0, antes de cualquier frame (spec §6.3).
-func (s *Sink) sendPreamble(pre *Preamble) error {
+func (s *Sink) sendPreamble(pub Publisher, pre *Preamble) error {
 	meta, videoSeq, audioSeq := pre.Snapshot()
 	if meta != nil {
-		if err := s.pub.WriteMeta(0, meta.Payload); err != nil {
+		if err := pub.WriteMeta(0, meta.Payload); err != nil {
 			return err
 		}
+		s.met.sent(len(meta.Payload))
 	}
 	if videoSeq != nil {
-		if err := s.pub.WriteVideo(0, videoSeq.Payload); err != nil {
+		if err := pub.WriteVideo(0, videoSeq.Payload); err != nil {
 			return err
 		}
+		s.met.sent(len(videoSeq.Payload))
 	}
 	if audioSeq != nil {
-		if err := s.pub.WriteAudio(0, audioSeq.Payload); err != nil {
+		if err := pub.WriteAudio(0, audioSeq.Payload); err != nil {
 			return err
 		}
+		s.met.sent(len(audioSeq.Payload))
 	}
 	return nil
 }

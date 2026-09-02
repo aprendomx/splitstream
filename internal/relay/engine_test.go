@@ -223,9 +223,14 @@ func TestEngineRestartsSinksBetweenSessions(t *testing.T) {
 		if err := e.OnPublishStart("live", "ok"); err != nil {
 			t.Fatalf("OnPublishStart: %v", err)
 		}
-		e.OnMessage(&Message{Kind: KindMeta, Payload: []byte{0xFF}})
-		e.OnMessage(&Message{Kind: KindVideo, Payload: []byte{0x17, 0x00}, IsSeqHeader: true, IsKeyframe: true})
-		e.OnMessage(&Message{Kind: KindAudio, Payload: []byte{0xAF, 0x00}, IsSeqHeader: true})
+		// El preámbulo lleva el timestamp del momento en que se manda, como haría un
+		// encoder real, y no 0: con la cola de la fase 3 (Task 1), que acota por span de
+		// timestamps encolados (spec §3.4), un preámbulo en ts=0 seguido del keyframe en
+		// baseTS=600000 parece 600 s de cola acumulada y el keyframe se descarta antes de
+		// que el sink llegue a verlo.
+		e.OnMessage(&Message{Kind: KindMeta, Timestamp: baseTS, Payload: []byte{0xFF}})
+		e.OnMessage(&Message{Kind: KindVideo, Timestamp: baseTS, Payload: []byte{0x17, 0x00}, IsSeqHeader: true, IsKeyframe: true})
+		e.OnMessage(&Message{Kind: KindAudio, Timestamp: baseTS, Payload: []byte{0xAF, 0x00}, IsSeqHeader: true})
 		e.OnMessage(videoKey(baseTS))
 		e.OnMessage(videoInter(baseTS + 33))
 	}
