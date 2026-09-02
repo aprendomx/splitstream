@@ -415,8 +415,19 @@ func TestConnectUsesFullPathAsApp(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: rec})
-	go ing.Serve(ln)
-	defer ing.Close()
+	// Se espera a que Serve retorne en vez de dejarlo suelto: con -count=N los tests
+	// comparten proceso, y una goroutine de servidor que sobreviva al test se solapa con
+	// la iteración siguiente.
+	served := make(chan error, 1)
+	go func() { served <- ing.Serve(ln) }()
+	t.Cleanup(func() {
+		_ = ing.Close()
+		select {
+		case <-served:
+		case <-time.After(5 * time.Second):
+			t.Error("el servidor de ingesta no terminó tras Close: deja goroutines sueltas")
+		}
+	})
 	time.Sleep(200 * time.Millisecond)
 
 	p, err := NewPublisher(PublisherConfig{
