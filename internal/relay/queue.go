@@ -217,17 +217,36 @@ func (q *queue) overHard() bool {
 	return len(q.items) > q.maxItems || q.bytes > q.hardBytes
 }
 
-// spanMillis es la duración de media encolada, del primer mensaje al último.
+// spanMillis es la duración de media encolada, del primer mensaje NO esencial al último.
+//
+// Los esenciales se ignoran en los dos extremos: son material de cabecera y su timestamp
+// no es un tiempo de presentación con el que razonar sobre latencia. Como además se
+// sustituyen en su sitio (ver push), un onMetaData con un Timestamp disparatado —viene del
+// cable, por OnSetDataFrame— podía sustituir al de items[0] y dejar el span en 0 por la
+// rama defensiva de abajo, desactivando el límite blando por duración mientras siguiera en
+// cabeza. El presupuesto de latencia del spec §3.4 es sobre la media, no sobre cabeceras.
+//
+// Los dos bucles avanzan tres posiciones a lo sumo, porque en la cola no puede haber más
+// de un esencial de cada clase: sigue siendo O(1).
 //
 // Si el último timestamp es menor que el primero —reordenamiento o wraparound del contador
 // de 32 bits de RTMP, que ocurre a los ~24,8 días de sesión continua— se devuelve 0: es
 // preferible no descartar por una medida sin sentido que descartar de más.
 func (q *queue) spanMillis() uint32 {
-	if len(q.items) < 2 {
-		return 0
+	i := 0
+	for i < len(q.items) && essential(q.items[i]) {
+		i++
 	}
-	first := q.items[0].Timestamp
-	last := q.items[len(q.items)-1].Timestamp
+	j := len(q.items) - 1
+	for j >= 0 && essential(q.items[j]) {
+		j--
+	}
+	if i >= j {
+		return 0 // menos de dos mensajes de media encolados
+	}
+
+	first := q.items[i].Timestamp
+	last := q.items[j].Timestamp
 	if last < first {
 		return 0
 	}

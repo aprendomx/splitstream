@@ -696,3 +696,52 @@ func TestQueueEssentialFloodIsNotQuadratic(t *testing.T) {
 		t.Errorf("20.000 esenciales tardaron %v: hay un reescaneo O(n) por push", d2)
 	}
 }
+
+// Un esencial no puede mover el span: su timestamp no es un tiempo de presentación, y como
+// se sustituye en su sitio, uno con un Timestamp disparatado en cabeza dejaba el span en 0
+// y desactivaba el límite blando por duración. El Timestamp de un KindMeta viene del cable
+// (OnSetDataFrame), así que es alcanzable desde la red.
+func TestQueueSpanIgnoresEssentials(t *testing.T) {
+	q := newQueue(queueConfig{MaxBytes: 1 << 30, MaxSpan: 2000, MaxItems: 1 << 20})
+	defer q.close()
+
+	// Una metadata en cabeza y 2 s justos de media detrás: el límite todavía no dispara.
+	q.push(metaSeq(1))
+	q.push(vKey(1000, 10))
+	q.push(aRaw(2000, 5))
+	q.push(vInter(3000, 10))
+
+	if _, _, span := q.stats(); span != 2000 {
+		t.Fatalf("span = %d, quería 2000 (de la media, no de la metadata)", span)
+	}
+	if q.droppingVideo() {
+		t.Fatal("2000 ms no supera un máximo de 2000 ms: no debería estar descartando")
+	}
+
+	// Una metadata nueva con un timestamp disparatado sustituye a la de items[0]. Ni el
+	// span cambia ni se desactiva el límite.
+	q.push(&Message{Kind: KindMeta, Timestamp: 999_999, Payload: []byte("meta-nueva")})
+	if _, _, span := q.stats(); span != 2000 {
+		t.Errorf("span = %d tras encolar un esencial con ts=999999: quería 2000", span)
+	}
+
+	// Y el límite sigue disparando cuando le toca, con media de verdad.
+	q.push(vInter(3500, 10)) // 2500 ms de media > 2000
+	if !q.droppingVideo() {
+		t.Error("el límite blando por duración no disparó: la sustitución lo desactivó")
+	}
+}
+
+// Lo mismo por el otro extremo: un esencial al final tampoco estira el span.
+func TestQueueSpanIgnoresTrailingEssential(t *testing.T) {
+	q := newQueue(queueConfig{MaxBytes: 1 << 30, MaxSpan: 1_000_000, MaxItems: 1 << 20})
+	defer q.close()
+
+	q.push(vKey(1000, 10))
+	q.push(aRaw(1500, 5))
+	q.push(&Message{Kind: KindMeta, Timestamp: 900_000, Payload: []byte("meta")})
+
+	if _, _, span := q.stats(); span != 500 {
+		t.Errorf("span = %d, quería 500: el esencial del final no cuenta", span)
+	}
+}
