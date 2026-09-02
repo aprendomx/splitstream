@@ -107,7 +107,7 @@ func TestReconnectAfterSinkDies(t *testing.T) {
 	requireSink(t, "localhost:19351")
 	requireSink(t, "localhost:19352")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
 	name := fmt.Sprintf("rec%d", time.Now().UnixNano())
@@ -128,45 +128,70 @@ func TestReconnectAfterSinkDies(t *testing.T) {
 		hub.Add(s)
 	}
 
-	stop := startIngestAndPublish(t, ctx, hub, name, 90)
+	stop := startIngestAndPublish(t, ctx, hub, name, 120)
 	defer stop()
 
-	time.Sleep(8 * time.Second)
-	before := hub.Snapshot()
-	for id, m := range before {
-		if m.State != "live" {
-			t.Fatalf("antes de matar nada, el destino %d está en %q", id, m.State)
-		}
+	// Tasa de referencia de A con todo sano: dos muestras separadas en el tiempo.
+	rateBefore := measureRate(t, hub, 1, 2*time.Second)
+	if rateBefore <= 0 {
+		t.Fatalf("el destino A no estaba transmitiendo antes de la prueba (tasa %f B/s)", rateBefore)
 	}
-	survivorBytes := before[1].BytesSent
-	t.Logf("antes de matar B: A=%+v B=%+v", before[1], before[2])
+	t.Logf("tasa de A antes de la caída: %.0f B/s", rateBefore)
 
-	// Matar el sink B.
-	t.Log("reiniciando splitstream-test-sink-b")
-	if b, err := exec.CommandContext(ctx, "docker", "restart", "-t", "0",
+	// Tirar el sink B y DEJARLO caído: con docker restart vuelve en menos de un segundo,
+	// y esa ventana es demasiado corta para distinguir "A siguió fluyendo" de "A estuvo
+	// bloqueado un instante". Parado de verdad, el backoff encadena varios intentos y la
+	// ventana es medible.
+	t.Log("parando splitstream-test-sink-b")
+	if b, err := exec.CommandContext(ctx, "docker", "stop", "-t", "0",
 		"splitstream-test-sink-b").CombinedOutput(); err != nil {
-		t.Fatalf("docker restart: %v\n%s", err, b)
+		t.Fatalf("docker stop: %v\n%s", err, b)
 	}
 
-	// El destino B debe salir de live.
-	deadline := time.Now().Add(30 * time.Second)
+	// Si el test aborta a mitad, el contenedor no puede quedarse parado: rompería las
+	// corridas siguientes.
+	defer exec.Command("docker", "start", "splitstream-test-sink-b").Run()
+
+	// Dar tiempo a que B note la caída.
+	deadline := time.Now().Add(20 * time.Second)
 	var sawDown bool
 	for time.Now().Before(deadline) {
-		if s := hub.Snapshot(); s[2].State != "live" {
+		if hub.Snapshot()[2].State != "live" {
 			sawDown = true
 			break
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	if !sawDown {
-		t.Error("el destino B nunca salió de live tras reiniciarse su servidor")
+		t.Fatal("el destino B nunca salió de live tras pararse su servidor")
 	}
 
-	// Y debe volver por sí solo.
+	// LA MEDICIÓN QUE IMPORTA: la tasa de A mientras B está caído. Si un fallo en B
+	// bloqueara el fan-out, esta tasa se desplomaría.
+	rateDuring := measureRate(t, hub, 1, 4*time.Second)
+	t.Logf("tasa de A durante la caída de B: %.0f B/s", rateDuring)
+
+	if rateDuring < rateBefore*0.5 {
+		t.Errorf("la tasa del destino A cayó de %.0f a %.0f B/s mientras B estaba caído: "+
+			"un destino está afectando a los demás", rateBefore, rateDuring)
+	}
+
+	// Comprobar de paso que el backoff llegó a encadenar más de un intento.
+	if r := hub.Snapshot()[2]; r.State == "live" {
+		t.Error("el destino B volvió a live con su servidor parado")
+	}
+
+	// Levantar B otra vez y comprobar que vuelve solo.
+	t.Log("levantando splitstream-test-sink-b")
+	if b, err := exec.CommandContext(ctx, "docker", "start",
+		"splitstream-test-sink-b").CombinedOutput(); err != nil {
+		t.Fatalf("docker start: %v\n%s", err, b)
+	}
+
 	deadline = time.Now().Add(90 * time.Second)
 	var recovered bool
 	for time.Now().Before(deadline) {
-		if s := hub.Snapshot(); s[2].State == "live" && s[2].Reconnections > 0 {
+		if s := hub.Snapshot()[2]; s.State == "live" && s.Reconnections > 0 {
 			recovered = true
 			break
 		}
@@ -176,19 +201,15 @@ func TestReconnectAfterSinkDies(t *testing.T) {
 		t.Errorf("el destino B no se reconectó: %+v", hub.Snapshot()[2])
 	}
 
-	// Y el destino A no se enteró: siguió enviando todo el tiempo.
+	// Y A no se enteró de nada en todo el proceso.
 	after := hub.Snapshot()
-	t.Logf("después de que B se recuperara: A=%+v B=%+v", after[1], after[2])
 	if after[1].State != "live" {
 		t.Errorf("el destino A quedó en %q: la caída de B lo afectó", after[1].State)
-	}
-	if after[1].BytesSent <= survivorBytes {
-		t.Errorf("el destino A dejó de enviar durante la caída de B: %d → %d",
-			survivorBytes, after[1].BytesSent)
 	}
 	if after[1].Reconnections != 0 {
 		t.Errorf("el destino A se reconectó %d veces sin motivo", after[1].Reconnections)
 	}
+	t.Logf("reconexiones de B: %d", after[2].Reconnections)
 }
 
 // startIngestAndPublish levanta la ingesta sobre un puerto efímero, arranca ffmpeg
@@ -240,3 +261,24 @@ type nopStore struct{}
 func (nopStore) StartSession(ctx context.Context) (int64, error)                { return 1, nil }
 func (nopStore) FinishSession(ctx context.Context, id int64, w, h, b int) error { return nil }
 func (nopStore) LogEvent(ctx context.Context, e relay.EngineEvent) error        { return nil }
+
+// measureRate devuelve los bytes por segundo que un destino envió durante la ventana dada.
+//
+// Medir la TASA y no el total es lo que permite detectar que un destino dejó de fluir
+// durante un intervalo concreto: un total que crece no distingue "siguió transmitiendo"
+// de "estuvo parado un rato y luego siguió".
+func measureRate(t *testing.T, hub *relay.Hub, id int64, window time.Duration) float64 {
+	t.Helper()
+
+	start, ok := hub.Snapshot()[id]
+	if !ok {
+		t.Fatalf("no hay métricas para el destino %d", id)
+	}
+	time.Sleep(window)
+	end, ok := hub.Snapshot()[id]
+	if !ok {
+		t.Fatalf("no hay métricas para el destino %d", id)
+	}
+
+	return float64(end.BytesSent-start.BytesSent) / window.Seconds()
+}
