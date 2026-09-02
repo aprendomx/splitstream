@@ -175,13 +175,37 @@ func (s *Sink) Enqueue(msg *Message) {
 
 // Stop detiene el sink y espera a que su goroutine termine. Es idempotente, y es seguro
 // sobre un sink que nunca se arrancó: en ese caso no hay goroutine a la que esperar.
+//
+// La espera no tiene plazo a propósito: este es el camino del aislamiento en caliente
+// (Hub.Add y Hub.Remove), donde dejar viva la goroutine de un sink que se reemplaza haría
+// que dos escribieran a la vez al mismo endpoint RTMP. El apagado del proceso sí tiene
+// plazo, y lo pone Hub.Close con signalStop + waitStopped.
 func (s *Sink) Stop() {
+	s.signalStop()
+	if s.started.Load() {
+		<-s.done
+	}
+}
+
+// signalStop pide la parada sin esperar a que la goroutine termine. Es idempotente.
+func (s *Sink) signalStop() {
 	s.once.Do(func() {
 		close(s.quit)
 		s.q.close()
 	})
-	if s.started.Load() {
-		<-s.done
+}
+
+// waitStopped espera a que la goroutine del sink termine, hasta que se cierre grace.
+// Devuelve false si venció el plazo con el sink todavía dentro de una escritura.
+func (s *Sink) waitStopped(grace <-chan struct{}) bool {
+	if !s.started.Load() {
+		return true
+	}
+	select {
+	case <-s.done:
+		return true
+	case <-grace:
+		return false
 	}
 }
 

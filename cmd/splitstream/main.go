@@ -215,6 +215,9 @@ func run(ctx context.Context, out io.Writer) error {
 		logger.Warn("la sesión no llegó a cerrarse durante el apagado", "err", err)
 	}
 
+	// hub.Close() señala la parada a todos los destinos y espera con la gracia ÚNICA de
+	// 3 s del spec §6.5, no una por destino. Agotada, se sigue adelante: cancelar el
+	// contexto de los sinks es lo que acaba desatascando al que siga dentro de un Write.
 	hub.Close()
 	cancelSinks()
 

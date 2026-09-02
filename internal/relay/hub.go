@@ -3,7 +3,12 @@ package relay
 import (
 	"log/slog"
 	"sync"
+	"time"
 )
+
+// ShutdownGrace es la gracia TOTAL del apagado ordenado que fija el spec §6.5: pasada,
+// se sigue adelante con el apagado en vez de seguir esperando a los destinos.
+const ShutdownGrace = 3 * time.Second
 
 // Hub reparte cada mensaje del publisher a todos los sinks registrados.
 //
@@ -106,6 +111,14 @@ func (h *Hub) Snapshot() map[int64]Metrics {
 }
 
 // Close detiene todos los sinks y olvida el preámbulo. El hub queda reutilizable.
+//
+// Señala la parada a TODOS los sinks primero y espera después con un único plazo global.
+// Pararlos en serie multiplicaba el plazo por el número de destinos: Stop no vuelve
+// mientras el sink siga dentro de pub.Write, y el Write de go-rtmp trae cableado su
+// timeout de 5 s (spec §16.2), así que N destinos atascados costaban 5 s × N y el spec
+// §6.5 solo concede 3 s para todo el apagado. Agotada la gracia se sigue adelante y se
+// deja constancia de quién no cerró; sus goroutines mueren en cuanto el Write retorne o
+// se cancele el contexto de los sinks.
 func (h *Hub) Close() {
 	h.mu.Lock()
 	sinks := make([]*Sink, 0, len(h.sinks))
@@ -116,7 +129,26 @@ func (h *Hub) Close() {
 	h.mu.Unlock()
 
 	for _, s := range sinks {
-		s.Stop()
+		s.signalStop()
 	}
+
+	// Un canal que se cierra marca el plazo para todos: un time.After por sink daría un
+	// plazo a cada uno, que es justo lo que no queremos, y un solo canal de timer solo
+	// despertaría al primero que lo lea.
+	grace := make(chan struct{})
+	timer := time.AfterFunc(ShutdownGrace, func() { close(grace) })
+	defer timer.Stop()
+
+	var pendientes []int64
+	for _, s := range sinks {
+		if !s.waitStopped(grace) {
+			pendientes = append(pendientes, s.ID())
+		}
+	}
+	if len(pendientes) > 0 {
+		h.log.Warn("destinos que no cerraron dentro de la gracia del apagado",
+			"destinos", pendientes, "gracia", ShutdownGrace)
+	}
+
 	h.pre.Reset()
 }

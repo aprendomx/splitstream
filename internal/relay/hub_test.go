@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -204,4 +205,112 @@ func TestHubSlowSinkDoesNotBlockOthers(t *testing.T) {
 	}
 
 	waitFor(t, func() bool { return len(fast.snapshot()) > 10 }, "el destino rápido siguió recibiendo")
+}
+
+// stuckPublisher se queda dentro de la primera escritura hasta que se le libera: es lo
+// que hace el Write de go-rtmp contra un destino que aceptó la conexión y dejó de leer,
+// salvo que allí el bloqueo acaba a los 5 s por el timeout cableado de la librería.
+type stuckPublisher struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newStuckPublisher() *stuckPublisher {
+	return &stuckPublisher{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (p *stuckPublisher) Connect(context.Context) error { return nil }
+func (p *stuckPublisher) Close() error                  { return nil }
+
+func (p *stuckPublisher) stall() error {
+	p.once.Do(func() { close(p.entered) })
+	<-p.release
+	return nil
+}
+
+func (p *stuckPublisher) WriteMeta(uint32, []byte) error  { return p.stall() }
+func (p *stuckPublisher) WriteAudio(uint32, []byte) error { return p.stall() }
+func (p *stuckPublisher) WriteVideo(uint32, []byte) error { return p.stall() }
+
+// El apagado tiene UN plazo global de 3 s (spec §6.5). Con varios destinos atascados en
+// una escritura, Close no puede esperar a cada uno por turno: eso multiplicaba el timeout
+// de 5 s del Write de go-rtmp por el número de destinos.
+func TestHubCloseHonoursGlobalShutdownGrace(t *testing.T) {
+	h := NewHub(nil)
+
+	const stuckN = 4
+	stuck := make([]*stuckPublisher, stuckN)
+	for i := range stuck {
+		stuck[i] = newStuckPublisher()
+		s := NewSink(SinkConfig{ID: int64(i + 1), Name: "atascado", Pub: stuck[i]})
+		s.Start(context.Background(), h.Preamble())
+		h.Add(s)
+	}
+	defer func() {
+		for _, p := range stuck {
+			close(p.release)
+		}
+	}()
+
+	// Y dos destinos sanos, que sí deben cerrarse enseguida.
+	healthy := make([]*fakePublisher, 2)
+	for i := range healthy {
+		healthy[i] = &fakePublisher{}
+		s := NewSink(SinkConfig{ID: int64(100 + i), Name: "sano", Pub: healthy[i]})
+		s.Start(context.Background(), h.Preamble())
+		h.Add(s)
+	}
+
+	// El keyframe manda el preámbulo, y ahí es donde los atascados se quedan dentro del
+	// Write. Hay que esperar a que estén dentro: si no, el test mediría otra cosa.
+	h.Publish(videoKey(1000))
+	for i, p := range stuck {
+		select {
+		case <-p.entered:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("el destino atascado %d no llegó a entrar en la escritura", i)
+		}
+	}
+
+	done := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		h.Close()
+		done <- time.Since(start)
+	}()
+
+	select {
+	case elapsed := <-done:
+		// Con la espera en serie serían 5 s × N en producción, e infinito con este fake.
+		if elapsed > ShutdownGrace+2*time.Second {
+			t.Errorf("Close tardó %v con una gracia de %v y %d destinos atascados: está esperando a cada uno por turno",
+				elapsed, ShutdownGrace, stuckN)
+		}
+		t.Logf("Close volvió en %v con %d destinos atascados", elapsed, stuckN)
+	case <-time.After(ShutdownGrace + 10*time.Second):
+		t.Fatalf("Close no volvió: el apagado no respeta la gracia de %v del spec §6.5", ShutdownGrace)
+	}
+
+	// Y el hub queda utilizable: los destinos se olvidaron pese al plazo agotado.
+	if h.Len() != 0 {
+		t.Errorf("quedaron %d destinos registrados tras Close", h.Len())
+	}
+}
+
+// Sin nadie atascado, Close no espera la gracia entera: vuelve en cuanto todos cierran.
+func TestHubCloseReturnsImmediatelyWhenSinksAreHealthy(t *testing.T) {
+	h := NewHub(nil)
+	for i := 0; i < 5; i++ {
+		s := NewSink(SinkConfig{ID: int64(i + 1), Name: "sano", Pub: &fakePublisher{}})
+		s.Start(context.Background(), h.Preamble())
+		h.Add(s)
+	}
+	h.Publish(videoKey(1000))
+
+	start := time.Now()
+	h.Close()
+	if elapsed := time.Since(start); elapsed > ShutdownGrace {
+		t.Errorf("Close tardó %v con todos los destinos sanos: no debería agotar la gracia", elapsed)
+	}
 }
