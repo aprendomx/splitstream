@@ -23,6 +23,7 @@ const (
 	StateConnecting
 	StateLive
 	StateError
+	StateReconnecting
 )
 
 func (s State) String() string {
@@ -35,6 +36,8 @@ func (s State) String() string {
 		return "live"
 	case StateError:
 		return "error"
+	case StateReconnecting:
+		return "reconnecting"
 	default:
 		return "desconocido"
 	}
