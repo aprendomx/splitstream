@@ -451,11 +451,18 @@ import (
 const (
 	DefaultMaxBytes      = 16 << 20 // 16 MiB
 	DefaultMaxSpanMillis = 3000     // 3 s de media encolada
+
+	// DefaultMaxItems es una cota dura de mensajes, red de seguridad y no mecanismo
+	// principal. Existe porque tirar todo el vídeo no siempre basta: un destino caído
+	// mientras la transmisión continúa acumula audio, que no se descarta, y el sink deja
+	// de drenar la cola mientras espera el backoff. Sin esta cota la cola crece sin tope.
+	DefaultMaxItems = 8192
 )
 
 type queueConfig struct {
 	MaxBytes int
 	MaxSpan  uint32 // milisegundos
+	MaxItems int
 }
 
 // queue es la cola de un sink: un deque acotado con política de descarte por GOP.
@@ -463,15 +470,17 @@ type queueConfig struct {
 // No es un canal porque la decisión de descarte necesita inspeccionar lo ya encolado:
 // al desbordar hay que tirar todo el vídeo pendiente, no solo rechazar el que llega.
 type queue struct {
-	mu       sync.Mutex
-	signal   chan struct{}
-	items    []*Message
-	bytes    int
-	maxBytes int
-	maxSpan  uint32
-	dropping bool
-	drops    uint64
-	closed   bool
+	mu         sync.Mutex
+	signal     chan struct{}
+	items      []*Message
+	bytes      int
+	videoItems int // mensajes de vídeo descartables encolados
+	maxBytes   int
+	maxSpan    uint32
+	maxItems   int
+	dropping   bool
+	drops      uint64
+	closed     bool
 }
 
 func newQueue(cfg queueConfig) *queue {
@@ -483,10 +492,15 @@ func newQueue(cfg queueConfig) *queue {
 	if maxSpan == 0 {
 		maxSpan = DefaultMaxSpanMillis
 	}
+	maxItems := cfg.MaxItems
+	if maxItems <= 0 {
+		maxItems = DefaultMaxItems
+	}
 	return &queue{
 		signal:   make(chan struct{}, 1),
 		maxBytes: maxBytes,
 		maxSpan:  maxSpan,
+		maxItems: maxItems,
 	}
 }
 
@@ -505,10 +519,12 @@ func (q *queue) push(msg *Message) {
 		return
 	}
 
+	droppableVideo := msg.Kind == KindVideo && !essential(msg)
+
 	// En modo descarte solo un keyframe reanuda el vídeo. Descartar frames sueltos
 	// corrompería la decodificación hasta el siguiente IDR, que es peor que un salto
 	// limpio (spec §3.3).
-	if q.dropping && msg.Kind == KindVideo && !essential(msg) {
+	if q.dropping && droppableVideo {
 		if !msg.IsKeyframe {
 			q.drops++
 			return
@@ -518,12 +534,52 @@ func (q *queue) push(msg *Message) {
 
 	q.items = append(q.items, msg)
 	q.bytes += len(msg.Payload)
-
-	if q.over() {
-		q.dropQueuedVideo()
+	if droppableVideo {
+		q.videoItems++
 	}
 
+	if q.over() {
+		// Primero el sacrificio barato: todo el vídeo pendiente. El guardia sobre
+		// videoItems evita reescanear la cola entera en cada push cuando la saturación
+		// la causa el audio y no hay vídeo que tirar.
+		if q.videoItems > 0 {
+			q.dropQueuedVideo()
+		}
+		q.dropping = true
+	}
+
+	// Red de seguridad. Perder audio que de todos modos llegaría tarde es mejor que una
+	// cola sin tope.
+	q.shedToItemCap()
+
 	q.wake()
+}
+
+// shedToItemCap tira los mensajes no esenciales más antiguos hasta bajar de la cota dura,
+// en una sola pasada y solo cuando la cota se supera de verdad.
+func (q *queue) shedToItemCap() {
+	excess := len(q.items) - q.maxItems
+	if excess <= 0 {
+		return
+	}
+
+	kept := q.items[:0]
+	for _, m := range q.items {
+		if excess > 0 && !essential(m) {
+			q.drops++
+			q.bytes -= len(m.Payload)
+			if m.Kind == KindVideo {
+				q.videoItems--
+			}
+			excess--
+			continue
+		}
+		kept = append(kept, m)
+	}
+	for i := len(kept); i < len(q.items); i++ {
+		q.items[i] = nil
+	}
+	q.items = kept
 }
 
 // over indica si la cola supera alguno de sus dos límites.
@@ -566,7 +622,7 @@ func (q *queue) dropQueuedVideo() {
 		q.items[i] = nil
 	}
 	q.items = kept
-	q.dropping = true
+	q.videoItems = 0
 }
 
 // wake avisa a pop de que hay algo. El canal tiene capacidad 1 y el envío es no
@@ -588,6 +644,9 @@ func (q *queue) pop(ctx context.Context) (*Message, bool) {
 			q.items[0] = nil
 			q.items = q.items[1:]
 			q.bytes -= len(m.Payload)
+			if m.Kind == KindVideo && !essential(m) {
+				q.videoItems--
+			}
 			q.mu.Unlock()
 			return m, true
 		}
@@ -616,6 +675,7 @@ func (q *queue) close() {
 	q.closed = true
 	q.items = nil
 	q.bytes = 0
+	q.videoItems = 0
 	q.mu.Unlock()
 
 	q.wake()
