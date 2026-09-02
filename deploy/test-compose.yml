@@ -1,0 +1,19 @@
+# Sinks falsos para el test de integración. Se levanta con:
+#   docker compose -f deploy/test-compose.yml up -d
+services:
+  sink-a:
+    image: bluenviron/mediamtx:latest
+    container_name: splitstream-test-sink-a
+    ports:
+      - "19351:1935"
+      - "18554:8554"
+    environment:
+      MTX_LOGLEVEL: info
+  sink-b:
+    image: bluenviron/mediamtx:latest
+    container_name: splitstream-test-sink-b
+    ports:
+      - "19352:1935"
+      - "18555:8554"
+    environment:
+      MTX_LOGLEVEL: info

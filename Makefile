@@ -1,4 +1,4 @@
-.PHONY: build test vet tidy run clean
+.PHONY: build test test-integration sinks-up sinks-down vet tidy run clean
 
 # CGO_ENABLED=0 solo aquí: el binario de producción debe ser estático.
 build:
@@ -19,3 +19,14 @@ run: build
 
 clean:
 	rm -f splitstream
+
+# Levanta los mediamtx que usan los tests de integración.
+sinks-up:
+	docker compose -f deploy/test-compose.yml up -d
+
+sinks-down:
+	docker compose -f deploy/test-compose.yml down
+
+# Requiere sinks-up, ffmpeg y ffprobe.
+test-integration:
+	go test -tags integration ./test/integration/ -v -count=1 -timeout 5m
