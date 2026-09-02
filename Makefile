@@ -27,7 +27,10 @@ sinks-up:
 sinks-down:
 	docker compose -f deploy/test-compose.yml down
 
-# Requiere sinks-up, ffmpeg y ffprobe. El test de reconexión espera al backoff, que llega
-# a 30 s entre intentos.
+# Requiere sinks-up, ffmpeg y ffprobe. El test de reconexión para el sink B a propósito;
+# si una corrida anterior se abortó con Ctrl-C o por timeout, el contenedor puede haber
+# quedado parado y el `defer` de Go no lo levanta —Go no desenrolla los defer al morir por
+# señal o por timeout del runner—. Por eso se asegura aquí.
 test-integration:
+	@docker start splitstream-test-sink-a splitstream-test-sink-b 2>/dev/null || true
 	go test -tags integration ./test/integration/ -v -count=1 -timeout 15m
