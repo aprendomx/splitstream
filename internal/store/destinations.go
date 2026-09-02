@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
@@ -12,6 +14,31 @@ import (
 
 // ErrDestinationNotFound se devuelve cuando el id no existe.
 var ErrDestinationNotFound = errors.New("destino no encontrado")
+
+// ErrInvalidDestinationURL indica que la URL del destino no sirve para retransmitir.
+var ErrInvalidDestinationURL = errors.New("URL de destino inválida")
+
+// validateRTMPURL comprueba que la URL sea rtmp:// o rtmps:// y tenga host y app.
+//
+// Duplica a propósito parte de lo que hace rtmpio.parseTarget: que internal/store
+// importara internal/rtmpio invertiría las capas. El esquema decide si la conexión usa
+// TLS (spec §3.1), así que persistir otra cosa deja un destino que nunca podrá publicar.
+func validateRTMPURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%w: no se pudo interpretar", ErrInvalidDestinationURL)
+	}
+	if u.Scheme != "rtmp" && u.Scheme != "rtmps" {
+		return fmt.Errorf("%w: esquema %q, usa rtmp:// o rtmps://", ErrInvalidDestinationURL, u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("%w: falta el host", ErrInvalidDestinationURL)
+	}
+	if strings.Trim(u.Path, "/") == "" {
+		return fmt.Errorf("%w: falta la app tras el host", ErrInvalidDestinationURL)
+	}
+	return nil
+}
 
 // Platform es el conjunto cerrado de plataformas soportadas. Duplica el CHECK del
 // esquema a propósito: así el error llega antes y con un mensaje legible.
@@ -100,8 +127,8 @@ func (d *DB) CreateDestination(ctx context.Context, c *crypto.Cipher, in NewDest
 	if in.Name == "" {
 		return nil, errors.New("el nombre no puede estar vacío")
 	}
-	if in.RTMPURL == "" {
-		return nil, errors.New("la URL RTMP no puede estar vacía")
+	if err := validateRTMPURL(in.RTMPURL); err != nil {
+		return nil, err
 	}
 
 	encrypted, err := c.Encrypt([]byte(in.Key.Reveal()))
@@ -156,8 +183,8 @@ func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, 
 		args = append(args, string(*patch.Platform))
 	}
 	if patch.RTMPURL != nil {
-		if *patch.RTMPURL == "" {
-			return nil, errors.New("la URL RTMP no puede estar vacía")
+		if err := validateRTMPURL(*patch.RTMPURL); err != nil {
+			return nil, err
 		}
 		sets = append(sets, "rtmp_url = ?")
 		args = append(args, *patch.RTMPURL)

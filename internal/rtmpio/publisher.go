@@ -97,8 +97,8 @@ type PublisherConfig struct {
 
 // Publisher publica hacia una plataforma. Implementa relay.Publisher.
 //
-// Lo usa una sola goroutine (la de su sink), así que no es seguro para uso concurrente,
-// salvo Close, que sí puede llamarse desde otra.
+// TODOS sus métodos, Close incluido, deben llamarse desde UNA SOLA goroutine (la de su
+// sink): ver el comentario de relay.Publisher para el porqué.
 type Publisher struct {
 	tgt       target
 	key       crypto.Secret
@@ -129,8 +129,9 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 		tgt:       tgt,
 		key:       cfg.StreamKey,
 		chunkSize: size,
-		// La clave va como crypto.Secret y se loguea enmascarada.
-		log: log.With("destino_url", cfg.URL, "clave", cfg.StreamKey),
+		// Se loguean host y app por separado, no la URL original: si el usuario pegó la
+		// clave dentro de la URL, la URL entera en los logs la filtraría.
+		log: log.With("destino_addr", tgt.addr, "destino_app", tgt.app, "clave", cfg.StreamKey),
 	}, nil
 }
 
@@ -158,6 +159,9 @@ func (p *Publisher) Connect(ctx context.Context) error {
 			conn *rtmp.ClientConn
 			err  error
 		)
+		// NO fijes ConnConfig.Logger. go-rtmp loguea a nivel Info el comando de
+		// publish completo, cuyo nombre de stream ES la clave. Dejándolo en nil, la
+		// librería lo redirige a io.Discard y la clave no sale a ningún lado.
 		switch p.tgt.scheme {
 		case "rtmps":
 			conn, err = rtmp.DialWithTLSDialer(&tls.Dialer{

@@ -4,9 +4,11 @@ import "context"
 
 // Publisher es un destino de salida ya resuelto: sabe a dónde conectarse y con qué clave.
 //
-// Cada sink posee el suyo y lo usa desde una sola goroutine, así que las implementaciones
-// NO necesitan ser seguras para uso concurrente. A cambio, deben tolerar que Close() se
-// llame sin que Connect() haya tenido éxito.
+// TODOS sus métodos, Close incluido, deben llamarse desde UNA SOLA goroutine. No es una
+// preferencia: el ChunkStreamer de go-rtmp comparte un encoder sin mutex entre los chunk
+// streams de audio y vídeo, y Close escribe un deleteStream por la misma conexión. El
+// sink cumple el contrato porque difiere su Close en la misma goroutine que hace los
+// Write; cualquier otro consumidor debe hacer lo mismo.
 type Publisher interface {
 	// Connect abre la conexión y deja el stream listo para recibir media.
 	Connect(ctx context.Context) error

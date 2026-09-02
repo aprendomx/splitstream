@@ -331,3 +331,55 @@ func TestDeleteDestination(t *testing.T) {
 		t.Fatalf("segundo delete = %v, quería ErrDestinationNotFound", err)
 	}
 }
+
+func TestCreateDestinationRejectsBadURL(t *testing.T) {
+	db, c := bootstrapped(t)
+	ctx := context.Background()
+
+	for _, bad := range []string{
+		"http://example.com/live",
+		"https://example.com/live",
+		"example.com/live",
+		"rtmp://",
+		"rtmp:///live",
+		"rtmp://example.com",
+		"",
+	} {
+		in := newDest("Malo")
+		in.RTMPURL = bad
+		if _, err := db.CreateDestination(ctx, c, in); !errors.Is(err, store.ErrInvalidDestinationURL) {
+			t.Errorf("CreateDestination con %q = %v, quería ErrInvalidDestinationURL", bad, err)
+		}
+	}
+}
+
+func TestCreateDestinationAcceptsRTMPAndRTMPS(t *testing.T) {
+	db, c := bootstrapped(t)
+	ctx := context.Background()
+
+	for _, good := range []string{
+		"rtmp://a.rtmp.youtube.com/live2",
+		"rtmps://live-api-s.facebook.com:443/rtmp/",
+		"rtmp://example.com/live/sub",
+	} {
+		in := newDest("Bueno")
+		in.RTMPURL = good
+		if _, err := db.CreateDestination(ctx, c, in); err != nil {
+			t.Errorf("CreateDestination con %q = %v, quería nil", good, err)
+		}
+	}
+}
+
+func TestUpdateDestinationRejectsBadURL(t *testing.T) {
+	db, c := bootstrapped(t)
+	ctx := context.Background()
+
+	d, err := db.CreateDestination(ctx, c, newDest("YouTube"))
+	if err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+	bad := "http://example.com/live"
+	if _, err := db.UpdateDestination(ctx, c, d.ID, store.DestinationPatch{RTMPURL: &bad}); !errors.Is(err, store.ErrInvalidDestinationURL) {
+		t.Errorf("UpdateDestination con esquema malo = %v, quería ErrInvalidDestinationURL", err)
+	}
+}

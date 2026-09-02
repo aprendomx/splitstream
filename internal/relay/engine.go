@@ -25,22 +25,38 @@ type EngineEvent struct {
 	Message       string
 }
 
+// SinkProvider construye los sinks de una sesión. Se llama al aceptar a un publisher, no
+// al arrancar el proceso: cada sesión de ingesta abre su propia conexión con cada destino
+// (spec §6.5). Arrancarlos una sola vez al inicio hacía que la segunda transmisión
+// reutilizara el timebase de la primera, con lo que su sequence header nunca llegaba.
+type SinkProvider func() ([]*Sink, error)
+
+// ErrSessionInProgress se devuelve cuando ya hay una publicación en curso. Aceptar una
+// segunda intercalaría frames de dos codificadores en el mismo stream de salida.
+var ErrSessionInProgress = errors.New("ya hay una publicación en curso")
+
 // EngineConfig son los datos para construir el motor.
 type EngineConfig struct {
 	Hub    *Hub
 	Store  EngineStore
 	Logger *slog.Logger
+	// BaseContext es el contexto de vida del proceso. Los sinks lo heredan al arrancar.
+	// Va aquí, y no como parámetro, porque OnPublishStart lo llama la interfaz
+	// IngestHandler, que no recibe contexto.
+	BaseContext context.Context
 }
 
 // Engine une la ingesta con el hub: valida al publisher, abre y cierra la sesión, y
 // reparte los mensajes. Satisface rtmpio.IngestHandler.
 type Engine struct {
-	hub   *Hub
-	store EngineStore
-	log   *slog.Logger
+	hub     *Hub
+	store   EngineStore
+	log     *slog.Logger
+	baseCtx context.Context
 
 	mu        sync.Mutex
 	validate  func(app, key string) error
+	newSinks  SinkProvider
 	sessionID int64
 }
 
@@ -51,11 +67,17 @@ func NewEngine(cfg EngineConfig) *Engine {
 	if log == nil {
 		log = slog.Default()
 	}
+	baseCtx := cfg.BaseContext
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
 	return &Engine{
 		hub:      cfg.Hub,
 		store:    cfg.Store,
 		log:      log,
+		baseCtx:  baseCtx,
 		validate: func(string, string) error { return errors.New("ingesta sin configurar") },
+		newSinks: func() ([]*Sink, error) { return nil, nil },
 	}
 }
 
@@ -64,6 +86,13 @@ func (e *Engine) SetValidator(fn func(app, key string) error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.validate = fn
+}
+
+// SetSinkProvider fija la función que construye los sinks de cada sesión.
+func (e *Engine) SetSinkProvider(fn SinkProvider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.newSinks = fn
 }
 
 // SessionID devuelve el id de la sesión en curso, o 0 si no hay ninguna.
@@ -102,7 +131,12 @@ func (e *Engine) WaitIdle(ctx context.Context) error {
 // OnPublishStart valida al publisher y abre la sesión.
 func (e *Engine) OnPublishStart(app, streamKey string) error {
 	e.mu.Lock()
+	if e.sessionID != 0 {
+		e.mu.Unlock()
+		return ErrSessionInProgress
+	}
 	validate := e.validate
+	provider := e.newSinks
 	e.mu.Unlock()
 
 	if err := validate(app, streamKey); err != nil {
@@ -118,6 +152,18 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 	e.mu.Lock()
 	e.sessionID = id
 	e.mu.Unlock()
+
+	// Los destinos se conectan al empezar la sesión, no al arrancar el proceso.
+	sinks, err := provider()
+	if err != nil {
+		// Un fallo construyendo destinos no debe rechazar al publisher: es preferible
+		// ingestar sin retransmitir que cortarle la transmisión al usuario.
+		e.log.Error("no se pudieron construir los destinos de la sesión", "err", err)
+	}
+	for _, s := range sinks {
+		s.Start(e.baseCtx, e.hub.Preamble())
+		e.hub.Add(s)
+	}
 
 	e.logEvent(ctx, &id, nil, "info", "publisher_connected", "el publisher conectó")
 	e.log.Info("sesión iniciada", "sesion_id", id, "app", app)
@@ -149,7 +195,9 @@ func (e *Engine) OnPublishEnd() {
 		e.log.Error("no se pudo cerrar la sesión", "sesion_id", id, "err", err)
 	}
 	e.logEvent(ctx, &id, nil, "info", "publisher_disconnected", "el publisher se desconectó")
-	e.hub.Preamble().Reset()
+	// Cerrar el hub para los sinks y vacía el preámbulo: la conexión saliente de esta
+	// sesión se cierra, y la siguiente abrirá una nueva con su propio timebase.
+	e.hub.Close()
 
 	e.mu.Lock()
 	e.sessionID = 0

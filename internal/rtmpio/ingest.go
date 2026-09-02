@@ -102,6 +102,9 @@ func (i *Ingest) Serve(ln net.Listener) error {
 	srv := rtmp.NewServer(&rtmp.ServerConfig{
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *rtmp.ConnConfig) {
 			i.track(conn)
+			// NO fijes ConnConfig.Logger. go-rtmp loguea a nivel Info el comando de
+			// publish completo, cuyo nombre de stream ES la clave. Dejándolo en nil, la
+			// librería lo redirige a io.Discard y la clave no sale a ningún lado.
 			return conn, &rtmp.ConnConfig{
 				Handler: &ingestConn{
 					handler: i.handler,

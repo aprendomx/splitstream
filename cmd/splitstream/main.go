@@ -97,9 +97,10 @@ func run(ctx context.Context, out io.Writer) error {
 
 	hub := relay.NewHub(logger)
 	engine := relay.NewEngine(relay.EngineConfig{
-		Hub:    hub,
-		Store:  storeAdapter{db: db},
-		Logger: logger,
+		Hub:         hub,
+		Store:       storeAdapter{db: db},
+		Logger:      logger,
+		BaseContext: ctx,
 	})
 
 	// La clave se compara descifrada y en tiempo constante no hace falta aquí: es un
@@ -119,36 +120,41 @@ func run(ctx context.Context, out io.Writer) error {
 	})
 
 	// Fase 2: un solo destino, el primero habilitado. La fase 3 los gestiona todos.
-	dests, err := db.ListDestinations(ctx)
-	if err != nil {
-		return err
-	}
-	var started int
-	for _, d := range dests {
-		if !d.Enabled {
-			continue
-		}
-		key, err := db.RevealDestinationKey(ctx, cipher, d.ID)
+	// Los sinks se construyen por sesión, no al arrancar el proceso: cada sesión de
+	// ingesta abre su propia conexión con cada destino (spec §6.5). Arrancarlos una sola
+	// vez aquí hacía que la segunda transmisión reutilizara el timebase de la primera.
+	engine.SetSinkProvider(func() ([]*relay.Sink, error) {
+		dests, err := db.ListDestinations(ctx)
 		if err != nil {
-			logger.Error("no se pudo leer la clave del destino", "destino", d.Name, "err", err)
-			continue
+			return nil, err
 		}
-		pub, err := rtmpio.NewPublisher(rtmpio.PublisherConfig{
-			URL:       d.RTMPURL,
-			StreamKey: key,
-			Logger:    logger,
-		})
-		if err != nil {
-			logger.Error("destino mal configurado", "destino", d.Name, "err", err)
-			continue
+		var out []*relay.Sink
+		for _, d := range dests {
+			if !d.Enabled {
+				continue
+			}
+			key, err := db.RevealDestinationKey(ctx, cipher, d.ID)
+			if err != nil {
+				logger.Error("no se pudo leer la clave del destino", "destino", d.Name, "err", err)
+				continue
+			}
+			pub, err := rtmpio.NewPublisher(rtmpio.PublisherConfig{
+				URL:       d.RTMPURL,
+				StreamKey: key,
+				Logger:    logger,
+			})
+			if err != nil {
+				logger.Error("destino mal configurado", "destino", d.Name, "err", err)
+				continue
+			}
+			out = append(out, relay.NewSink(relay.SinkConfig{
+				ID: d.ID, Name: d.Name, Pub: pub, Logger: logger,
+			}))
+			// Fase 2: un solo destino. La fase 3 los arranca todos.
+			break
 		}
-		sink := relay.NewSink(relay.SinkConfig{ID: d.ID, Name: d.Name, Pub: pub, Logger: logger})
-		sink.Start(ctx, hub.Preamble())
-		hub.Add(sink)
-		started++
-		break // fase 2: uno solo
-	}
-	logger.Info("destinos activos", "n", started)
+		return out, nil
+	})
 
 	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{
 		Addr:    cfg.RTMPAddr,

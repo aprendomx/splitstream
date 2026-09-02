@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// waitFor, videoKey y videoInter viven en sink_test.go.
+
 type fakeStore struct {
 	mu      sync.Mutex
 	started int
@@ -196,4 +198,95 @@ func TestEngineWaitIdleRespectsContext(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Errorf("WaitIdle tardó %v en rendirse", elapsed)
 	}
+}
+
+// Dos sesiones seguidas deben usar sinks distintos, con su propio timebase: si el sink
+// sobreviviera, la segunda transmisión saldría con el timeline de la primera y su
+// sequence header nunca llegaría al destino.
+func TestEngineRestartsSinksBetweenSessions(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	var pubs []*fakePublisher
+	var mu sync.Mutex
+	e.SetSinkProvider(func() ([]*Sink, error) {
+		p := &fakePublisher{}
+		mu.Lock()
+		pubs = append(pubs, p)
+		mu.Unlock()
+		return []*Sink{NewSink(SinkConfig{ID: 1, Name: "dest", Pub: p})}, nil
+	})
+
+	publish := func(baseTS uint32) {
+		if err := e.OnPublishStart("live", "ok"); err != nil {
+			t.Fatalf("OnPublishStart: %v", err)
+		}
+		e.OnMessage(&Message{Kind: KindMeta, Payload: []byte{0xFF}})
+		e.OnMessage(&Message{Kind: KindVideo, Payload: []byte{0x17, 0x00}, IsSeqHeader: true, IsKeyframe: true})
+		e.OnMessage(&Message{Kind: KindAudio, Payload: []byte{0xAF, 0x00}, IsSeqHeader: true})
+		e.OnMessage(videoKey(baseTS))
+		e.OnMessage(videoInter(baseTS + 33))
+	}
+
+	// Primera sesión con timestamps altos, como una transmisión que lleva rato.
+	publish(600000)
+	mu.Lock()
+	first := pubs[0]
+	mu.Unlock()
+	waitFor(t, func() bool { return len(first.snapshot()) >= 5 }, "la sesión 1 escribió")
+	e.OnPublishEnd()
+
+	// Segunda sesión: timestamps que arrancan de nuevo, como hace OBS.
+	publish(0)
+	mu.Lock()
+	if len(pubs) != 2 {
+		mu.Unlock()
+		t.Fatalf("se crearon %d publishers, quería 2: el sink no se reinició entre sesiones", len(pubs))
+	}
+	second := pubs[1]
+	mu.Unlock()
+
+	waitFor(t, func() bool { return len(second.snapshot()) >= 5 }, "la sesión 2 escribió")
+
+	got := second.snapshot()
+	// El preámbulo debe reenviarse entero en la sesión nueva.
+	if got[0].Kind != KindMeta || got[1].Kind != KindVideo || got[2].Kind != KindAudio {
+		t.Errorf("la sesión 2 no reenvió el preámbulo: %v %v %v", got[0].Kind, got[1].Kind, got[2].Kind)
+	}
+	// Y el timeline debe arrancar en 0, no continuar el de la sesión anterior.
+	if got[3].TS != 0 {
+		t.Errorf("el primer frame de la sesión 2 salió con ts=%d, quería 0", got[3].TS)
+	}
+	e.OnPublishEnd()
+}
+
+func TestEngineRejectsSecondPublisher(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	st := &fakeStore{}
+	e := NewEngine(EngineConfig{Hub: h, Store: st, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("primer publisher: %v", err)
+	}
+	if err := e.OnPublishStart("live", "ok"); !errors.Is(err, ErrSessionInProgress) {
+		t.Fatalf("segundo publisher = %v, quería ErrSessionInProgress", err)
+	}
+
+	st.mu.Lock()
+	started := st.started
+	st.mu.Unlock()
+	if started != 1 {
+		t.Errorf("se abrieron %d sesiones, quería 1", started)
+	}
+
+	// Tras cerrar, se acepta uno nuevo.
+	e.OnPublishEnd()
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Errorf("tras cerrar la sesión debería aceptarse otro publisher: %v", err)
+	}
+	e.OnPublishEnd()
 }
