@@ -577,3 +577,122 @@ func TestQueueHardLimitPreservesGOPIntegrity(t *testing.T) {
 		}
 	}
 }
+
+// metaSeq construye un onMetaData reconocible por su número de orden.
+func metaSeq(n int) *Message {
+	return &Message{Kind: KindMeta, Payload: []byte(fmt.Sprintf("meta-%06d", n))}
+}
+
+// Los esenciales no se descartan nunca por presión, pero tampoco se apilan: un
+// onMetaData nuevo deja obsoleto al anterior. Sin esto, 30.000 onMetaData —alcanzables
+// desde la red por OnSetDataFrame— dejan la cola sin cota ninguna.
+func TestQueueDeduplicatesQueuedEssentials(t *testing.T) {
+	const n = 30_000
+	q := newQueue(queueConfig{})
+	defer q.close()
+
+	for i := 0; i < n; i++ {
+		q.push(metaSeq(i))
+	}
+
+	items, bytes, _ := q.stats()
+	if items > 8 {
+		t.Errorf("%d onMetaData dejaron %d ítems en la cola: los esenciales se están apilando", n, items)
+	}
+	if bytes > 1024 {
+		t.Errorf("%d onMetaData dejaron %d bytes en la cola", n, bytes)
+	}
+
+	// Y el que sobrevive es el último, no el primero: el destino solo necesita ese.
+	got := drain(t, q)
+	if len(got) == 0 {
+		t.Fatal("no sobrevivió ningún onMetaData: los esenciales no se descartan")
+	}
+	if want := string(metaSeq(n - 1).Payload); string(got[len(got)-1].Payload) != want {
+		t.Errorf("sobrevivió %q, quería el último (%q)", got[len(got)-1].Payload, want)
+	}
+}
+
+// Las tres clases de esencial son ranuras independientes: la metadata no pisa a la
+// cabecera de vídeo ni esta a la de audio.
+func TestQueueDeduplicatesEachEssentialClassApart(t *testing.T) {
+	q := newQueue(queueConfig{})
+	defer q.close()
+
+	audioSeq := func() *Message {
+		return &Message{Kind: KindAudio, Payload: []byte{0xAF, 0x00}, IsSeqHeader: true}
+	}
+	for i := 0; i < 1000; i++ {
+		q.push(metaSeq(i))
+		q.push(vSeq())
+		q.push(audioSeq())
+	}
+
+	got := drain(t, q)
+	var nMeta, nVideoSeq, nAudioSeq int
+	for _, m := range got {
+		switch essentialClass(m) {
+		case essMeta:
+			nMeta++
+		case essVideoSeq:
+			nVideoSeq++
+		case essAudioSeq:
+			nAudioSeq++
+		}
+	}
+	if nMeta != 1 || nVideoSeq != 1 || nAudioSeq != 1 {
+		t.Errorf("meta=%d videoSeq=%d audioSeq=%d, quería 1 1 1", nMeta, nVideoSeq, nAudioSeq)
+	}
+}
+
+// Un esencial sustituido no le quita el sitio al media que venga detrás: sigue saliendo
+// antes que él, que es lo único que el destino necesita para decodificar.
+func TestQueueReplacedEssentialKeepsItsPlace(t *testing.T) {
+	q := newQueue(queueConfig{})
+	defer q.close()
+
+	q.push(metaSeq(1))
+	q.push(vKey(0, 10))
+	q.push(metaSeq(2))
+	q.push(aRaw(10, 5))
+
+	got := drain(t, q)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, quería 3 (la metadata sustituida no añade ítem)", len(got))
+	}
+	if got[0].Kind != KindMeta || string(got[0].Payload) != string(metaSeq(2).Payload) {
+		t.Errorf("el primero debe ser la última metadata, fue %v %q", got[0].Kind, got[0].Payload)
+	}
+	if got[1].Kind != KindVideo || got[2].Kind != KindAudio {
+		t.Errorf("el resto salió desordenado: %v %v", got[1].Kind, got[2].Kind)
+	}
+}
+
+// Una avalancha de esenciales tampoco puede costar O(n²): al doblar el número de mensajes
+// el tiempo debe doblarse, no cuadruplicarse.
+func TestQueueEssentialFloodIsNotQuadratic(t *testing.T) {
+	flood := func(n int) time.Duration {
+		q := newQueue(queueConfig{})
+		defer q.close()
+		start := time.Now()
+		for i := 0; i < n; i++ {
+			q.push(metaSeq(i))
+		}
+		return time.Since(start)
+	}
+
+	flood(1000) // calentamiento: la primera pasada paga el arranque
+	d1 := flood(10_000)
+	d2 := flood(20_000)
+
+	// Con 50 ms de holgura para el ruido de la máquina. Un crecimiento cuadrático da
+	// ratio ~4 sobre magnitudes que ya se miden en cientos de milisegundos, así que no
+	// se cuela por el margen.
+	if limit := 3*d1 + 50*time.Millisecond; d2 > limit {
+		t.Errorf("10.000 esenciales tardaron %v y 20.000 tardaron %v (ratio %.2f): escala de forma cuadrática",
+			d1, d2, float64(d2)/float64(d1))
+	}
+	if d2 > 500*time.Millisecond {
+		t.Errorf("20.000 esenciales tardaron %v: hay un reescaneo O(n) por push", d2)
+	}
+}

@@ -42,7 +42,8 @@ type queueConfig struct {
 // Nivel duro (maxItems, hardBytes): red de seguridad para cuando tirar todo el vídeo no
 // basta —un destino caído mientras la transmisión continúa acumula audio sin límite—, y
 // aquí sí se tiran los no esenciales más antiguos, audio incluido. La metadata y los
-// sequence headers no se tiran en ningún nivel.
+// sequence headers no se tiran en ningún nivel; en cambio no se apilan, porque cada uno
+// deja obsoleto al anterior de su clase y se sustituye en su sitio (ver push).
 type queue struct {
 	mu         sync.Mutex
 	signal     chan struct{}
@@ -53,9 +54,12 @@ type queue struct {
 	hardBytes  int
 	maxSpan    uint32
 	maxItems   int
-	dropping   bool
-	drops      uint64
-	closed     bool
+	// ess guarda, por clase de esencial, el índice del que está encolado ahora mismo, o
+	// -1 si no hay ninguno. Permite sustituirlo en O(1) en vez de recorrer la cola.
+	ess      [essClasses]int
+	dropping bool
+	drops    uint64
+	closed   bool
 }
 
 func newQueue(cfg queueConfig) *queue {
@@ -72,19 +76,60 @@ func newQueue(cfg queueConfig) *queue {
 		maxItems = DefaultMaxItems
 	}
 	hardBytes := maxBytes * hardBytesFactor
-	return &queue{
+	q := &queue{
 		signal:    make(chan struct{}, 1),
 		maxBytes:  maxBytes,
 		hardBytes: hardBytes,
 		maxSpan:   maxSpan,
 		maxItems:  maxItems,
 	}
+	q.forgetEssentials()
+	return q
 }
 
 // essential indica si un mensaje no se puede descartar nunca. Sin el onMetaData y los dos
 // sequence headers, el destino no puede decodificar nada de lo que venga después.
 func essential(msg *Message) bool {
 	return msg.Kind == KindMeta || msg.IsSeqHeader
+}
+
+// Clases de mensaje esencial. Son tres ranuras independientes y de cada una solo importa
+// la última: un onMetaData nuevo deja obsoleto al anterior, y una cabecera de secuencia
+// nueva deja obsoleta a la anterior de su códec.
+const (
+	essMeta = iota
+	essVideoSeq
+	essAudioSeq
+	essClasses
+)
+
+// essentialClass clasifica un esencial, o devuelve -1 si el mensaje no lo es.
+func essentialClass(msg *Message) int {
+	switch {
+	case msg.Kind == KindMeta:
+		return essMeta
+	case !msg.IsSeqHeader:
+		return -1
+	case msg.Kind == KindVideo:
+		return essVideoSeq
+	default:
+		return essAudioSeq
+	}
+}
+
+// forgetEssentials olvida dónde estaba cada esencial. Se usa al vaciar la cola y antes de
+// recalcular los índices en un repaso completo.
+func (q *queue) forgetEssentials() {
+	for i := range q.ess {
+		q.ess[i] = -1
+	}
+}
+
+// trackEssential anota la posición del esencial que acaba de quedar en pos.
+func (q *queue) trackEssential(msg *Message, pos int) {
+	if class := essentialClass(msg); class >= 0 {
+		q.ess[class] = pos
+	}
 }
 
 // push encola un mensaje aplicando la política de descarte. Nunca bloquea.
@@ -109,10 +154,18 @@ func (q *queue) push(msg *Message) {
 		q.dropping = false
 	}
 
-	q.items = append(q.items, msg)
-	q.bytes += len(msg.Payload)
-	if droppableVideo {
-		q.videoItems++
+	// Los esenciales no se apilan: al encolar uno se sustituye EN SU SITIO al anterior de
+	// su clase si sigue pendiente, en vez de añadir otro ítem. El destino solo necesita el
+	// último, así que acumularlos no aporta nada y deja la cola sin cota —los esenciales
+	// no se descartan nunca por presión, y esa garantía no cambia aquí: 30.000 onMetaData
+	// serían 30.000 ítems intocables. Sustituir los acota en O(1) esenciales.
+	if !q.replaceEssential(msg) {
+		q.items = append(q.items, msg)
+		q.bytes += len(msg.Payload)
+		if droppableVideo {
+			q.videoItems++
+		}
+		q.trackEssential(msg, len(q.items)-1)
 	}
 
 	// Nivel blando: tirar todo el vídeo pendiente. El guardia sobre videoItems evita
@@ -128,6 +181,30 @@ func (q *queue) push(msg *Message) {
 	q.shedToHardLimits()
 
 	q.wake()
+}
+
+// replaceEssential sustituye en su sitio al esencial pendiente de la misma clase y ajusta
+// el contador de bytes. Devuelve false si el mensaje no es esencial o si no había ninguno
+// de su clase encolado, casos en los que hay que añadirlo.
+func (q *queue) replaceEssential(msg *Message) bool {
+	class := essentialClass(msg)
+	if class < 0 {
+		return false
+	}
+	idx := q.ess[class]
+	if idx < 0 || idx >= len(q.items) {
+		return false
+	}
+	// Comprobación defensiva: si el índice hubiera quedado desfasado, sustituir a ciegas
+	// pisaría un mensaje ajeno. Preferimos encolar de más antes que corromper la cola.
+	old := q.items[idx]
+	if essentialClass(old) != class {
+		q.ess[class] = -1
+		return false
+	}
+	q.items[idx] = msg
+	q.bytes += len(msg.Payload) - len(old.Payload)
+	return true
 }
 
 // over indica si la cola supera alguno de sus dos límites blandos.
@@ -161,6 +238,7 @@ func (q *queue) spanMillis() uint32 {
 // sequence headers: el audio es barato y su corte se nota mucho más que un salto de
 // vídeo (spec §6.4).
 func (q *queue) dropQueuedVideo() {
+	q.forgetEssentials()
 	kept := q.items[:0]
 	for _, m := range q.items {
 		if m.Kind == KindVideo && !essential(m) {
@@ -169,6 +247,7 @@ func (q *queue) dropQueuedVideo() {
 			continue
 		}
 		kept = append(kept, m)
+		q.trackEssential(m, len(kept)-1)
 	}
 	// Anular las posiciones sobrantes para no retener los payloads descartados.
 	for i := len(kept); i < len(q.items); i++ {
@@ -202,6 +281,7 @@ func (q *queue) shedToHardLimits() {
 
 	// Paso 2: el audio más antiguo. Ya no queda vídeo que pueda quedar huérfano.
 	items, bytes := len(q.items), q.bytes
+	q.forgetEssentials()
 	kept := q.items[:0]
 	for _, m := range q.items {
 		tooMany := items > q.maxItems || bytes > q.hardBytes
@@ -212,6 +292,7 @@ func (q *queue) shedToHardLimits() {
 			continue
 		}
 		kept = append(kept, m)
+		q.trackEssential(m, len(kept)-1)
 	}
 	for i := len(kept); i < len(q.items); i++ {
 		q.items[i] = nil
@@ -238,6 +319,14 @@ func (q *queue) pop(ctx context.Context) (*Message, bool) {
 			m := q.items[0]
 			q.items[0] = nil
 			q.items = q.items[1:]
+			// Los índices son relativos a la porción viva de la cola: al salir el
+			// primero, todos se corren uno. El del esencial que acaba de salir cae a -1,
+			// que es justo el valor de "ninguno encolado".
+			for i := range q.ess {
+				if q.ess[i] >= 0 {
+					q.ess[i]--
+				}
+			}
 			q.bytes -= len(m.Payload)
 			if m.Kind == KindVideo && !essential(m) {
 				q.videoItems--
@@ -271,6 +360,7 @@ func (q *queue) close() {
 	q.items = nil
 	q.bytes = 0
 	q.videoItems = 0
+	q.forgetEssentials()
 	q.mu.Unlock()
 
 	q.wake()
