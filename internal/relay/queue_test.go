@@ -2,6 +2,9 @@ package relay
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -407,41 +410,170 @@ func TestQueueVideoCounterStaysConsistent(t *testing.T) {
 	}
 }
 
-// La integridad del GOP se mantiene incluso bajo el límite duro: nunca puede quedar un
-// frame intermedio delante de su keyframe, porque el destino lo decodificaría como bloques.
-func TestQueueHardLimitPreservesGOPIntegrity(t *testing.T) {
-	q := newQueue(queueConfig{MaxBytes: 4000, MaxSpan: 1_000_000, MaxItems: 200})
-	defer q.close()
+// --- Etiquetado (gop, seq) de los frames de vídeo del test --------------------
+//
+// Cada frame de vídeo del test lleva su identidad dentro del payload, en una cabecera de
+// 8 bytes: `gop` es el índice del keyframe que abre el grupo y `seq` la posición dentro
+// de él, con el keyframe en `seq == 0`. La aserción de integridad necesita saber a qué
+// GOP pertenece cada superviviente, y el orden de llegada no basta: un frame huérfano a
+// mitad del flujo solo se distingue si el propio frame dice de qué keyframe depende.
 
-	// Patrón realista: keyframe cada 30 frames, audio intercalado.
-	ts := uint32(0)
-	for gop := 0; gop < 200; gop++ {
-		for f := 0; f < 30; f++ {
-			if f == 0 {
-				q.push(vKey(ts, 500))
-			} else {
-				q.push(vInter(ts, 200))
-			}
-			if f%3 == 0 {
-				q.push(aRaw(ts, 40))
-			}
-			ts += 33
+// gopTagLen son los bytes de cabecera que ocupan (gop, seq) al principio del payload.
+const gopTagLen = 8
+
+// taggedVideo construye un frame de vídeo de `size` bytes etiquetado con (gop, seq).
+func taggedVideo(gop, seq uint32, ts uint32, size int) *Message {
+	if size < gopTagLen {
+		size = gopTagLen
+	}
+	p := make([]byte, size)
+	binary.BigEndian.PutUint32(p[0:4], gop)
+	binary.BigEndian.PutUint32(p[4:8], seq)
+	return &Message{Kind: KindVideo, Timestamp: ts, Payload: p, IsKeyframe: seq == 0}
+}
+
+// gopTag lee la etiqueta de un frame construido con taggedVideo.
+func gopTag(t *testing.T, m *Message) (gop, seq uint32) {
+	t.Helper()
+	if len(m.Payload) < gopTagLen {
+		t.Fatalf("frame de vídeo sin etiqueta (%d bytes): ¿se coló un mensaje no etiquetado?", len(m.Payload))
+	}
+	return binary.BigEndian.Uint32(m.Payload[0:4]), binary.BigEndian.Uint32(m.Payload[4:8])
+}
+
+// popSome saca hasta n mensajes sin bloquear si la cola se queda vacía.
+func popSome(t *testing.T, q *queue, n int) []*Message {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var out []*Message
+	for i := 0; i < n; i++ {
+		q.mu.Lock()
+		empty := len(q.items) == 0
+		q.mu.Unlock()
+		if empty {
+			return out
+		}
+		m, ok := q.pop(ctx)
+		if !ok {
+			return out
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// runTaggedStream empuja un flujo realista y lo consume más despacio de lo que lo produce,
+// que es la situación que crea la presión: GOPs de longitud variable que empiezan por un
+// keyframe grande y siguen con frames P de tamaños dispares, con audio intercalado. Nada
+// de tamaños uniformes, porque el descarte depende de los bytes y un patrón regular puede
+// esconder justo el caso que rompe.
+//
+// Devuelve, EN ORDEN, todo lo que salió de la cola: lo consumido durante la ejecución más
+// lo que quedó dentro al final. Consumir es imprescindible para que el test signifique
+// algo: sin consumidor la cola se queda clavada en su límite y cada push tira el vídeo
+// recién encolado, así que no sobreviviría ningún frame P que comprobar.
+func runTaggedStream(t *testing.T, q *queue, seed int64, gops int) []*Message {
+	t.Helper()
+	rng := rand.New(rand.NewSource(seed))
+
+	var delivered []*Message
+	pushed := 0
+	push := func(m *Message) {
+		q.push(m)
+		pushed++
+		// Se consume menos de lo que se produce: la cola crece, pero oscila en torno a
+		// sus límites en vez de quedarse pegada a ellos.
+		if pushed%4 == 0 {
+			delivered = append(delivered, popSome(t, q, 3)...)
 		}
 	}
 
-	got := drain(t, q)
-	var seenKeyframe bool
-	for i, m := range got {
-		if m.Kind != KindVideo || m.IsSeqHeader {
-			continue
+	ts := uint32(0)
+	for gop := 0; gop < gops; gop++ {
+		frames := 15 + rng.Intn(30)
+		for f := 0; f < frames; f++ {
+			if f == 0 {
+				push(taggedVideo(uint32(gop), 0, ts, 400+rng.Intn(1200)))
+			} else {
+				push(taggedVideo(uint32(gop), uint32(f), ts, 40+rng.Intn(600)))
+			}
+			if rng.Intn(3) == 0 {
+				push(aRaw(ts, 20+rng.Intn(80)))
+			}
+			ts += uint32(15 + rng.Intn(30))
 		}
-		if m.IsKeyframe {
-			seenKeyframe = true
-			continue
-		}
-		if !seenKeyframe {
-			t.Fatalf("el mensaje %d es un inter frame (ts=%d) sin keyframe previo: el destino vería bloques",
-				i, m.Timestamp)
+	}
+
+	return append(delivered, drain(t, q)...)
+}
+
+// La integridad del GOP se mantiene bajo cualquiera de los límites: ningún frame P llega
+// nunca sin el keyframe que lo abre, esté donde esté en el flujo. Si un frame con seq > 0
+// sale de la cola y el (gop, 0) de su grupo se descartó, el destino decodifica bloques
+// corruptos hasta el siguiente IDR — que es exactamente lo que el descarte por GOP existe
+// para evitar.
+func TestQueueHardLimitPreservesGOPIntegrity(t *testing.T) {
+	// Los perfiles cubren qué límite es el que ata en cada caso. El de ítems importa
+	// especialmente: es el único que llega al nivel duro SIN pasar antes por el blando,
+	// porque hardBytes es un múltiplo de maxBytes y por bytes el blando siempre dispara
+	// primero. Ahí es donde un recorte por antigüedad dejaría huérfanos.
+	profiles := []struct {
+		name string
+		cfg  queueConfig
+	}{
+		{"duro-por-items", queueConfig{MaxBytes: 8 << 20, MaxSpan: 1_000_000, MaxItems: 200}},
+		{"duro-por-items-apretado", queueConfig{MaxBytes: 8 << 20, MaxSpan: 1_000_000, MaxItems: 37}},
+		{"blando-por-bytes", queueConfig{MaxBytes: 4000, MaxSpan: 1_000_000, MaxItems: 1 << 20}},
+		{"blando-y-duro-juntos", queueConfig{MaxBytes: 4000, MaxSpan: 1_000_000, MaxItems: 200}},
+		{"por-duracion", queueConfig{MaxBytes: 8 << 20, MaxSpan: 400, MaxItems: 500}},
+	}
+	seeds := []int64{1, 7, 42, 20260902}
+
+	for _, p := range profiles {
+		for _, seed := range seeds {
+			t.Run(fmt.Sprintf("%s/semilla-%d", p.name, seed), func(t *testing.T) {
+				q := newQueue(p.cfg)
+				defer q.close()
+
+				q.push(metaMsg())
+				q.push(vSeq())
+
+				got := runTaggedStream(t, q, seed, 120)
+
+				// Recorrido en orden: un keyframe abre su GOP, y a partir de ahí sus
+				// frames P son legítimos. Un frame P cuyo keyframe no haya salido antes
+				// es un huérfano, tanto si el keyframe se descartó como si el orden se
+				// alteró.
+				opened := map[uint32]bool{}
+				var keys, inter int
+				for i, m := range got {
+					if m.Kind != KindVideo || m.IsSeqHeader {
+						continue
+					}
+					gop, seq := gopTag(t, m)
+					if seq == 0 {
+						opened[gop] = true
+						keys++
+						continue
+					}
+					inter++
+					if !opened[gop] {
+						t.Fatalf("el mensaje %d es el frame (gop=%d, seq=%d, ts=%d) y su keyframe (gop=%d, seq=0) no sobrevivió: el destino vería bloques",
+							i, gop, seq, m.Timestamp, gop)
+					}
+				}
+
+				// Guardias contra una aserción vacía: sin descartes, sin keyframes o sin
+				// frames P el test no habría comprobado nada.
+				if q.dropped() == 0 {
+					t.Fatal("el perfil no descartó nada: no llega a ejercitar la integridad bajo presión")
+				}
+				if keys == 0 || inter == 0 {
+					t.Fatalf("keyframes=%d frames P=%d: la aserción sería vacía", keys, inter)
+				}
+			})
 		}
 	}
 }
