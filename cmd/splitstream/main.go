@@ -195,8 +195,11 @@ func run(ctx context.Context, out io.Writer) error {
 		}
 	}()
 
-	logger.Info("splitstream arrancado", "config", cfg,
-		"ingest_app", settings.IngestApp, "ingest_key", settings.IngestKeyMask)
+	// Sin `ingest_key`: el spec §8 dice que las claves jamás aparecen en los logs, sin
+	// matices, y eso incluye la máscara con los últimos 4 caracteres, que es para la
+	// interfaz —otra superficie, con otro control de acceso—. `ingest_app` no es secreto
+	// y se queda.
+	logger.Info("splitstream arrancado", "config", cfg, "ingest_app", settings.IngestApp)
 
 	<-ctx.Done()
 	logger.Info("apagando")
