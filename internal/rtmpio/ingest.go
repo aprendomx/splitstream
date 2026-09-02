@@ -48,9 +48,11 @@ type Ingest struct {
 	handler IngestHandler
 	log     *slog.Logger
 
-	mu  sync.Mutex
-	srv *rtmp.Server
-	ln  net.Listener
+	mu     sync.Mutex
+	srv    *rtmp.Server
+	ln     net.Listener
+	conns  map[net.Conn]struct{}
+	closed bool
 }
 
 // NewIngest construye el servidor sin escuchar todavía.
@@ -60,6 +62,30 @@ func NewIngest(cfg IngestConfig) *Ingest {
 		log = slog.Default()
 	}
 	return &Ingest{addr: cfg.Addr, handler: cfg.Handler, log: log}
+}
+
+// track registra una conexión aceptada. go-rtmp no lleva ese registro, y sin él su
+// Server.Close() solo cierra el listener y deja publicando a quien ya estaba dentro.
+func (i *Ingest) track(c net.Conn) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.closed {
+		// Llegó tarde: el servidor ya estaba cerrando.
+		c.Close()
+		return
+	}
+	if i.conns == nil {
+		i.conns = make(map[net.Conn]struct{})
+	}
+	i.conns[c] = struct{}{}
+}
+
+// untrack olvida una conexión que ya terminó por su cuenta, para que el mapa no crezca
+// sin límite a lo largo de una ejecución larga.
+func (i *Ingest) untrack(c net.Conn) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	delete(i.conns, c)
 }
 
 // ListenAndServe escucha en la dirección configurada y atiende hasta que se cierre.
@@ -75,8 +101,13 @@ func (i *Ingest) ListenAndServe() error {
 func (i *Ingest) Serve(ln net.Listener) error {
 	srv := rtmp.NewServer(&rtmp.ServerConfig{
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *rtmp.ConnConfig) {
+			i.track(conn)
 			return conn, &rtmp.ConnConfig{
-				Handler: &ingestConn{handler: i.handler, log: i.log},
+				Handler: &ingestConn{
+					handler: i.handler,
+					log:     i.log,
+					onClose: func() { i.untrack(conn) },
+				},
 			}
 		},
 	})
@@ -89,15 +120,37 @@ func (i *Ingest) Serve(ln net.Listener) error {
 	return srv.Serve(ln)
 }
 
-// Close deja de aceptar conexiones y cierra las abiertas.
+// Close deja de aceptar conexiones y cierra las que ya estaban abiertas.
+//
+// Lo segundo hay que hacerlo a mano: rtmp.Server.Close() de go-rtmp v0.0.7 solo cierra el
+// listener y no rastrea las conexiones aceptadas, así que sin esto un OBS conectado
+// seguiría publicando contra un proceso que ya se cree cerrado, y el handler nunca
+// recibiría su OnPublishEnd.
 func (i *Ingest) Close() error {
 	i.mu.Lock()
-	srv := i.srv
-	i.mu.Unlock()
-	if srv == nil {
+	if i.closed {
+		i.mu.Unlock()
 		return nil
 	}
-	return srv.Close()
+	i.closed = true
+	srv := i.srv
+	conns := make([]net.Conn, 0, len(i.conns))
+	for c := range i.conns {
+		conns = append(conns, c)
+	}
+	i.conns = nil
+	i.mu.Unlock()
+
+	var err error
+	if srv != nil {
+		err = srv.Close()
+	}
+	// Cerrar el socket hace que el bucle de lectura de go-rtmp falle, lo que dispara el
+	// OnClose del handler y, con él, el OnPublishEnd que el consumidor espera.
+	for _, c := range conns {
+		c.Close()
+	}
+	return err
 }
 
 // ingestConn atiende una conexión de publisher.
@@ -105,6 +158,7 @@ type ingestConn struct {
 	rtmp.DefaultHandler
 	handler IngestHandler
 	log     *slog.Logger
+	onClose func()
 
 	app        string
 	publishing bool
@@ -169,6 +223,9 @@ func (c *ingestConn) OnClose() {
 		c.handler.OnPublishEnd()
 	}
 	c.log.Info("publisher desconectado", "app", c.app)
+	if c.onClose != nil {
+		c.onClose()
+	}
 }
 
 // classifyVideo convierte un tag de video en un relay.Message, rechazando lo que no se

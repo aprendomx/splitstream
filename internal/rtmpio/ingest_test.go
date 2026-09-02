@@ -1,10 +1,14 @@
 package rtmpio
 
 import (
+	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/relay"
 )
 
@@ -129,5 +133,78 @@ func TestClassifyCopiesPayload(t *testing.T) {
 	src[2] = 0xFF
 	if msg.Payload[2] == 0xFF {
 		t.Error("el mensaje comparte memoria con el buffer de origen: hay que copiar")
+	}
+}
+
+// Close debe cortar de verdad las publicaciones en curso, no solo dejar de aceptar
+// conexiones nuevas: en un SIGTERM, un OBS conectado no puede quedarse publicando
+// contra un proceso que ya se cree cerrado.
+func TestCloseTerminatesActivePublish(t *testing.T) {
+	rec := &recorder{}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: rec})
+	go ing.Serve(ln)
+	defer ing.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	pub, err := NewPublisher(PublisherConfig{
+		URL:       "rtmp://" + ln.Addr().String() + "/live",
+		StreamKey: crypto.Secret("clave"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	defer pub.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pub.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Confirmar que la publicación está viva antes de cerrar.
+	if err := pub.WriteVideo(0, []byte{0x17, 0x01, 0x00}); err != nil {
+		t.Fatalf("WriteVideo antes de Close: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rec.mu.Lock()
+		starts := rec.starts
+		rec.mu.Unlock()
+		if starts > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := ing.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Tras Close, el handler debe recibir su OnPublishEnd sin que el publisher haga nada.
+	endDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(endDeadline) {
+		rec.mu.Lock()
+		ends := rec.ends
+		rec.mu.Unlock()
+		if ends > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("OnPublishEnd no se llamó tras Close: la conexión activa sobrevivió al cierre")
+}
+
+// Close sigue siendo seguro antes de Serve y llamado dos veces.
+func TestCloseIsSafeBeforeServeAndIdempotent(t *testing.T) {
+	ing := NewIngest(IngestConfig{Addr: "127.0.0.1:0", Handler: &recorder{}})
+	if err := ing.Close(); err != nil {
+		t.Errorf("Close antes de Serve = %v, quería nil", err)
+	}
+	if err := ing.Close(); err != nil {
+		t.Errorf("segundo Close = %v, quería nil", err)
 	}
 }
