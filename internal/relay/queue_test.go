@@ -745,3 +745,110 @@ func TestQueueSpanIgnoresTrailingEssential(t *testing.T) {
 		t.Errorf("span = %d, quería 500: el esencial del final no cuenta", span)
 	}
 }
+
+// sampleQueue mira dentro de la cola: cuántos esenciales hay de cada clase, cuántos ítems
+// y cuántos bytes. Es lo que permite medir DURANTE la ejecución y no solo al terminar.
+func sampleQueue(q *queue) (perClass [essClasses]int, items, bytes int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, m := range q.items {
+		if c := essentialClass(m); c >= 0 {
+			perClass[c]++
+		}
+	}
+	return perClass, len(q.items), q.bytes
+}
+
+// El régimen de producción: un sink consumiendo mientras la ingesta encola, con la cola
+// retenida (entra el doble de lo que sale). Los cuatro tests de dedupliación anteriores
+// empujaban sin consumir nunca, y ese régimen no ejercita la contabilidad de índices de
+// pop: quitar el decremento de q.ess[i] dejaba la suite entera verde mientras los
+// esenciales volvían a apilarse.
+//
+// La cota se comprueba en cada paso, no al final.
+func TestQueueStaysBoundedWithAConsumerRunning(t *testing.T) {
+	const maxItems, maxBytes = 64, 8192
+	q := newQueue(queueConfig{MaxBytes: maxBytes, MaxSpan: 1_000_000, MaxItems: maxItems})
+	defer q.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// El consumidor saca un mensaje por cada ficha. El productor le da una ficha cada dos
+	// mensajes encolados, así que la cola se queda con backlog permanente: es ahí donde
+	// los índices de los esenciales tienen que seguir siendo correctos.
+	tokens := make(chan struct{})
+	consumed := make(chan struct{})
+	go func() {
+		defer close(consumed)
+		for range tokens {
+			if _, ok := q.pop(ctx); !ok {
+				return
+			}
+		}
+	}()
+
+	audioSeq := func() *Message {
+		return &Message{Kind: KindAudio, Payload: []byte{0xAF, 0x00}, IsSeqHeader: true}
+	}
+
+	ts := uint32(0)
+	for i := 0; i < 4000; i++ {
+		// Esenciales de forma continuada, mezclados con la media que los rodea en
+		// producción.
+		switch i % 4 {
+		case 0:
+			q.push(metaSeq(i))
+		case 1:
+			q.push(vSeq())
+		case 2:
+			q.push(audioSeq())
+		case 3:
+			q.push(aRaw(ts, 120))
+		}
+		if i%5 == 0 {
+			q.push(vKey(ts, 300))
+		} else {
+			q.push(vInter(ts, 150))
+		}
+		ts += 33
+
+		tokens <- struct{}{} // dos dentro, uno fuera
+
+		perClass, items, bytes := sampleQueue(q)
+		for c, n := range perClass {
+			if n > 1 {
+				t.Fatalf("paso %d: hay %d esenciales de la clase %d en la cola; solo puede haber uno", i, n, c)
+			}
+		}
+		if items > maxItems {
+			t.Fatalf("paso %d: %d ítems con una cota de %d", i, items, maxItems)
+		}
+		if bytes > maxBytes*hardBytesFactor {
+			t.Fatalf("paso %d: %d bytes con un límite duro de %d", i, bytes, maxBytes*hardBytesFactor)
+		}
+	}
+
+	close(tokens)
+	<-consumed
+
+	// Y la garantía que no debía romperse: encolados los tres esenciales y saturada la
+	// cola sin consumir nada, siguen dentro. No se apilan, pero tampoco se descartan por
+	// presión.
+	q.push(metaSeq(1_000_000))
+	q.push(vSeq())
+	q.push(audioSeq())
+	for i := 0; i < 2000; i++ {
+		q.push(aRaw(ts, 200))
+		ts += 20
+	}
+	perClass, items, _ := sampleQueue(q)
+	for c, n := range perClass {
+		if n != 1 {
+			t.Errorf("tras saturar la cola hay %d esenciales de la clase %d, quería 1", n, c)
+		}
+	}
+	if items > maxItems {
+		t.Errorf("%d ítems al terminar, con una cota de %d", items, maxItems)
+	}
+}
