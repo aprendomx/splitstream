@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -21,17 +22,52 @@ const SchemaVersion = 1
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// DB es la base de datos del servicio.
-type DB struct {
-	db *sql.DB
+// execer abstrae *sql.DB y *sql.Tx: ambos exponen estos tres métodos. Permite que los
+// repositorios se compongan dentro de una transacción sin autobloquear la única conexión
+// que fija SetMaxOpenConns(1) (ver spec §15.1).
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// SQL expone el *sql.DB subyacente. Solo para tests y para los repositorios
-// de este paquete; el resto del programa usa los métodos tipados.
+// ErrNestedTransaction se devuelve al llamar a InTx dentro de otro InTx. Con una sola
+// conexión, anidar transacciones se bloquearía para siempre; es mejor un error claro.
+var ErrNestedTransaction = errors.New("transacción anidada: InTx no se puede anidar")
+
+// DB es la base de datos del servicio.
+type DB struct {
+	db *sql.DB // solo para abrir transacciones y cerrar
+	ex execer  // por donde salen todas las consultas: *sql.DB o *sql.Tx
+}
+
+// SQL expone el *sql.DB subyacente. Solo para tests y para los repositorios de este
+// paquete; el resto del programa usa los métodos tipados.
 func (d *DB) SQL() *sql.DB { return d.db }
 
 // Close cierra la base de datos.
 func (d *DB) Close() error { return d.db.Close() }
+
+// InTx ejecuta fn dentro de una transacción. El *DB que recibe fn enruta todas sus
+// consultas por esa transacción, así que llamar a los repositorios dentro es seguro.
+// Si fn devuelve error se hace rollback y se propaga; si no, se comitea.
+func (d *DB) InTx(ctx context.Context, fn func(*DB) error) error {
+	if _, ok := d.ex.(*sql.Tx); ok {
+		return ErrNestedTransaction
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("abrir transacción: %w", err)
+	}
+	if err := fn(&DB{db: d.db, ex: tx}); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("comitear transacción: %w", err)
+	}
+	return nil
+}
 
 // Open abre (o crea) la base en path, aplica los pragmas y corre las migraciones
 // pendientes. Es idempotente: reabrir una base ya migrada no toca los datos.
@@ -63,7 +99,7 @@ func Open(ctx context.Context, dbPath string) (*DB, error) {
 		return nil, err
 	}
 
-	return &DB{db: sqlDB}, nil
+	return &DB{db: sqlDB, ex: sqlDB}, nil
 }
 
 type migration struct {

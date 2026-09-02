@@ -42,7 +42,7 @@ func GenerateKey() (crypto.Secret, error) {
 // sea la misma master key que la cifró y devuelve crypto.ErrWrongMasterKey si no.
 func (d *DB) Bootstrap(ctx context.Context, c *crypto.Cipher) error {
 	var kcv []byte
-	err := d.db.QueryRowContext(ctx, `SELECT master_key_check FROM settings WHERE id = 1`).Scan(&kcv)
+	err := d.ex.QueryRowContext(ctx, `SELECT master_key_check FROM settings WHERE id = 1`).Scan(&kcv)
 	switch {
 	case err == nil:
 		return c.VerifyCheckValue(kcv)
@@ -64,7 +64,7 @@ func (d *DB) Bootstrap(ctx context.Context, c *crypto.Cipher) error {
 	}
 
 	now := nowRFC3339()
-	_, err = d.db.ExecContext(ctx,
+	_, err = d.ex.ExecContext(ctx,
 		`INSERT INTO settings
 		   (id, ingest_app, ingest_key_encrypted, ingest_key_last4, password_hash, master_key_check, created_at, updated_at)
 		 VALUES (1, 'live', ?, ?, '', ?, ?, ?)`,
@@ -82,7 +82,7 @@ func (d *DB) Settings(ctx context.Context) (*Settings, error) {
 		last4     string
 		updatedAt string
 	)
-	err := d.db.QueryRowContext(ctx,
+	err := d.ex.QueryRowContext(ctx,
 		`SELECT ingest_app, ingest_key_last4, password_hash, updated_at FROM settings WHERE id = 1`).
 		Scan(&s.IngestApp, &last4, &s.PasswordHash, &updatedAt)
 	if err != nil {
@@ -100,7 +100,7 @@ func (d *DB) Settings(ctx context.Context) (*Settings, error) {
 // RevealIngestKey descifra y devuelve la clave de ingesta en claro.
 func (d *DB) RevealIngestKey(ctx context.Context, c *crypto.Cipher) (crypto.Secret, error) {
 	var blob []byte
-	if err := d.db.QueryRowContext(ctx,
+	if err := d.ex.QueryRowContext(ctx,
 		`SELECT ingest_key_encrypted FROM settings WHERE id = 1`).Scan(&blob); err != nil {
 		return "", fmt.Errorf("leer clave de ingesta: %w", err)
 	}
@@ -121,7 +121,7 @@ func (d *DB) RotateIngestKey(ctx context.Context, c *crypto.Cipher) (crypto.Secr
 	if err != nil {
 		return "", fmt.Errorf("cifrar clave de ingesta: %w", err)
 	}
-	res, err := d.db.ExecContext(ctx,
+	res, err := d.ex.ExecContext(ctx,
 		`UPDATE settings SET ingest_key_encrypted = ?, ingest_key_last4 = ?, updated_at = ? WHERE id = 1`,
 		encrypted, key.Last4(), nowRFC3339())
 	if err != nil {
@@ -139,7 +139,7 @@ func (d *DB) RotateIngestKey(ctx context.Context, c *crypto.Cipher) (crypto.Secr
 
 // SetPasswordHash guarda el hash argon2id de la contraseña del panel.
 func (d *DB) SetPasswordHash(ctx context.Context, hash string) error {
-	res, err := d.db.ExecContext(ctx,
+	res, err := d.ex.ExecContext(ctx,
 		`UPDATE settings SET password_hash = ?, updated_at = ? WHERE id = 1`,
 		hash, nowRFC3339())
 	if err != nil {

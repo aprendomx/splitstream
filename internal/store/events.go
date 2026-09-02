@@ -57,7 +57,7 @@ type Event struct {
 
 // StartSession abre una sesión y devuelve su id.
 func (d *DB) StartSession(ctx context.Context) (int64, error) {
-	res, err := d.db.ExecContext(ctx,
+	res, err := d.ex.ExecContext(ctx,
 		`INSERT INTO sessions (started_at) VALUES (?)`, nowRFC3339())
 	if err != nil {
 		return 0, fmt.Errorf("iniciar sesión: %w", err)
@@ -71,7 +71,7 @@ func (d *DB) StartSession(ctx context.Context) (int64, error) {
 
 // FinishSession cierra la sesión y guarda lo que se midió del ingest.
 func (d *DB) FinishSession(ctx context.Context, id int64, width, height, bitrateBPS int) error {
-	res, err := d.db.ExecContext(ctx,
+	res, err := d.ex.ExecContext(ctx,
 		`UPDATE sessions SET ended_at = ?, width = ?, height = ?, bitrate_bps = ? WHERE id = ?`,
 		nowRFC3339(), width, height, bitrateBPS, id)
 	if err != nil {
@@ -95,7 +95,7 @@ func (d *DB) LogEvent(ctx context.Context, e Event) (int64, error) {
 	if e.Kind == "" {
 		return 0, fmt.Errorf("el evento necesita un kind")
 	}
-	res, err := d.db.ExecContext(ctx,
+	res, err := d.ex.ExecContext(ctx,
 		`INSERT INTO events (session_id, destination_id, level, kind, message, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		e.SessionID, e.DestinationID, string(e.Level), e.Kind, e.Message, nowRFC3339())
@@ -118,7 +118,7 @@ func (d *DB) RecentEvents(ctx context.Context, limit int) ([]Event, error) {
 		limit = maxEventLimit
 	}
 
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.ex.QueryContext(ctx,
 		`SELECT id, session_id, destination_id, level, kind, message, created_at
 		 FROM events ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {

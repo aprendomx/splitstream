@@ -70,7 +70,7 @@ type DestinationPatch struct {
 
 // ListDestinations devuelve todos los destinos ordenados por sort_order.
 func (d *DB) ListDestinations(ctx context.Context) ([]Destination, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.ex.QueryContext(ctx,
 		`SELECT id, name, platform, rtmp_url, stream_key_last4, enabled, sort_order, created_at, updated_at
 		 FROM destinations ORDER BY sort_order, id`)
 	if err != nil {
@@ -110,13 +110,13 @@ func (d *DB) CreateDestination(ctx context.Context, c *crypto.Cipher, in NewDest
 	}
 
 	var next int
-	if err := d.db.QueryRowContext(ctx,
+	if err := d.ex.QueryRowContext(ctx,
 		`SELECT coalesce(max(sort_order), -1) + 1 FROM destinations`).Scan(&next); err != nil {
 		return nil, fmt.Errorf("calcular sort_order: %w", err)
 	}
 
 	now := nowRFC3339()
-	res, err := d.db.ExecContext(ctx,
+	res, err := d.ex.ExecContext(ctx,
 		`INSERT INTO destinations
 		   (name, platform, rtmp_url, stream_key_encrypted, stream_key_last4, enabled, sort_order, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -179,7 +179,7 @@ func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, 
 		sets = append(sets, "updated_at = ?")
 		args = append(args, nowRFC3339(), id)
 		query := "UPDATE destinations SET " + joinComma(sets) + " WHERE id = ?"
-		if _, err := d.db.ExecContext(ctx, query, args...); err != nil {
+		if _, err := d.ex.ExecContext(ctx, query, args...); err != nil {
 			return nil, fmt.Errorf("actualizar destino: %w", err)
 		}
 	}
@@ -189,7 +189,7 @@ func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, 
 // DeleteDestination borra el destino. Los eventos asociados sobreviven con
 // destination_id a NULL.
 func (d *DB) DeleteDestination(ctx context.Context, id int64) error {
-	res, err := d.db.ExecContext(ctx, `DELETE FROM destinations WHERE id = ?`, id)
+	res, err := d.ex.ExecContext(ctx, `DELETE FROM destinations WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("borrar destino: %w", err)
 	}
@@ -205,45 +205,42 @@ func (d *DB) DeleteDestination(ctx context.Context, id int64) error {
 
 // ReorderDestinations fija el orden a partir de la secuencia de ids recibida.
 // Exige exactamente el conjunto completo de destinos existentes, sin repetidos y sin
-// omisiones: validar solo la longitud dejaría pasar una lista con un id duplicado, que
+// omisiones. Validar solo la longitud dejaría pasar una lista con un id duplicado, que
 // dejaría sort_order empatados en silencio.
 func (d *DB) ReorderDestinations(ctx context.Context, ids []int64) error {
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("reordenar: %w", err)
-	}
-	defer tx.Rollback()
-
-	existing, err := destinationIDs(ctx, tx)
-	if err != nil {
-		return err
-	}
-
-	seen := make(map[int64]bool, len(ids))
-	for _, id := range ids {
-		if seen[id] {
-			return fmt.Errorf("reordenar: el id %d aparece más de una vez", id)
+	return d.InTx(ctx, func(tx *DB) error {
+		existing, err := tx.destinationIDs(ctx)
+		if err != nil {
+			return err
 		}
-		if !existing[id] {
-			return fmt.Errorf("reordenar: %w (id %d)", ErrDestinationNotFound, id)
-		}
-		seen[id] = true
-	}
-	if len(seen) != len(existing) {
-		return fmt.Errorf("reordenar exige los %d destinos, se recibieron %d", len(existing), len(seen))
-	}
 
-	for i, id := range ids {
-		if _, err := tx.ExecContext(ctx, `UPDATE destinations SET sort_order = ? WHERE id = ?`, i, id); err != nil {
-			return fmt.Errorf("reordenar: %w", err)
+		seen := make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			if seen[id] {
+				return fmt.Errorf("reordenar: el id %d aparece más de una vez", id)
+			}
+			if !existing[id] {
+				return fmt.Errorf("reordenar: %w (id %d)", ErrDestinationNotFound, id)
+			}
+			seen[id] = true
 		}
-	}
-	return tx.Commit()
+		if len(seen) != len(existing) {
+			return fmt.Errorf("reordenar exige los %d destinos, se recibieron %d", len(existing), len(seen))
+		}
+
+		for i, id := range ids {
+			if _, err := tx.ex.ExecContext(ctx,
+				`UPDATE destinations SET sort_order = ? WHERE id = ?`, i, id); err != nil {
+				return fmt.Errorf("reordenar: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // destinationIDs devuelve el conjunto de ids de destino existentes.
-func destinationIDs(ctx context.Context, tx *sql.Tx) (map[int64]bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM destinations`)
+func (d *DB) destinationIDs(ctx context.Context) (map[int64]bool, error) {
+	rows, err := d.ex.QueryContext(ctx, `SELECT id FROM destinations`)
 	if err != nil {
 		return nil, fmt.Errorf("reordenar: %w", err)
 	}
@@ -267,7 +264,7 @@ func destinationIDs(ctx context.Context, tx *sql.Tx) (map[int64]bool, error) {
 // Es el único camino para obtenerla; quien lo llame debe registrar un evento.
 func (d *DB) RevealDestinationKey(ctx context.Context, c *crypto.Cipher, id int64) (crypto.Secret, error) {
 	var blob []byte
-	err := d.db.QueryRowContext(ctx,
+	err := d.ex.QueryRowContext(ctx,
 		`SELECT stream_key_encrypted FROM destinations WHERE id = ?`, id).Scan(&blob)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrDestinationNotFound
@@ -283,7 +280,7 @@ func (d *DB) RevealDestinationKey(ctx context.Context, c *crypto.Cipher, id int6
 }
 
 func (d *DB) destination(ctx context.Context, id int64) (*Destination, error) {
-	row := d.db.QueryRowContext(ctx,
+	row := d.ex.QueryRowContext(ctx,
 		`SELECT id, name, platform, rtmp_url, stream_key_last4, enabled, sort_order, created_at, updated_at
 		 FROM destinations WHERE id = ?`, id)
 	dest, err := scanDestination(row)
