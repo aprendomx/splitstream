@@ -9,11 +9,18 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
+
+	"github.com/aprendomx/splitstream/internal/crypto"
 )
 
 const (
@@ -94,4 +101,116 @@ func (s *sessionSigner) sign(payload string) string {
 	mac := hmac.New(sha256.New, s.key)
 	mac.Write([]byte(payload))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// loginLimiter acota los intentos de login por IP.
+//
+// Sin esto, la contraseña del panel se puede probar a fuerza bruta tan rápido como aguante
+// el argon2id, que es lento pero no infinitamente. El límite es generoso a propósito: debe
+// molestar a un script, no a alguien que se equivoca dos veces al escribir.
+type loginLimiter struct {
+	mu  sync.Mutex
+	por map[string]*rate.Limiter
+}
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{por: make(map[string]*rate.Limiter)}
+}
+
+// allow consume un intento. Ráfaga de 5 y reposición de uno cada 10 s.
+func (l *loginLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	lim, ok := l.por[ip]
+	if !ok {
+		lim = rate.NewLimiter(rate.Every(10*time.Second), 5)
+		l.por[ip] = lim
+	}
+	return lim.Allow()
+}
+
+type loginRequest struct {
+	Password string `json:"password"`
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow(clientIP(r)) {
+		writeError(w, http.StatusTooManyRequests, codeRateLimited,
+			"demasiados intentos; espera un momento")
+		return
+	}
+
+	var req loginRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidInput, "cuerpo JSON inválido")
+		return
+	}
+
+	settings, err := s.db.Settings(r.Context())
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	if settings.PasswordHash == "" {
+		writeError(w, http.StatusConflict, codeConflict,
+			"no hay contraseña configurada: ejecuta `splitstream -setpassword`")
+		return
+	}
+
+	ok, err := crypto.VerifyPassword(settings.PasswordHash, req.Password)
+	if err != nil {
+		s.logger.Error("no se pudo verificar la contraseña", "err", err)
+		writeError(w, http.StatusInternalServerError, codeInternal, "error interno")
+		return
+	}
+	if !ok {
+		// Se registra el intento pero NO la contraseña probada (spec §8).
+		s.logger.Warn("intento de login fallido", "ip", clientIP(r))
+		writeError(w, http.StatusUnauthorized, codeUnauthorized, "contraseña incorrecta")
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    s.signer.issue(time.Now()),
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   s.secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(sessionTTL.Seconds()),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   s.secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// requireSession exige una cookie de sesión válida.
+//
+// Todas las respuestas de fallo son el mismo 401 sin detalle: distinguir "no hay cookie"
+// de "la firma no cuadra" de "caducó" solo le sirve a quien está probando.
+func (s *Server) requireSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie(sessionCookieName)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, codeUnauthorized, "sesión requerida")
+			return
+		}
+		if err := s.signer.verify(c.Value, time.Now()); err != nil {
+			writeError(w, http.StatusUnauthorized, codeUnauthorized, "sesión requerida")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

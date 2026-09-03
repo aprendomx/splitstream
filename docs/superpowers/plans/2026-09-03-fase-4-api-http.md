@@ -1586,7 +1586,7 @@ sesión, y los dos endpoints de autenticación con su limitador de intentos.
   - `func (s *Server) requireSession(next http.Handler) http.Handler`
   Las tasks 8, 9 y 10 cuelgan sus handlers de este mux y usan estos tres ayudantes.
 
-- [ ] **Step 1: Añadir la dependencia del limitador**
+- [x] **Step 1: Añadir la dependencia del limitador**
 
 ```bash
 go get golang.org/x/time@latest
@@ -1599,7 +1599,7 @@ en el bloque de directas de `go.mod` y que no entró nada más:
 git diff go.mod
 ```
 
-- [ ] **Step 2: Escribir el test de la forma de los errores**
+- [x] **Step 2: Escribir el test de la forma de los errores**
 
 Crea `internal/httpapi/errors_test.go`:
 
@@ -1710,12 +1710,12 @@ func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Disca
 Va aquí y no en `login_test.go` porque este archivo se escribe antes: si lo definieras allí,
 el paquete no compilaría entre el Step 2 y el Step 5.
 
-- [ ] **Step 3: Ejecutar el test y verificar que falla**
+- [x] **Step 3: Ejecutar el test y verificar que falla**
 
 Run: `go test ./internal/httpapi/ -run 'Error' -v`
 Expected: FAIL por `undefined: writeError`, `undefined: Server`.
 
-- [ ] **Step 4: Implementar los errores**
+- [x] **Step 4: Implementar los errores**
 
 Crea `internal/httpapi/errors.go`:
 
@@ -1791,7 +1791,7 @@ Los mensajes de `ErrNotFound`, `ErrInvalidInput` y `ErrConflict` sí van al clie
 textos que escribimos nosotros para explicar qué tiene de malo la petición, y no llevan
 estado interno. El del 500 no.
 
-- [ ] **Step 5: Escribir el test del login**
+- [x] **Step 5: Escribir el test del login**
 
 Crea `internal/httpapi/login_test.go`:
 
@@ -2073,12 +2073,12 @@ existan ya. Regístralas todas en el mux desde esta tarea; las que aún no tiene
 propio se enganchan a uno que devuelve `501 Not Implemented`, y cada task posterior lo
 sustituye por el suyo. Así la lista de rutas y la de permisos se escriben una sola vez.
 
-- [ ] **Step 6: Ejecutar los tests y verificar que fallan**
+- [x] **Step 6: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/httpapi/ -v`
 Expected: FAIL por `undefined: New`, `undefined: Config`, `undefined: Server`.
 
-- [ ] **Step 7: Implementar el servidor**
+- [x] **Step 7: Implementar el servidor**
 
 Crea `internal/httpapi/server.go`:
 
@@ -2241,7 +2241,7 @@ func clientIP(r *http.Request) string {
 1.22 sin ambigüedad: los patrones literales ganan a los que tienen wildcard. Compruébalo —
 si `reorder` acabara entrando por el handler de `{id}`, el test de la Task 8 lo cazará.
 
-- [ ] **Step 8: Implementar login, logout y el middleware**
+- [x] **Step 8: Implementar login, logout y el middleware**
 
 Añade a `internal/httpapi/auth.go`:
 
@@ -2362,15 +2362,19 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 Añade a los imports de `auth.go`: `encoding/json`, `net/http`, `sync`,
 `golang.org/x/time/rate` y el paquete `crypto` del proyecto.
 
-- [ ] **Step 9: Ejecutar los tests y verificar que pasan**
+- [x] **Step 9: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/httpapi/ -race -count=1 -v`
-Expected: PASS todos menos `TestSessionCookieOpensTheDoor`, que espera 200 de
-`GET /api/destinations` y de momento recibe 501. Ajusta ese test para aceptar 501 **con un
-comentario que diga que la Task 8 lo sube a 200**, y súbelo cuando llegues ahí. No lo
-borres: es el único test del camino feliz de la sesión.
+Expected: PASS. `TestSessionCookieOpensTheDoor` se escribe exigiendo 501 y comprobando
+que **no** es 401 —lo que prueba hoy es que la sesión pasa el middleware, no que el
+endpoint funcione—, con un comentario que dice que la Task 8 lo sube a 200. No lo borres:
+es el único test del camino feliz de la sesión.
 
-- [ ] **Step 10: Commit**
+> **Nota al ejecutar.** `go get golang.org/x/time@latest` la añade como **indirecta**,
+> porque en ese momento nadie la importa todavía. Como `go mod tidy` está prohibido, hay
+> que mover la línea al bloque de directas a mano después de escribir el import.
+
+- [x] **Step 10: Commit**
 
 ```bash
 git add internal/httpapi/ go.mod go.sum
