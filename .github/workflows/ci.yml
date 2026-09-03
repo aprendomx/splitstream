@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+# Una corrida por rama: un push encima del anterior cancela el que ya no interesa.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Lo que no necesita ni Docker ni red. Es la barrera rápida.
+  test:
+    name: vet, build y tests con -race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # La versión sale de go.mod: una sola fuente de verdad.
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      # CGO_ENABLED=0 como en el Makefile: el binario de producción es estático.
+      - name: build estático
+        run: CGO_ENABLED=0 go build -o /dev/null ./cmd/splitstream
+
+      # El detector de carreras necesita cgo, así que aquí NO se desactiva.
+      - name: tests con -race
+        run: go test ./... -race -count=1
+
+      # El motor no debe conocer ni la librería RTMP ni la base de datos (spec §6).
+      # Es una propiedad de la arquitectura, y sin esto se rompe sin que nadie se entere.
+      - name: internal/relay sigue aislado
+        run: |
+          if go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'; then
+            echo "::error::internal/relay importa go-rtmp o database/sql"
+            exit 1
+          fi
+
+  # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
+  integration:
+    name: integración contra mediamtx
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: instalar ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: levantar los sinks
+        run: make sinks-up
+
+      # Los tests se SALTAN si no hay sink escuchando, así que sin esta espera la CI
+      # podría ponerse verde sin haber probado nada. El paso siguiente lo comprueba
+      # otra vez sobre la salida, por si el sink se cayera entre medias.
+      - name: esperar a que los sinks acepten conexiones
+        run: |
+          for port in 19351 19352; do
+            for i in $(seq 1 30); do
+              if timeout 1 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+                echo "sink en :$port listo tras ${i}s"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "::error::el sink de :$port no aceptó conexiones en 30 s"
+                docker compose -f deploy/test-compose.yml logs
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+
+      - name: tests de integración
+        run: |
+          set -o pipefail
+          go test -tags integration ./test/integration/ -v -count=1 -timeout 15m 2>&1 | tee integration.log
+
+      # Un test saltado no prueba nada, pero deja la corrida en verde. Aquí se convierte
+      # en fallo, y además se exige que los tres hayan pasado de verdad.
+      - name: ningún test se saltó
+        run: |
+          if grep -q -- '--- SKIP' integration.log; then
+            echo "::error::algún test de integración se saltó; no hubo sink"
+            grep -- '--- SKIP' integration.log
+            exit 1
+          fi
+          passed=$(grep -c -- '--- PASS' integration.log || true)
+          if [ "$passed" -lt 3 ]; then
+            echo "::error::se esperaban 3 tests de integración, pasaron $passed"
+            exit 1
+          fi
+          echo "$passed tests de integración pasaron"
+
+      - name: logs de los sinks si algo falló
+        if: failure()
+        run: docker compose -f deploy/test-compose.yml logs
+
+      - name: apagar los sinks
+        if: always()
+        run: make sinks-down
