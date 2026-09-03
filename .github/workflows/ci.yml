@@ -132,7 +132,12 @@ jobs:
           echo "los certificados raíz están en la imagen"
 
       - name: la unidad de systemd es válida
-        run: systemd-analyze verify deploy/splitstream.service
+        run: |
+          # systemd-analyze comprueba que el ExecStart exista, y aquí no hay binario
+          # instalado. Se pone un marcador: lo que se valida es la sintaxis de la unidad y
+          # sus directivas de endurecimiento, no que el programa esté puesto.
+          sudo install -m 755 /bin/true /usr/local/bin/splitstream
+          systemd-analyze verify deploy/splitstream.service
 
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:
