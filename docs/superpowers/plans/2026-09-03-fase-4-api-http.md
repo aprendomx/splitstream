@@ -125,7 +125,7 @@ finales** de la fracción. Eso rompe el orden: `"2026-09-02T10:00:00.5Z"` y
   `updated_at`, `started_at` y `ended_at` pasa a coincidir con el cronológico, que es de lo
   que dependen `RecentEvents` (Task 9) y cualquier `ORDER BY` sobre esas columnas.
 
-- [ ] **Step 1: Escribir los tests que fallan**
+- [x] **Step 1: Escribir los tests que fallan**
 
 Los tests de `internal/store` son **todos externos** (`package store_test`): el paquete se
 prueba por su API pública. Esta tarea es la excepción justificada y necesita **dos**
@@ -352,7 +352,7 @@ func primerEvento(t *testing.T, db *store.DB) string {
 `openTemp(t)` ya existe en `internal/store/db_test.go:12` y devuelve un `*store.DB` con
 `Cleanup` puesto: úsalo tal cual.
 
-- [ ] **Step 2: Ejecutar los tests y verificar que fallan**
+- [x] **Step 2: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/store/ -run 'FormatTime|Migration0002|FixedWidth' -v`
 Expected: los cuatro internos fallan a compilar por `undefined: formatTime`. Para ver el
@@ -363,7 +363,7 @@ string { return t.UTC().Format(time.RFC3339Nano) }` y vuelve a correr:
 detectan el bug. `TestMigration0002RewritesExistingRows` fallará en su `t.Fatalf` de
 reproducción si el bug no está presente, así que también sirve de comprobación cruzada.
 
-- [ ] **Step 3: Implementar el formato de ancho fijo**
+- [x] **Step 3: Implementar el formato de ancho fijo**
 
 En `internal/store/settings.go`, sustituye la línea 162 por:
 
@@ -386,7 +386,7 @@ func formatTime(t time.Time) string { return t.UTC().Format(timeLayout) }
 func nowRFC3339() string { return formatTime(time.Now()) }
 ```
 
-- [ ] **Step 4: Escribir la migración de datos**
+- [x] **Step 4: Escribir la migración de datos**
 
 El runner (`internal/store/db.go:128`) pasa el archivo entero a un solo `ExecContext`, y la
 `0001_initial.sql` ya lleva varias sentencias, así que **se admiten varias por archivo**.
@@ -447,14 +447,14 @@ Esa constante tiene un guardián: `loadMigrations` falla si la última migració
 coincide con ella (`internal/store/db.go:178`). Si te olvidas de subirla, los tests del
 paquete se caen enteros con un mensaje que lo explica.
 
-- [ ] **Step 5: Ejecutar los tests y verificar que pasan**
+- [x] **Step 5: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/store/ -race -count=1`
 Expected: PASS. Comprueba en particular `TestOpenSetsSchemaVersion`
 (`internal/store/db_test.go:57`): lee `PRAGMA user_version` y ahora debe valer 2. Si
 compara contra la constante ya está; si asertaba un 1 literal, actualízalo.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/store/
