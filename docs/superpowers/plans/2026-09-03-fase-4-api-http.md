@@ -1538,16 +1538,18 @@ sesión, y los dos endpoints de autenticación con su limitador de intentos.
 - Consumes: `sessionSigner` (Task 5), `store.ErrNotFound`/`ErrInvalidInput`/`ErrConflict`
   (Task 2), `crypto.VerifyPassword`.
 - Produces:
-  - `type Config struct { DB *store.DB; Cipher *crypto.Cipher; Engine *relay.Engine; Ingest Disconnecter; Sinks SinkBuilder; MasterKey [32]byte; Logger *slog.Logger; SecureCookies bool }`
+  - `type Config struct { DB *store.DB; Cipher *crypto.Cipher; Engine EngineView; Hub HubView; Ingest Disconnecter; Sinks SinkBuilder; MasterKey [32]byte; Logger *slog.Logger; SecureCookies bool }`
+  - Las interfaces `Disconnecter`, `SinkBuilder`, `EngineView` y `HubView`, que declaran lo
+    poco que la API necesita de `rtmpio.Ingest`, `sinks.Factory`, `relay.Engine` y
+    `relay.Hub`. Son interfaces y no los tipos concretos por dos razones: `httpapi` no debe
+    importar `go-rtmp` ni de refilón, y los tests de los handlers pueden simular una sesión
+    viva sin levantar un motor entero.
   - `func New(cfg Config) (*Server, error)` y `func (s *Server) Handler() http.Handler`
   - `func writeJSON(w http.ResponseWriter, status int, v any)`
   - `func writeError(w http.ResponseWriter, status int, code, msg string)`
   - `func (s *Server) writeStoreError(w http.ResponseWriter, err error)`
   - `func (s *Server) requireSession(next http.Handler) http.Handler`
   Las tasks 8, 9 y 10 cuelgan sus handlers de este mux y usan estos tres ayudantes.
-  `Disconnecter` y `SinkBuilder` son interfaces declaradas aquí y satisfechas por
-  `rtmpio.Ingest` (Task 9) e `internal/sinks` (Task 8); hasta entonces, los tests las
-  cumplen con dobles.
 
 - [ ] **Step 1: Añadir la dependencia del limitador**
 
@@ -2073,12 +2075,35 @@ type SinkBuilder interface {
 	Build(ctx context.Context, d store.Destination) (*relay.Sink, error)
 }
 
+// EngineView es lo que la API necesita saber del motor: si hay sesión y cómo va cada
+// destino. Lo cumple *relay.Engine.
+//
+// Es una interfaz y no el tipo concreto porque así los tests de la API pueden simular una
+// sesión viva sin montar un motor entero con su ingesta: montarlo costaría un servidor
+// RTMP y un publisher real en cada test de un handler.
+type EngineView interface {
+	SessionID() int64
+	Snapshot() map[int64]relay.Metrics
+}
+
+// HubView es lo que la API necesita del hub para aplicar un cambio en caliente. Lo cumple
+// *relay.Hub.
+//
+// Add reemplaza un sink existente con el mismo id sin dejar ventana de escritura doble, y
+// Remove lo para: los dos comportamientos son de la fase 2, y son justo lo que hace falta
+// para editar un destino a mitad de transmisión.
+type HubView interface {
+	Add(s *relay.Sink)
+	Remove(id int64)
+}
+
 // Config son las dependencias del servidor. Todas obligatorias salvo Logger, Ingest y
 // Sinks, que pueden ser nil en los tests que no los ejercitan.
 type Config struct {
 	DB     *store.DB
 	Cipher *crypto.Cipher
-	Engine *relay.Engine
+	Engine EngineView
+	Hub    HubView
 	Ingest Disconnecter
 	Sinks  SinkBuilder
 	// MasterKey solo se usa para derivar la clave de firma de la cookie. No se guarda.
@@ -2093,7 +2118,8 @@ type Config struct {
 type Server struct {
 	db      *store.DB
 	cipher  *crypto.Cipher
-	engine  *relay.Engine
+	engine  EngineView
+	hub     HubView
 	ingest  Disconnecter
 	sinks   SinkBuilder
 	signer  *sessionSigner
@@ -2120,7 +2146,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
+		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine, hub: cfg.Hub,
 		ingest: cfg.Ingest, sinks: cfg.Sinks,
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
@@ -2670,27 +2696,190 @@ uno, registrando y continuando si uno falla, exactamente como hace hoy `main.go`
 
 - [ ] **Step 2: Escribir el test de la fábrica**
 
-Crea `internal/sinks/factory_test.go` con, al menos:
+Crea `internal/sinks/factory_test.go`:
 
 ```go
-// TestBuildRejectsAMisconfiguredDestination: validar al construir evita crear un sink que
-// no podría conectar jamás y que se pasaría la vida reintentando.
-func TestBuildRejectsAMisconfiguredDestination(t *testing.T) { /* URL http:// → error */ }
+package sinks_test
 
-// TestBuildEnabledSkipsDisabledDestinations
-func TestBuildEnabledSkipsDisabledDestinations(t *testing.T) { /* 3 destinos, 1 apagado → 2 sinks */ }
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/sinks"
+	"github.com/aprendomx/splitstream/internal/store"
+)
+
+func testCipher(t *testing.T) *crypto.Cipher {
+	t.Helper()
+	var k [32]byte
+	for i := range k {
+		k[i] = 7
+	}
+	c, err := crypto.NewCipher(k)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	return c
+}
+
+// setup deja una base abierta y arrancada, con su cipher y la fábrica bajo prueba.
+func setup(t *testing.T) (*store.DB, *crypto.Cipher, *sinks.Factory) {
+	t.Helper()
+	ctx := context.Background()
+
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	c := testCipher(t)
+	if err := db.Bootstrap(ctx, c); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	return db, c, sinks.NewFactory(db, c, nil)
+}
+
+// crear mete un destino y devuelve su fila. url vacía usa una válida por defecto.
+func crear(t *testing.T, db *store.DB, c *crypto.Cipher, nombre, url string, enabled bool) *store.Destination {
+	t.Helper()
+	if url == "" {
+		url = "rtmp://127.0.0.1:1935/live"
+	}
+	d, err := db.CreateDestination(context.Background(), c, store.NewDestination{
+		Name: nombre, Platform: store.PlatformCustom, RTMPURL: url,
+		Key: crypto.Secret("clave-de-" + nombre), Enabled: enabled,
+	})
+	if err != nil {
+		t.Fatalf("CreateDestination(%s): %v", nombre, err)
+	}
+	return d
+}
+
+// TestBuildRejectsAMisconfiguredDestination: validar al construir evita crear un sink que
+// no podría conectar jamás y que se pasaría la vida reintentando contra una URL imposible.
+//
+// La URL se mete por debajo de la validación del store —que ya rechaza http:// desde la
+// fase 2— porque lo que se prueba aquí es la defensa de la fábrica, no la del store: una
+// fila puede haber llegado de una versión anterior o de una edición a mano de la base.
+func TestBuildRejectsAMisconfiguredDestination(t *testing.T) {
+	db, c, f := setup(t)
+	ctx := context.Background()
+
+	d := crear(t, db, c, "malo", "", true)
+	if _, err := db.SQL().ExecContext(ctx,
+		`UPDATE destinations SET rtmp_url = 'http://no-es-rtmp/live' WHERE id = ?`, d.ID); err != nil {
+		t.Fatalf("forzar la URL mala: %v", err)
+	}
+
+	roto, err := db.ListDestinations(ctx)
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+
+	if _, err := f.Build(ctx, roto[0]); err == nil {
+		t.Error("se construyó un sink para una URL que no es RTMP")
+	}
+}
+
+// TestBuildEnabledSkipsDisabledDestinations: un destino apagado no debe abrir conexión.
+func TestBuildEnabledSkipsDisabledDestinations(t *testing.T) {
+	db, c, f := setup(t)
+
+	crear(t, db, c, "uno", "", true)
+	crear(t, db, c, "dos", "", false)
+	crear(t, db, c, "tres", "", true)
+
+	got, err := f.BuildEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("BuildEnabled: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("sinks = %d, quería 2 (el apagado no cuenta)", len(got))
+	}
+	for _, s := range got {
+		defer s.Stop()
+	}
+}
 
 // TestBuildEnabledSurvivesOneBadDestination: un destino roto no puede impedir que los
-// demás salgan al aire.
-func TestBuildEnabledSurvivesOneBadDestination(t *testing.T) { /* 1 malo + 2 buenos → 2 sinks, sin error */ }
+// demás salgan al aire. Es la razón de que BuildEnabled registre y siga en vez de abortar:
+// con la política contraria, una URL mal pegada en un destino dejaría al usuario sin
+// ninguna transmisión y sin entender por qué.
+func TestBuildEnabledSurvivesOneBadDestination(t *testing.T) {
+	db, c, f := setup(t)
+	ctx := context.Background()
 
-// TestBuildDoesNotAudit: construir sinks no es revelar una clave (spec §15.5, Task 3).
-func TestBuildDoesNotAudit(t *testing.T) { /* tras BuildEnabled, 0 eventos key_revealed */ }
+	crear(t, db, c, "bueno-1", "", true)
+	malo := crear(t, db, c, "malo", "", true)
+	crear(t, db, c, "bueno-2", "", true)
+
+	if _, err := db.SQL().ExecContext(ctx,
+		`UPDATE destinations SET rtmp_url = 'http://no-es-rtmp/live' WHERE id = ?`, malo.ID); err != nil {
+		t.Fatalf("forzar la URL mala: %v", err)
+	}
+
+	got, err := f.BuildEnabled(ctx)
+	if err != nil {
+		t.Fatalf("BuildEnabled devolvió error por un destino roto: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("sinks = %d, quería 2 (los dos buenos)", len(got))
+	}
+	for _, s := range got {
+		if s.ID() == malo.ID {
+			t.Error("se construyó el sink del destino roto")
+		}
+		defer s.Stop()
+	}
+}
+
+// TestBuildDoesNotAudit: construir sinks NO es revelar una clave a una persona (spec
+// §15.5, Task 3). Si alguien "simplifica" la fábrica volviendo a llamar a
+// RevealDestinationKey, el log de auditoría se llena de ruido en cada arranque de
+// transmisión y deja de servir para lo que existe.
+func TestBuildDoesNotAudit(t *testing.T) {
+	db, c, f := setup(t)
+	ctx := context.Background()
+
+	crear(t, db, c, "uno", "", true)
+	crear(t, db, c, "dos", "", true)
+
+	got, err := f.BuildEnabled(ctx)
+	if err != nil {
+		t.Fatalf("BuildEnabled: %v", err)
+	}
+	for _, s := range got {
+		defer s.Stop()
+	}
+
+	eventos, err := db.RecentEvents(ctx, 100)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	for _, e := range eventos {
+		if e.Kind == "key_revealed" {
+			t.Error("construir los sinks generó un evento de auditoría de revelado")
+		}
+	}
+}
+
+// TestBuildEnabledWithNoDestinations: el caso de una instalación recién hecha. No es un
+// error, es una lista vacía.
+func TestBuildEnabledWithNoDestinations(t *testing.T) {
+	_, _, f := setup(t)
+
+	got, err := f.BuildEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("BuildEnabled: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("sinks = %d, quería 0", len(got))
+	}
+}
 ```
-
-Escríbelos completos siguiendo el estilo de `internal/relay/sink_test.go`: tabla de casos,
-mensajes de error que digan qué se quería. `TestBuildDoesNotAudit` es el que impide que
-alguien "simplifique" la Task 3 volviendo a llamar a `RevealDestinationKey` desde aquí.
 
 - [ ] **Step 3: Cambiar `main.go` para usar la fábrica**
 
@@ -2720,51 +2909,657 @@ distinguirlos.
 
 - [ ] **Step 5: Escribir los tests de los endpoints de destinos**
 
-Crea `internal/httpapi/destinations_test.go`. Los casos que hay que cubrir, cada uno como
-su propio `func Test...`:
-
-- `TestListDestinationsReturnsThemInSortOrder` — tres destinos, orden por `sort_order`.
-- `TestListDestinationsNeverIncludesAKey` — recorre el JSON crudo y comprueba que la clave
-  que se guardó no aparece en ninguna parte del cuerpo.
-- `TestCreateDestinationPersistsAndReturns201` — con `Location` apuntando al recurso.
-- `TestCreateDestinationRejectsBadInput` — tabla: URL `http://`, sin nombre, plataforma
-  inventada, clave vacía, JSON malformado. Todos 400 con `code: "invalid_input"`.
-- `TestPatchDestinationLeavesUnsetFieldsAlone` — manda solo `name`; comprueba que la URL,
-  la plataforma y la clave no cambiaron.
-- `TestPatchDestinationCanReplaceTheKey` — manda `key`; comprueba que `key_mask` cambió y
-  que la respuesta no lleva la clave nueva.
-- `TestDeleteDestinationReturns204AndIsGone`.
-- `TestToggleFlipsEnabled` — dos llamadas, vuelve al estado inicial.
-- `TestReorderPersistsTheWholeOrder` — manda los ids al revés, comprueba el listado.
-- `TestReorderRejectsUnknownIDs` — 400, y el orden anterior intacto.
-- `TestReorderRouteIsNotSwallowedByThePatchWildcard` — `POST /api/destinations/reorder`
-  debe llegar al handler de reorder y no al de `{id}` con id="reorder". Este test existe
-  porque es el fallo más probable del enrutado y daría un 400 confuso.
-- `TestRevealKeyReturnsTheKeyAndAudits` — el ÚNICO endpoint que devuelve una clave en
-  claro; y deja el evento `key_revealed` (Task 3).
-- `TestNotFoundForUnknownID` — 404 con `code: "not_found"` en PATCH, DELETE, toggle y key.
-
-Para el efecto en caliente:
+Crea `internal/httpapi/destinations_test.go`:
 
 ```go
-// TestCreateDestinationAppliesToTheLiveSessionImmediately: si el usuario añade un destino
-// mientras transmite, tiene que empezar a salir por ahí sin cortar la transmisión. Si no,
-// el toggle de la UI mentiría durante todo el directo (decisión nº 4 del plan).
-func TestCreateDestinationAppliesToTheLiveSessionImmediately(t *testing.T) {
-	// Con un hub de verdad y un doble de SinkBuilder que registre las llamadas:
-	// Hub.Len() debe crecer en 1 tras el POST, y solo si hay sesión viva.
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/relay"
+	"github.com/aprendomx/splitstream/internal/store"
+)
+
+// --- dobles ---
+
+// fakeEngine simula el motor. sessionID a 0 significa que no hay nadie transmitiendo.
+type fakeEngine struct {
+	mu        sync.Mutex
+	sessionID int64
+	metrics   map[int64]relay.Metrics
 }
 
-// TestCreateDestinationDoesNothingHotWhenThereIsNoSession: sin sesión, el destino se
-// persiste y ya está; no se conecta nada hasta la próxima transmisión (spec §6.5).
-func TestCreateDestinationDoesNothingHotWhenThereIsNoSession(t *testing.T) {}
+func (f *fakeEngine) SessionID() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sessionID
+}
 
-// TestDeleteDestinationStopsItsSinkWhenLive
-func TestDeleteDestinationStopsItsSinkWhenLive(t *testing.T) {}
+func (f *fakeEngine) Snapshot() map[int64]relay.Metrics {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[int64]relay.Metrics, len(f.metrics))
+	for k, v := range f.metrics {
+		out[k] = v
+	}
+	return out
+}
 
-// TestToggleOffStopsTheSinkAndToggleOnStartsIt
-func TestToggleOffStopsTheSinkAndToggleOnStartsIt(t *testing.T) {}
+func (f *fakeEngine) setLive(id int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessionID = id
+}
+
+// fakeHub registra qué se le pidió, para poder afirmar sobre el efecto en caliente sin
+// abrir conexiones RTMP de verdad.
+type fakeHub struct {
+	mu      sync.Mutex
+	added   []int64
+	removed []int64
+}
+
+func (f *fakeHub) Add(s *relay.Sink) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.added = append(f.added, s.ID())
+}
+
+func (f *fakeHub) Remove(id int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, id)
+}
+
+func (f *fakeHub) snapshot() (added, removed []int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.added...), append([]int64(nil), f.removed...)
+}
+
+// fakeSinks construye sinks que no conectan a ninguna parte: basta con que tengan el id
+// correcto, que es lo único que el hub mira.
+type fakeSinks struct{ err error }
+
+func (f *fakeSinks) Build(ctx context.Context, d store.Destination) (*relay.Sink, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return relay.NewSink(relay.SinkConfig{ID: d.ID, Name: d.Name, Pub: nil}), nil
+}
+
+// --- andamiaje ---
+
+// newDestServer levanta un servidor con los dobles puestos y una sesión ya autenticada.
+func newDestServer(t *testing.T) (*Server, *store.DB, *fakeEngine, *fakeHub, []*http.Cookie) {
+	t.Helper()
+	srv, db := newTestServer(t)
+
+	eng, hub := &fakeEngine{}, &fakeHub{}
+	srv.engine, srv.hub, srv.sinks = eng, hub, &fakeSinks{}
+
+	login := postJSON(t, srv.Handler(), "/api/auth/login", `{"password":"la-contraseña-de-prueba"}`)
+	if login.Code != http.StatusNoContent {
+		t.Fatalf("login: %d", login.Code)
+	}
+	return srv, db, eng, hub, login.Result().Cookies()
+}
+
+// do lanza una petición autenticada.
+func do(t *testing.T, srv *Server, cookies []*http.Cookie, metodo, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var r *http.Request
+	if body == "" {
+		r = httptest.NewRequest(metodo, path, nil)
+	} else {
+		r = httptest.NewRequest(metodo, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+	}
+	for _, c := range cookies {
+		r.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, r)
+	return rec
+}
+
+// crearDest mete un destino directamente por el store, para preparar el estado.
+func crearDest(t *testing.T, db *store.DB, srv *Server, nombre, clave string, enabled bool) *store.Destination {
+	t.Helper()
+	d, err := db.CreateDestination(context.Background(), srv.cipher, store.NewDestination{
+		Name: nombre, Platform: store.PlatformCustom,
+		RTMPURL: "rtmp://127.0.0.1:1935/live", Key: crypto.Secret(clave), Enabled: enabled,
+	})
+	if err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+	return d
+}
+
+func decodeDest(t *testing.T, rec *httptest.ResponseRecorder) destinationDTO {
+	t.Helper()
+	var d destinationDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		t.Fatalf("decodificar destino: %v — %s", err, rec.Body.String())
+	}
+	return d
+}
+
+func errCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var b errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &b); err != nil {
+		t.Fatalf("decodificar error: %v — %s", err, rec.Body.String())
+	}
+	return b.Error.Code
+}
+
+// --- listado ---
+
+func TestListDestinationsReturnsThemInSortOrder(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	crearDest(t, db, srv, "primero", "k1", true)
+	crearDest(t, db, srv, "segundo", "k2", true)
+	crearDest(t, db, srv, "tercero", "k3", true)
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/destinations", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got []destinationDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decodificar: %v", err)
+	}
+	quiero := []string{"primero", "segundo", "tercero"}
+	if len(got) != len(quiero) {
+		t.Fatalf("destinos = %d, quería %d", len(got), len(quiero))
+	}
+	for i := range quiero {
+		if got[i].Name != quiero[i] {
+			t.Errorf("posición %d = %q, quería %q", i, got[i].Name, quiero[i])
+		}
+	}
+}
+
+// TestListDestinationsNeverIncludesAKey recorre el cuerpo crudo: no basta con mirar los
+// campos del DTO, porque lo que hay que impedir es que la clave salga por CUALQUIER vía
+// (spec §8).
+func TestListDestinationsNeverIncludesAKey(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	const clave = "una-clave-inconfundible-12345"
+	crearDest(t, db, srv, "yt", clave, true)
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/destinations", "")
+	if strings.Contains(rec.Body.String(), clave) {
+		t.Errorf("el listado lleva la clave: %s", rec.Body.String())
+	}
+}
+
+// --- alta ---
+
+func TestCreateDestinationPersistsAndReturns201(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations",
+		`{"name":"twitch","platform":"twitch","rtmp_url":"rtmp://live.twitch.tv/app","key":"live_123","enabled":true}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("código = %d, quería 201: %s", rec.Code, rec.Body.String())
+	}
+
+	got := decodeDest(t, rec)
+	if got.ID == 0 {
+		t.Error("el destino creado no trae id")
+	}
+	if got.Name != "twitch" || got.Platform != "twitch" {
+		t.Errorf("cuerpo inesperado: %+v", got)
+	}
+	if loc := rec.Header().Get("Location"); loc == "" {
+		t.Error("falta la cabecera Location")
+	}
+	if strings.Contains(rec.Body.String(), "live_123") {
+		t.Error("la respuesta del alta devuelve la clave")
+	}
+
+	dests, err := db.ListDestinations(context.Background())
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	if len(dests) != 1 {
+		t.Fatalf("persistidos = %d, quería 1", len(dests))
+	}
+}
+
+func TestCreateDestinationRejectsBadInput(t *testing.T) {
+	srv, _, _, _, cookies := newDestServer(t)
+
+	casos := []struct{ nombre, body string }{
+		{"URL http", `{"name":"n","platform":"custom","rtmp_url":"http://x/live","key":"k"}`},
+		{"URL sin app", `{"name":"n","platform":"custom","rtmp_url":"rtmp://x","key":"k"}`},
+		{"sin nombre", `{"name":"","platform":"custom","rtmp_url":"rtmp://x/live","key":"k"}`},
+		{"plataforma inventada", `{"name":"n","platform":"myspace","rtmp_url":"rtmp://x/live","key":"k"}`},
+		{"clave vacía", `{"name":"n","platform":"custom","rtmp_url":"rtmp://x/live","key":""}`},
+		{"JSON malformado", `{"name":`},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			rec := do(t, srv, cookies, http.MethodPost, "/api/destinations", c.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("código = %d, quería 400: %s", rec.Code, rec.Body.String())
+			}
+			if got := errCode(t, rec); got != codeInvalidInput {
+				t.Errorf("code = %q, quería %q", got, codeInvalidInput)
+			}
+		})
+	}
+}
+
+// --- edición ---
+
+// TestPatchDestinationLeavesUnsetFieldsAlone: en un PATCH, un campo ausente y un campo
+// vacío no son lo mismo. Sin esta distinción, editar el nombre borraría la clave.
+func TestPatchDestinationLeavesUnsetFieldsAlone(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "viejo", "clave-original", true)
+	antes := *d
+
+	rec := do(t, srv, cookies, http.MethodPatch, path(d.ID), `{"name":"nuevo"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got := decodeDest(t, rec)
+	if got.Name != "nuevo" {
+		t.Errorf("Name = %q, quería nuevo", got.Name)
+	}
+	if got.RTMPURL != antes.RTMPURL {
+		t.Errorf("la URL cambió sin que se pidiera: %q", got.RTMPURL)
+	}
+	if got.Platform != string(antes.Platform) {
+		t.Errorf("la plataforma cambió sin que se pidiera: %q", got.Platform)
+	}
+	if got.KeyMask != antes.KeyMask {
+		t.Errorf("la clave cambió sin que se pidiera: %q", got.KeyMask)
+	}
+	if got.Enabled != antes.Enabled {
+		t.Error("enabled cambió sin que se pidiera")
+	}
+
+	// Y la clave sigue siendo la de antes, no una vacía.
+	k, err := db.RevealDestinationKey(context.Background(), srv.cipher, d.ID)
+	if err != nil {
+		t.Fatalf("RevealDestinationKey: %v", err)
+	}
+	if k.Reveal() != "clave-original" {
+		t.Errorf("la clave guardada es %q", k.Reveal())
+	}
+}
+
+func TestPatchDestinationCanReplaceTheKey(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "clave-vieja-aaaa", true)
+	maskAntes := d.KeyMask
+
+	rec := do(t, srv, cookies, http.MethodPatch, path(d.ID), `{"key":"clave-nueva-bbbb"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got := decodeDest(t, rec)
+	if got.KeyMask == maskAntes {
+		t.Error("la máscara no cambió al reemplazar la clave")
+	}
+	if strings.Contains(rec.Body.String(), "clave-nueva-bbbb") {
+		t.Error("la respuesta devuelve la clave nueva en claro")
+	}
+
+	k, err := db.RevealDestinationKey(context.Background(), srv.cipher, d.ID)
+	if err != nil {
+		t.Fatalf("RevealDestinationKey: %v", err)
+	}
+	if k.Reveal() != "clave-nueva-bbbb" {
+		t.Errorf("la clave guardada es %q", k.Reveal())
+	}
+}
+
+// --- borrado y toggle ---
+
+func TestDeleteDestinationReturns204AndIsGone(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k", true)
+
+	rec := do(t, srv, cookies, http.MethodDelete, path(d.ID), "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("código = %d, quería 204: %s", rec.Code, rec.Body.String())
+	}
+
+	dests, err := db.ListDestinations(context.Background())
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	if len(dests) != 0 {
+		t.Errorf("quedan %d destinos tras borrar", len(dests))
+	}
+}
+
+func TestToggleFlipsEnabled(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k", true)
+
+	rec := do(t, srv, cookies, http.MethodPost, path(d.ID)+"/toggle", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+	if decodeDest(t, rec).Enabled {
+		t.Error("tras el primer toggle sigue encendido")
+	}
+
+	rec = do(t, srv, cookies, http.MethodPost, path(d.ID)+"/toggle", "")
+	if !decodeDest(t, rec).Enabled {
+		t.Error("tras el segundo toggle no volvió a encenderse")
+	}
+}
+
+// --- reordenar ---
+
+func TestReorderPersistsTheWholeOrder(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	a := crearDest(t, db, srv, "a", "k1", true)
+	b := crearDest(t, db, srv, "b", "k2", true)
+	c := crearDest(t, db, srv, "c", "k3", true)
+
+	body := `{"ids":[` + itoa(c.ID) + `,` + itoa(b.ID) + `,` + itoa(a.ID) + `]}`
+	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations/reorder", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	dests, err := db.ListDestinations(context.Background())
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	quiero := []string{"c", "b", "a"}
+	for i := range quiero {
+		if dests[i].Name != quiero[i] {
+			t.Errorf("posición %d = %q, quería %q", i, dests[i].Name, quiero[i])
+		}
+	}
+}
+
+func TestReorderRejectsUnknownIDs(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	a := crearDest(t, db, srv, "a", "k1", true)
+	crearDest(t, db, srv, "b", "k2", true)
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations/reorder",
+		`{"ids":[`+itoa(a.ID)+`,9999]}`)
+	if rec.Code == http.StatusOK {
+		t.Fatal("se aceptó un reorden con un id inexistente")
+	}
+
+	dests, err := db.ListDestinations(context.Background())
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	if dests[0].Name != "a" {
+		t.Errorf("el orden anterior no se conservó tras el fallo: %q primero", dests[0].Name)
+	}
+}
+
+// TestReorderRouteIsNotSwallowedByThePatchWildcard existe porque es el fallo de enrutado
+// más probable de todo el mux: si "reorder" entrara por el handler de {id}, el usuario
+// vería un 400 de "id inválido" sin ninguna pista de qué pasó.
+func TestReorderRouteIsNotSwallowedByThePatchWildcard(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	a := crearDest(t, db, srv, "a", "k1", true)
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations/reorder",
+		`{"ids":[`+itoa(a.ID)+`]}`)
+	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "id") {
+		t.Fatalf("la ruta de reorder cayó en el handler de {id}: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- revelado ---
+
+// TestRevealKeyReturnsTheKeyAndAudits: es el ÚNICO endpoint del listado que devuelve una
+// clave en claro, y por eso es el único que tiene que dejar rastro (spec §15.5).
+func TestRevealKeyReturnsTheKeyAndAudits(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	const clave = "la-clave-de-verdad"
+	d := crearDest(t, db, srv, "yt", clave, true)
+
+	rec := do(t, srv, cookies, http.MethodGet, path(d.ID)+"/key", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decodificar: %v", err)
+	}
+	if body.Key != clave {
+		t.Errorf("key = %q, quería %q", body.Key, clave)
+	}
+
+	eventos, err := db.RecentEvents(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	var visto bool
+	for _, e := range eventos {
+		if e.Kind == "key_revealed" {
+			visto = true
+			if strings.Contains(e.Message, clave) {
+				t.Error("el evento de auditoría lleva la clave dentro")
+			}
+		}
+	}
+	if !visto {
+		t.Error("revelar la clave no dejó evento de auditoría")
+	}
+}
+
+// --- no encontrado ---
+
+func TestNotFoundForUnknownID(t *testing.T) {
+	srv, _, _, _, cookies := newDestServer(t)
+
+	casos := []struct{ metodo, path, body string }{
+		{http.MethodPatch, "/api/destinations/9999", `{"name":"x"}`},
+		{http.MethodDelete, "/api/destinations/9999", ""},
+		{http.MethodPost, "/api/destinations/9999/toggle", ""},
+		{http.MethodGet, "/api/destinations/9999/key", ""},
+	}
+
+	for _, c := range casos {
+		t.Run(c.metodo+" "+c.path, func(t *testing.T) {
+			rec := do(t, srv, cookies, c.metodo, c.path, c.body)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("código = %d, quería 404: %s", rec.Code, rec.Body.String())
+			}
+			if got := errCode(t, rec); got != codeNotFound {
+				t.Errorf("code = %q, quería %q", got, codeNotFound)
+			}
+		})
+	}
+}
+
+// TestNonNumericIDIsBadRequestNotNotFound: la ruta existe; lo que no vale es lo que
+// mandaron. Un 404 aquí haría pensar que el destino se borró.
+func TestNonNumericIDIsBadRequestNotNotFound(t *testing.T) {
+	srv, _, _, _, cookies := newDestServer(t)
+
+	rec := do(t, srv, cookies, http.MethodDelete, "/api/destinations/abc", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("código = %d, quería 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- efecto en caliente ---
+
+// TestCreateDestinationAppliesToTheLiveSessionImmediately: si el usuario añade un destino
+// mientras transmite, tiene que empezar a salir por ahí sin cortar la transmisión. Si no,
+// el toggle y el alta de la UI mentirían durante todo el directo (decisión nº 4 del plan).
+func TestCreateDestinationAppliesToTheLiveSessionImmediately(t *testing.T) {
+	srv, _, eng, hub, cookies := newDestServer(t)
+	eng.setLive(42)
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations",
+		`{"name":"nuevo","platform":"custom","rtmp_url":"rtmp://x/live","key":"k","enabled":true}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	added, _ := hub.snapshot()
+	if len(added) != 1 {
+		t.Fatalf("sinks añadidos al hub = %d, quería 1", len(added))
+	}
+	if added[0] != decodeDest(t, rec).ID {
+		t.Errorf("se añadió el sink %d, quería el del destino creado", added[0])
+	}
+}
+
+// TestCreateDestinationDoesNothingHotWhenThereIsNoSession: sin sesión no hay a qué
+// añadirlo; el destino se persiste y entra en la próxima transmisión (spec §6.5).
+func TestCreateDestinationDoesNothingHotWhenThereIsNoSession(t *testing.T) {
+	srv, db, _, hub, cookies := newDestServer(t)
+	// eng.sessionID se queda en 0: nadie está publicando.
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations",
+		`{"name":"nuevo","platform":"custom","rtmp_url":"rtmp://x/live","key":"k","enabled":true}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	added, removed := hub.snapshot()
+	if len(added) != 0 || len(removed) != 0 {
+		t.Errorf("se tocó el hub sin sesión viva: added=%v removed=%v", added, removed)
+	}
+
+	dests, err := db.ListDestinations(context.Background())
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	if len(dests) != 1 {
+		t.Error("el destino no se persistió")
+	}
+}
+
+// TestCreateDestinationDisabledDoesNotGoLive: dar de alta un destino apagado no debe
+// conectarlo, ni siquiera con una sesión en curso.
+func TestCreateDestinationDisabledDoesNotGoLive(t *testing.T) {
+	srv, _, eng, hub, cookies := newDestServer(t)
+	eng.setLive(42)
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations",
+		`{"name":"apagado","platform":"custom","rtmp_url":"rtmp://x/live","key":"k","enabled":false}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if added, _ := hub.snapshot(); len(added) != 0 {
+		t.Errorf("se conectó un destino que se creó apagado: %v", added)
+	}
+}
+
+func TestDeleteDestinationStopsItsSinkWhenLive(t *testing.T) {
+	srv, db, eng, hub, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k", true)
+	eng.setLive(42)
+
+	rec := do(t, srv, cookies, http.MethodDelete, path(d.ID), "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	_, removed := hub.snapshot()
+	if len(removed) != 1 || removed[0] != d.ID {
+		t.Errorf("removed = %v, quería [%d]", removed, d.ID)
+	}
+}
+
+func TestToggleOffStopsTheSinkAndToggleOnStartsIt(t *testing.T) {
+	srv, db, eng, hub, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k", true)
+	eng.setLive(42)
+
+	// Apagar: se quita del hub.
+	if rec := do(t, srv, cookies, http.MethodPost, path(d.ID)+"/toggle", ""); rec.Code != http.StatusOK {
+		t.Fatalf("apagar: %d — %s", rec.Code, rec.Body.String())
+	}
+	added, removed := hub.snapshot()
+	if len(removed) != 1 || removed[0] != d.ID {
+		t.Fatalf("al apagar, removed = %v", removed)
+	}
+	if len(added) != 0 {
+		t.Fatalf("al apagar, added = %v", added)
+	}
+
+	// Encender: vuelve al hub.
+	if rec := do(t, srv, cookies, http.MethodPost, path(d.ID)+"/toggle", ""); rec.Code != http.StatusOK {
+		t.Fatalf("encender: %d — %s", rec.Code, rec.Body.String())
+	}
+	added, _ = hub.snapshot()
+	if len(added) != 1 || added[0] != d.ID {
+		t.Errorf("al encender, added = %v, quería [%d]", added, d.ID)
+	}
+}
+
+// TestPatchAppliesToTheLiveSessionByReplacingTheSink: cambiar la clave de un destino a
+// mitad de transmisión tiene que reconectarlo con la nueva. Hub.Add reemplaza sin ventana
+// de escritura doble (fase 2), así que basta con volver a añadirlo.
+func TestPatchAppliesToTheLiveSessionByReplacingTheSink(t *testing.T) {
+	srv, db, eng, hub, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "clave-vieja-aaaa", true)
+	eng.setLive(42)
+
+	if rec := do(t, srv, cookies, http.MethodPatch, path(d.ID), `{"key":"clave-nueva-bbbb"}`); rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d — %s", rec.Code, rec.Body.String())
+	}
+
+	added, _ := hub.snapshot()
+	if len(added) != 1 || added[0] != d.ID {
+		t.Errorf("added = %v, quería [%d]: el destino editado debe reemplazarse en el hub", added, d.ID)
+	}
+}
+
+// TestHotApplyFailureDoesNotFailTheRequest: la petición hizo lo que pedía —persistir el
+// cambio—. Devolver 500 haría que el usuario lo repitiera y creara un destino duplicado.
+func TestHotApplyFailureDoesNotFailTheRequest(t *testing.T) {
+	srv, _, eng, _, cookies := newDestServer(t)
+	eng.setLive(42)
+	srv.sinks = &fakeSinks{err: errors.New("no se pudo construir el sink")}
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations",
+		`{"name":"nuevo","platform":"custom","rtmp_url":"rtmp://x/live","key":"k","enabled":true}`)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("código = %d, quería 201: un fallo del hub no debe tumbar la petición — %s",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// --- ayudas ---
+
+func path(id int64) string { return "/api/destinations/" + itoa(id) }
+
+func itoa(id int64) string { return strconv.FormatInt(id, 10) }
 ```
+
+Añade `errors` y `strconv` a los imports.
 
 - [ ] **Step 6: Ejecutar los tests y verificar que fallan**
 
@@ -2834,32 +3629,190 @@ que no sirve.
 
 - [ ] **Step 1: Escribir el test de `DisconnectPublisher`**
 
-Añade a `internal/rtmpio/ingest_test.go`:
+Añade a `internal/rtmpio/ingest_test.go` (paquete interno `rtmpio`; el `recorder` y el
+patrón de montaje ya están en ese archivo, reutilízalos):
 
 ```go
-// TestDisconnectPublisherCutsTheStreamButKeepsListening: rotar la clave con
-// disconnect_now debe echar a quien está publicando con la clave vieja, y dejar el
-// servidor listo para que vuelva a entrar con la nueva. Close() no sirve: cierra también
-// el listener y haría falta reiniciar el proceso.
-func TestDisconnectPublisherCutsTheStreamButKeepsListening(t *testing.T) {
-	// 1. Levanta la ingesta sobre un listener temporal.
-	// 2. Conecta un publisher y publica un frame: debe funcionar.
-	// 3. Llama a DisconnectPublisher(): debe devolver 1 y dispararse OnPublishEnd.
-	// 4. Conecta un publisher NUEVO: debe poder conectar y publicar.
-	// 5. Y solo entonces, Close() cierra todo.
+// waitFor sondea hasta que cond se cumple o vence el plazo. Los tests de red no pueden
+// afirmar de inmediato: entre el Close del socket y el OnPublishEnd hay un viaje real.
+func waitFor(t *testing.T, plazo time.Duration, cond func() bool) bool {
+	t.Helper()
+	limite := time.Now().Add(plazo)
+	for time.Now().Before(limite) {
+		if cond() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
-// TestDisconnectPublisherWithNobodyConnected: no debe fallar ni colgarse; devuelve 0.
-func TestDisconnectPublisherWithNobodyConnected(t *testing.T) {}
+// serveIngest levanta la ingesta en un puerto libre y devuelve su dirección.
+func serveIngest(t *testing.T, rec *recorder) (*Ingest, string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: rec})
+	go ing.Serve(ln)
+	time.Sleep(200 * time.Millisecond)
+	return ing, ln.Addr().String()
+}
 
-// TestDisconnectPublisherIsSafeConcurrently: la API puede llamarlo mientras el publisher
-// se desconecta solo. Con -race y varias goroutines.
-func TestDisconnectPublisherIsSafeConcurrently(t *testing.T) {}
+// connectPublisher conecta un publisher y publica un frame para que la sesión exista.
+func connectPublisher(t *testing.T, addr string) *Publisher {
+	t.Helper()
+	pub, err := NewPublisher(PublisherConfig{
+		URL: "rtmp://" + addr + "/live", StreamKey: crypto.Secret("clave"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pub.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if err := pub.WriteVideo(0, []byte{0x17, 0x01, 0x00}); err != nil {
+		t.Fatalf("WriteVideo: %v", err)
+	}
+	return pub
+}
+
+// TestDisconnectPublisherCutsTheStreamButKeepsListening: rotar la clave con
+// disconnect_now debe echar a quien publica con la clave vieja y dejar el servidor listo
+// para que vuelva a entrar con la nueva.
+//
+// Close() no sirve para esto: cierra también el listener, y entonces recuperar la ingesta
+// exigiría reiniciar el proceso — justo lo que la rotación quiere evitar.
+func TestDisconnectPublisherCutsTheStreamButKeepsListening(t *testing.T) {
+	rec := &recorder{}
+	ing, addr := serveIngest(t, rec)
+	defer ing.Close()
+
+	pub := connectPublisher(t, addr)
+	defer pub.Close()
+
+	if !waitFor(t, 2*time.Second, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return rec.starts == 1
+	}) {
+		t.Fatal("el primer publisher no llegó a arrancar sesión")
+	}
+
+	if n := ing.DisconnectPublisher(); n != 1 {
+		t.Errorf("DisconnectPublisher = %d, quería 1", n)
+	}
+
+	if !waitFor(t, 3*time.Second, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return rec.ends == 1
+	}) {
+		t.Fatal("no llegó OnPublishEnd: la conexión sobrevivió al corte")
+	}
+
+	// Y lo que de verdad distingue esto de Close: se puede volver a entrar.
+	pub2 := connectPublisher(t, addr)
+	defer pub2.Close()
+
+	if !waitFor(t, 2*time.Second, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return rec.starts == 2
+	}) {
+		t.Fatal("el segundo publisher no pudo conectar: el listener se cerró de más")
+	}
+}
+
+// TestDisconnectPublisherWithNobodyConnected: no debe fallar ni colgarse, y devuelve 0.
+func TestDisconnectPublisherWithNobodyConnected(t *testing.T) {
+	rec := &recorder{}
+	ing, _ := serveIngest(t, rec)
+	defer ing.Close()
+
+	if n := ing.DisconnectPublisher(); n != 0 {
+		t.Errorf("DisconnectPublisher = %d, quería 0", n)
+	}
+}
+
+// TestDisconnectPublisherBeforeServe: la API podría llamarlo antes de que la ingesta
+// llegue a escuchar. No debe entrar en pánico por el mapa nil.
+func TestDisconnectPublisherBeforeServe(t *testing.T) {
+	ing := NewIngest(IngestConfig{Addr: "127.0.0.1:0", Handler: &recorder{}})
+	if n := ing.DisconnectPublisher(); n != 0 {
+		t.Errorf("DisconnectPublisher = %d, quería 0", n)
+	}
+}
+
+// TestDisconnectPublisherIsSafeConcurrently: la API puede llamarlo justo mientras el
+// publisher se desconecta solo, o mientras entra otro. Con -race, que es donde esto se ve.
+func TestDisconnectPublisherIsSafeConcurrently(t *testing.T) {
+	rec := &recorder{}
+	ing, addr := serveIngest(t, rec)
+	defer ing.Close()
+
+	var wg sync.WaitGroup
+	// Conexiones entrando.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pub, err := NewPublisher(PublisherConfig{
+				URL: "rtmp://" + addr + "/live", StreamKey: crypto.Secret("clave"),
+			})
+			if err != nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := pub.Connect(ctx); err == nil {
+				pub.WriteVideo(0, []byte{0x17, 0x01, 0x00})
+			}
+			pub.Close()
+		}()
+	}
+	// Y cortes en paralelo.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				ing.DisconnectPublisher()
+				time.Sleep(5 * time.Millisecond)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// El servidor sigue en pie tras el vendaval.
+	if n := ing.DisconnectPublisher(); n < 0 {
+		t.Errorf("DisconnectPublisher = %d", n)
+	}
+}
+
+// TestCloseStillWorksAfterDisconnectPublisher: el apagado ordenado de la fase 3 no puede
+// romperse porque alguien haya rotado una clave antes.
+func TestCloseStillWorksAfterDisconnectPublisher(t *testing.T) {
+	rec := &recorder{}
+	ing, addr := serveIngest(t, rec)
+
+	pub := connectPublisher(t, addr)
+	defer pub.Close()
+
+	ing.DisconnectPublisher()
+	if err := ing.Close(); err != nil {
+		t.Errorf("Close tras DisconnectPublisher = %v, quería nil", err)
+	}
+	if err := ing.Close(); err != nil {
+		t.Errorf("Close es idempotente: segundo Close = %v", err)
+	}
+}
 ```
 
-Copia la forma de levantar la ingesta de los tests que ya existen en ese archivo; la fase 2
-dejó ahí el andamiaje del seguimiento de conexiones (`track`/`untrack`) que esta tarea
-reutiliza.
+`sync` ya está entre los imports del archivo; comprueba que `net` y `context` también.
 
 - [ ] **Step 2: Implementar `DisconnectPublisher`**
 
@@ -2883,14 +3836,227 @@ URL**, va aparte y enmascarada.
    copiarla— junto a su máscara. Documéntalo en el código: es la segunda y última excepción
    a "las claves no salen", y existe porque sin ella la rotación sería inútil.
 
-Los tests que hacen falta:
+Los tests van en `internal/httpapi/ingest_test.go`:
 
 ```go
-// TestRotateKeyChangesTheKeyAndAudits
-// TestRotateKeyWithoutDisconnectLeavesTheSessionAlone
-// TestRotateKeyWithDisconnectCutsThePublisher   (con un doble de Disconnecter)
-// TestRotateKeyEventDoesNotContainTheKey        (spec §8)
-// TestGetIngestNeverReturnsThePlainKey          (solo la máscara)
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// fakeDisconnecter cuenta las veces que la API pidió cortar la publicación.
+type fakeDisconnecter struct {
+	mu     sync.Mutex
+	llamado int
+	corta   int
+}
+
+func (f *fakeDisconnecter) DisconnectPublisher() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.llamado++
+	return f.corta
+}
+
+func (f *fakeDisconnecter) veces() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.llamado
+}
+
+// newIngestServer levanta el servidor con el doble de Disconnecter y sesión iniciada.
+func newIngestServer(t *testing.T) (*Server, *fakeDisconnecter, []*http.Cookie) {
+	t.Helper()
+	srv, _ := newTestServer(t)
+	dc := &fakeDisconnecter{corta: 1}
+	srv.ingest = dc
+	srv.engine = &fakeEngine{}
+
+	login := postJSON(t, srv.Handler(), "/api/auth/login", `{"password":"la-contraseña-de-prueba"}`)
+	if login.Code != http.StatusNoContent {
+		t.Fatalf("login: %d", login.Code)
+	}
+	return srv, dc, login.Result().Cookies()
+}
+
+// TestGetIngestNeverReturnsThePlainKey: la tarjeta de ingesta de la UI enseña la máscara;
+// la clave solo se ve al rotarla o desde el propio SQLite (spec §8).
+func TestGetIngestNeverReturnsThePlainKey(t *testing.T) {
+	srv, _, cookies := newIngestServer(t)
+
+	real, err := srv.db.RevealIngestKey(context.Background(), srv.cipher)
+	if err != nil {
+		t.Fatalf("RevealIngestKey: %v", err)
+	}
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/ingest", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), real.Reveal()) {
+		t.Errorf("GET /api/ingest devuelve la clave en claro: %s", rec.Body.String())
+	}
+
+	var got ingestDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decodificar: %v", err)
+	}
+	if got.KeyMask != real.Mask() {
+		t.Errorf("key_mask = %q, quería %q", got.KeyMask, real.Mask())
+	}
+	if got.App == "" || got.URL == "" {
+		t.Errorf("faltan app o url: %+v", got)
+	}
+	// La URL no puede llevar la clave incrustada: es el error que hace que la gente la
+	// pegue en sitios donde no debería estar.
+	if strings.Contains(got.URL, real.Reveal()) {
+		t.Error("la URL de ingesta lleva la clave dentro")
+	}
+}
+
+// TestRotateKeyChangesTheKeyAndReturnsItOnce: la respuesta es la ÚNICA ocasión en que el
+// usuario puede copiar la clave nueva. Si no saliera aquí, rotar sería inútil.
+func TestRotateKeyChangesTheKeyAndReturnsItOnce(t *testing.T) {
+	srv, _, cookies := newIngestServer(t)
+	ctx := context.Background()
+
+	antes, err := srv.db.RevealIngestKey(ctx, srv.cipher)
+	if err != nil {
+		t.Fatalf("RevealIngestKey: %v", err)
+	}
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/ingest/rotate-key", `{"disconnect_now":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Key     string `json:"key"`
+		KeyMask string `json:"key_mask"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decodificar: %v", err)
+	}
+	if body.Key == "" {
+		t.Fatal("la rotación no devolvió la clave nueva")
+	}
+	if body.Key == antes.Reveal() {
+		t.Error("la clave no cambió")
+	}
+
+	despues, err := srv.db.RevealIngestKey(ctx, srv.cipher)
+	if err != nil {
+		t.Fatalf("RevealIngestKey: %v", err)
+	}
+	if despues.Reveal() != body.Key {
+		t.Error("la clave devuelta no es la que quedó guardada")
+	}
+	if body.KeyMask != despues.Mask() {
+		t.Errorf("key_mask = %q, quería %q", body.KeyMask, despues.Mask())
+	}
+}
+
+// TestRotateKeyAudits: rotar la clave de ingesta echa a quien esté transmitiendo con la
+// vieja. Tiene que quedar constancia de cuándo pasó.
+func TestRotateKeyAudits(t *testing.T) {
+	srv, _, cookies := newIngestServer(t)
+
+	if rec := do(t, srv, cookies, http.MethodPost, "/api/ingest/rotate-key", `{}`); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d — %s", rec.Code, rec.Body.String())
+	}
+
+	eventos, err := srv.db.RecentEvents(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	var visto bool
+	for _, e := range eventos {
+		if e.Kind == "ingest_key_rotated" {
+			visto = true
+		}
+	}
+	if !visto {
+		t.Error("rotar la clave de ingesta no dejó evento")
+	}
+}
+
+// TestRotateKeyEventDoesNotContainTheKey (spec §8): el evento dice que pasó, no qué clave
+// quedó. El log de eventos se enseña entero en el panel.
+func TestRotateKeyEventDoesNotContainTheKey(t *testing.T) {
+	srv, _, cookies := newIngestServer(t)
+
+	rec := do(t, srv, cookies, http.MethodPost, "/api/ingest/rotate-key", `{}`)
+	var body struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decodificar: %v", err)
+	}
+
+	eventos, err := srv.db.RecentEvents(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	for _, e := range eventos {
+		if strings.Contains(e.Message, body.Key) {
+			t.Errorf("el evento %q lleva la clave nueva dentro: %s", e.Kind, e.Message)
+		}
+	}
+}
+
+// TestRotateKeyWithoutDisconnectLeavesTheSessionAlone: el default es NO cortar. Rotar
+// preventivamente no debería tumbar una transmisión en curso sin haberlo pedido.
+func TestRotateKeyWithoutDisconnectLeavesTheSessionAlone(t *testing.T) {
+	srv, dc, cookies := newIngestServer(t)
+
+	if rec := do(t, srv, cookies, http.MethodPost, "/api/ingest/rotate-key",
+		`{"disconnect_now":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d", rec.Code)
+	}
+	if dc.veces() != 0 {
+		t.Errorf("se cortó la publicación sin pedirlo (%d llamadas)", dc.veces())
+	}
+
+	// Y con el cuerpo vacío, que es lo que manda un cliente descuidado: también false.
+	if rec := do(t, srv, cookies, http.MethodPost, "/api/ingest/rotate-key", `{}`); rec.Code != http.StatusOK {
+		t.Fatalf("rotate con cuerpo vacío: %d", rec.Code)
+	}
+	if dc.veces() != 0 {
+		t.Errorf("un cuerpo vacío cortó la publicación (%d llamadas)", dc.veces())
+	}
+}
+
+// TestRotateKeyWithDisconnectCutsThePublisher: con disconnect_now, el que esté publicando
+// con la clave vieja se va. Es el caso de "creo que se me filtró la clave".
+func TestRotateKeyWithDisconnectCutsThePublisher(t *testing.T) {
+	srv, dc, cookies := newIngestServer(t)
+
+	if rec := do(t, srv, cookies, http.MethodPost, "/api/ingest/rotate-key",
+		`{"disconnect_now":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d — %s", rec.Code, rec.Body.String())
+	}
+	if dc.veces() != 1 {
+		t.Errorf("llamadas a DisconnectPublisher = %d, quería 1", dc.veces())
+	}
+}
+
+// TestRotateKeyWithoutAnIngestConfigured: si el Disconnecter es nil (arranque parcial o
+// test), pedir el corte no debe entrar en pánico.
+func TestRotateKeyWithoutAnIngestConfigured(t *testing.T) {
+	srv, _, cookies := newIngestServer(t)
+	srv.ingest = nil
+
+	if rec := do(t, srv, cookies, http.MethodPost, "/api/ingest/rotate-key",
+		`{"disconnect_now":true}`); rec.Code != http.StatusOK {
+		t.Errorf("código = %d, quería 200: %s", rec.Code, rec.Body.String())
+	}
+}
 ```
 
 - [ ] **Step 4: `GET /api/status` y `GET /api/events`**
@@ -2903,16 +4069,229 @@ cruzando `db.ListDestinations` con `engine.Snapshot()`, que devuelve
 `events` acepta `?limit=100`; `RecentEvents` ya acota el límite por arriba y por abajo, así
 que un `limit` fuera de rango no es un error: se ajusta. Un `limit` no numérico sí es 400.
 
+Los tests van en `internal/httpapi/status_test.go`:
+
 ```go
-// TestStatusWithoutASessionSaysNotLive
-// TestStatusIncludesMetricsForLiveDestinationsOnly   (nil en los que no transmiten)
-// TestStatusNeverIncludesAKey
-// TestEventsRespectsTheLimit
-// TestEventsRejectsANonNumericLimit
-// TestEventsComeNewestFirst    ← este depende de la Task 1: sin el arreglo del orden
-//                                lexicográfico, falla en cuanto dos eventos caen en el
-//                                mismo segundo con fracciones de distinta longitud.
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/aprendomx/splitstream/internal/relay"
+	"github.com/aprendomx/splitstream/internal/store"
+)
+
+func decodeStatus(t *testing.T, rec *httptest.ResponseRecorder) statusDTO {
+	t.Helper()
+	var st statusDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatalf("decodificar status: %v — %s", err, rec.Body.String())
+	}
+	return st
+}
+
+// TestStatusWithoutASessionSaysNotLive: es el estado en el que arranca el servicio y en el
+// que pasa la mayor parte del tiempo. La UI lo usa para no enseñar métricas inventadas.
+func TestStatusWithoutASessionSaysNotLive(t *testing.T) {
+	srv, _, _, _, cookies := newDestServer(t)
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/status", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	st := decodeStatus(t, rec)
+	if st.Session.Live {
+		t.Error("dice que hay sesión viva sin haberla")
+	}
+	if st.Ingest.App == "" {
+		t.Error("falta la app de ingesta")
+	}
+}
+
+// TestStatusIncludesMetricsForLiveDestinationsOnly: el DTO trae null en los destinos que no
+// están transmitiendo. La UI tiene que poder distinguir eso de un cero, o enseñará
+// "0 kbps" para un destino apagado y parecerá que va mal.
+func TestStatusIncludesMetricsForLiveDestinationsOnly(t *testing.T) {
+	srv, db, eng, _, cookies := newDestServer(t)
+	vivo := crearDest(t, db, srv, "vivo", "k1", true)
+	quieto := crearDest(t, db, srv, "quieto", "k2", true)
+
+	eng.setLive(7)
+	eng.mu.Lock()
+	eng.metrics = map[int64]relay.Metrics{
+		vivo.ID: {State: "live", BytesSent: 1234, BitrateBPS: 4000},
+	}
+	eng.mu.Unlock()
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/status", "")
+	st := decodeStatus(t, rec)
+
+	if len(st.Destinations) != 2 {
+		t.Fatalf("destinos = %d, quería 2", len(st.Destinations))
+	}
+	for _, d := range st.Destinations {
+		switch d.ID {
+		case vivo.ID:
+			if d.Metrics == nil {
+				t.Fatal("el destino en vivo no trae métricas")
+			}
+			if d.Metrics.BytesSent != 1234 || d.Metrics.BitrateBPS != 4000 {
+				t.Errorf("métricas mal compuestas: %+v", d.Metrics)
+			}
+		case quieto.ID:
+			if d.Metrics != nil {
+				t.Errorf("el destino sin métricas trae %+v en vez de null", d.Metrics)
+			}
+		}
+	}
+}
+
+// TestStatusReportsTheLiveSession: cuando hay sesión, el estado trae sus datos.
+func TestStatusReportsTheLiveSession(t *testing.T) {
+	srv, db, eng, _, cookies := newDestServer(t)
+	ctx := context.Background()
+
+	id, err := db.StartSession(ctx)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	eng.setLive(id)
+
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if !st.Session.Live {
+		t.Fatal("dice que no hay sesión habiéndola")
+	}
+	if st.Session.ID != id {
+		t.Errorf("session.id = %d, quería %d", st.Session.ID, id)
+	}
+	if st.Session.StartedAt == nil {
+		t.Error("falta started_at de la sesión viva")
+	}
+}
+
+// TestStatusNeverIncludesAKey (spec §8): el estado es lo que más viaja —va por el
+// WebSocket cada segundo—, así que es donde más caro sale un descuido.
+func TestStatusNeverIncludesAKey(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	const clave = "clave-de-destino-inconfundible"
+	crearDest(t, db, srv, "yt", clave, true)
+
+	ingesta, err := db.RevealIngestKey(context.Background(), srv.cipher)
+	if err != nil {
+		t.Fatalf("RevealIngestKey: %v", err)
+	}
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/status", "")
+	cuerpo := rec.Body.String()
+	if strings.Contains(cuerpo, clave) {
+		t.Error("el estado lleva la clave de un destino")
+	}
+	if strings.Contains(cuerpo, ingesta.Reveal()) {
+		t.Error("el estado lleva la clave de ingesta")
+	}
+}
+
+// TestEventsComeNewestFirst depende de la Task 1: sin el arreglo del orden lexicográfico,
+// dos eventos del mismo segundo con fracciones de distinta longitud salen al revés.
+func TestEventsComeNewestFirst(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	ctx := context.Background()
+
+	// Seguidos a propósito: caen en el mismo segundo, que es el caso que rompía.
+	for _, msg := range []string{"primero", "segundo", "tercero"} {
+		if _, err := db.LogEvent(ctx, store.Event{
+			Level: store.LevelInfo, Kind: "test", Message: msg,
+		}); err != nil {
+			t.Fatalf("LogEvent(%s): %v", msg, err)
+		}
+	}
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/events", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got []eventDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decodificar: %v", err)
+	}
+	if len(got) < 3 {
+		t.Fatalf("eventos = %d, quería al menos 3", len(got))
+	}
+	if got[0].Message != "tercero" {
+		t.Errorf("el primero es %q, quería tercero: los eventos van del más reciente al más antiguo",
+			got[0].Message)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].CreatedAt.After(got[i-1].CreatedAt) {
+			t.Errorf("orden roto entre las posiciones %d y %d", i-1, i)
+		}
+	}
+}
+
+func TestEventsRespectsTheLimit(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	ctx := context.Background()
+
+	for i := 0; i < 10; i++ {
+		if _, err := db.LogEvent(ctx, store.Event{
+			Level: store.LevelInfo, Kind: "test", Message: "x",
+		}); err != nil {
+			t.Fatalf("LogEvent: %v", err)
+		}
+	}
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/events?limit=3", "")
+	var got []eventDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decodificar: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("eventos = %d, quería 3", len(got))
+	}
+}
+
+// TestEventsClampsAnOutOfRangeLimit: RecentEvents ya acota por arriba y por abajo, así que
+// un límite absurdo se ajusta en vez de ser un error. Pedir 0 o un millón es descuido del
+// cliente, no una petición inválida.
+func TestEventsClampsAnOutOfRangeLimit(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	if _, err := db.LogEvent(context.Background(), store.Event{
+		Level: store.LevelInfo, Kind: "test", Message: "x",
+	}); err != nil {
+		t.Fatalf("LogEvent: %v", err)
+	}
+
+	for _, limit := range []string{"0", "-5", "999999"} {
+		t.Run("limit="+limit, func(t *testing.T) {
+			rec := do(t, srv, cookies, http.MethodGet, "/api/events?limit="+limit, "")
+			if rec.Code != http.StatusOK {
+				t.Errorf("código = %d, quería 200: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestEventsRejectsANonNumericLimit: esto sí es una petición mal formada.
+func TestEventsRejectsANonNumericLimit(t *testing.T) {
+	srv, _, _, _, cookies := newDestServer(t)
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/events?limit=muchos", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("código = %d, quería 400: %s", rec.Code, rec.Body.String())
+	}
+	if got := errCode(t, rec); got != codeInvalidInput {
+		t.Errorf("code = %q", got)
+	}
+}
 ```
+
+Añade `net/http/httptest` a los imports.
 
 - [ ] **Step 5: Ejecutar los tests y verificar que pasan**
 
@@ -2956,34 +4335,241 @@ esa línea.
 
 - [ ] **Step 2: Escribir los tests**
 
-Crea `internal/httpapi/ws_test.go` usando `httptest.NewServer` y el cliente del propio
+Crea `internal/httpapi/ws_test.go`, con `httptest.NewServer` y el cliente del propio
 paquete `websocket`:
 
 ```go
-// TestWebSocketRequiresASession: el handshake lleva la cookie, así que el WS se protege
-// igual que el resto. Sin cookie, el upgrade se rechaza.
-func TestWebSocketRequiresASession(t *testing.T) {}
+package httpapi
 
-// TestWebSocketPushesStatus: al conectar llega un statusDTO, y luego otro. Con un límite
-// de tiempo generoso pero finito, para que un fallo salga como fallo y no como cuelgue.
-func TestWebSocketPushesStatus(t *testing.T) {}
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+// wsServer levanta el servidor sobre httptest y devuelve la URL ws:// y las cookies de una
+// sesión ya iniciada.
+func wsServer(t *testing.T) (*Server, string, []*http.Cookie) {
+	t.Helper()
+	srv, _, _, _, cookies := newDestServer(t)
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	return srv, "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws", cookies
+}
+
+// dialWS conecta al WebSocket llevando las cookies de sesión.
+func dialWS(t *testing.T, ctx context.Context, url string, cookies []*http.Cookie) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	jar := http.Header{}
+	var partes []string
+	for _, c := range cookies {
+		partes = append(partes, c.Name+"="+c.Value)
+	}
+	if len(partes) > 0 {
+		jar.Set("Cookie", strings.Join(partes, "; "))
+	}
+	return websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: jar})
+}
+
+// TestWebSocketRequiresASession: el handshake es una petición HTTP normal y lleva la
+// cookie, así que el WS se protege igual que el resto. Sin ella, no hay upgrade.
+func TestWebSocketRequiresASession(t *testing.T) {
+	_, url, _ := wsServer(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, resp, err := dialWS(t, ctx, url, nil)
+	if err == nil {
+		conn.Close(websocket.StatusNormalClosure, "")
+		t.Fatal("el WebSocket aceptó una conexión sin sesión")
+	}
+	if resp != nil && resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("código = %d, quería 401", resp.StatusCode)
+	}
+}
+
+// TestWebSocketPushesStatus: al conectar llega un statusDTO, y sigue llegando. El plazo es
+// generoso pero finito, para que un fallo salga como fallo y no como cuelgue del test.
+func TestWebSocketPushesStatus(t *testing.T) {
+	_, url, cookies := wsServer(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, _, err := dialWS(t, ctx, url, cookies)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	for i := 0; i < 2; i++ {
+		leerCtx, cancelLeer := context.WithTimeout(ctx, 4*time.Second)
+		_, data, err := conn.Read(leerCtx)
+		cancelLeer()
+		if err != nil {
+			t.Fatalf("mensaje %d: %v", i+1, err)
+		}
+
+		var st statusDTO
+		if err := json.Unmarshal(data, &st); err != nil {
+			t.Fatalf("mensaje %d no es un statusDTO: %v — %s", i+1, err, data)
+		}
+		if st.Ingest.App == "" {
+			t.Errorf("mensaje %d llegó sin la app de ingesta: %s", i+1, data)
+		}
+	}
+}
 
 // TestWebSocketPayloadMatchesTheRESTSnapshot es lo que sostiene la decisión de compartir
-// tipo: el JSON del WS y el de GET /api/status deben tener las mismas claves. Compara los
-// dos deserializados a map[string]any, no los bytes, que pueden diferir en el orden.
-func TestWebSocketPayloadMatchesTheRESTSnapshot(t *testing.T) {}
+// tipo entre GET /api/status y el WS (spec §10): la UI arranca con el snapshot REST y
+// sigue con el WS, y eso solo funciona si las dos formas son idénticas.
+//
+// Compara los deserializados, no los bytes: el orden de las claves de un JSON no es
+// significativo y compararlo daría fallos falsos.
+func TestWebSocketPayloadMatchesTheRESTSnapshot(t *testing.T) {
+	srv, url, cookies := wsServer(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, _, err := dialWS(t, ctx, url, cookies)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	leerCtx, cancelLeer := context.WithTimeout(ctx, 4*time.Second)
+	_, viaWS, err := conn.Read(leerCtx)
+	cancelLeer()
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	rec := do(t, srv, cookies, http.MethodGet, "/api/status", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/status: %d", rec.Code)
+	}
+
+	var porWS, porREST map[string]any
+	if err := json.Unmarshal(viaWS, &porWS); err != nil {
+		t.Fatalf("WS: %v", err)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &porREST); err != nil {
+		t.Fatalf("REST: %v", err)
+	}
+
+	for k := range porREST {
+		if _, ok := porWS[k]; !ok {
+			t.Errorf("el WS no manda la clave %q que sí trae GET /api/status", k)
+		}
+	}
+	for k := range porWS {
+		if _, ok := porREST[k]; !ok {
+			t.Errorf("el WS manda la clave %q que GET /api/status no trae", k)
+		}
+	}
+}
 
 // TestWebSocketStopsWhenTheClientGoesAway: si el navegador cierra la pestaña, la goroutine
-// del push tiene que terminar. Comprueba runtime.NumGoroutine antes y después, con margen.
-func TestWebSocketStopsWhenTheClientGoesAway(t *testing.T) {}
+// del push tiene que terminar. Un WS mal escrito filtra una goroutine por pestaña cerrada,
+// y en un proceso que retransmite durante horas eso se acumula hasta doler.
+func TestWebSocketStopsWhenTheClientGoesAway(t *testing.T) {
+	_, url, cookies := wsServer(t)
 
-// TestWebSocketSurvivesASlowClient: un cliente que no lee no puede bloquear el bucle para
-// siempre. Cada escritura va con su propio plazo; al vencer, se cierra la conexión.
-func TestWebSocketSurvivesASlowClient(t *testing.T) {}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Una primera conexión para que se cree todo lo que se crea una sola vez, y así la
+	// medición no cuente arranque perezoso como fuga.
+	conn0, _, err := dialWS(t, ctx, url, cookies)
+	if err != nil {
+		t.Fatalf("Dial de calentamiento: %v", err)
+	}
+	leerCtx, cancelLeer := context.WithTimeout(ctx, 4*time.Second)
+	conn0.Read(leerCtx)
+	cancelLeer()
+	conn0.Close(websocket.StatusNormalClosure, "")
+	time.Sleep(500 * time.Millisecond)
+
+	runtime.GC()
+	antes := runtime.NumGoroutine()
+
+	for i := 0; i < 5; i++ {
+		conn, _, err := dialWS(t, ctx, url, cookies)
+		if err != nil {
+			t.Fatalf("Dial %d: %v", i, err)
+		}
+		leerCtx, cancelLeer := context.WithTimeout(ctx, 4*time.Second)
+		if _, _, err := conn.Read(leerCtx); err != nil {
+			cancelLeer()
+			t.Fatalf("Read %d: %v", i, err)
+		}
+		cancelLeer()
+		conn.Close(websocket.StatusNormalClosure, "")
+	}
+
+	// Margen para que las goroutines se enteren y salgan.
+	var despues int
+	for i := 0; i < 20; i++ {
+		time.Sleep(200 * time.Millisecond)
+		runtime.GC()
+		despues = runtime.NumGoroutine()
+		if despues <= antes+2 {
+			return
+		}
+	}
+	t.Errorf("goroutines: %d antes, %d después de 5 conexiones cerradas — parece una fuga",
+		antes, despues)
+}
+
+// TestWebSocketSurvivesASlowClient: un cliente que no lee llena el buffer del socket. Sin
+// un plazo por escritura, el bucle del push se queda ahí para siempre y la goroutine no
+// sale nunca, ni cerrando el navegador.
+func TestWebSocketSurvivesASlowClient(t *testing.T) {
+	_, url, cookies := wsServer(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	conn, _, err := dialWS(t, ctx, url, cookies)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	// No se lee NADA a propósito: este cliente está atascado.
+
+	runtime.GC()
+	antes := runtime.NumGoroutine()
+
+	// Con el push a 1 s y el plazo de escritura a 2 s, en 10 s el servidor debe haber
+	// desistido y cerrado por su cuenta.
+	time.Sleep(10 * time.Second)
+	conn.Close(websocket.StatusNormalClosure, "")
+
+	for i := 0; i < 15; i++ {
+		time.Sleep(200 * time.Millisecond)
+		runtime.GC()
+		if runtime.NumGoroutine() <= antes+2 {
+			return
+		}
+	}
+	t.Errorf("un cliente que no lee dejó goroutines vivas: %d antes, %d después",
+		antes, runtime.NumGoroutine())
+}
 ```
 
-Los dos últimos son los que importan: un WS mal escrito filtra una goroutine por pestaña
-cerrada, y eso en un proceso que retransmite durante horas se acumula.
+`TestWebSocketSurvivesASlowClient` tarda diez segundos. Si molesta en la iteración rápida,
+márcalo con `if testing.Short() { t.Skip(...) }` — pero **que siga corriendo en la CI**,
+que no usa `-short`.
 
 - [ ] **Step 3: Implementar**
 
@@ -3034,25 +4620,148 @@ los sinks.
 
 - [ ] **Step 1: Escribir el test que falla**
 
+Añade a `cmd/splitstream/main_test.go`:
+
 ```go
-// TestRunServesTheAPI: el binario levanta la API donde dice la configuración, y responde.
-// Se comprueba contra /api/auth/login porque es el único endpoint público: un 401 o un 409
-// prueban que el servidor está ahí, sin necesidad de autenticarse.
-func TestRunServesTheAPI(t *testing.T) {}
+// freeAddr reserva un puerto y lo suelta. Hace falta porque run() construye el servidor
+// HTTP por dentro: con :0 el test no tendría forma de saber dónde acabó escuchando.
+//
+// Hay una ventana entre soltar el puerto y que run() lo tome; en la práctica no se pisa
+// nadie en un test local, y la alternativa —exponer el listener desde run()— ensuciaría la
+// firma solo para el test.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("puerto libre: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().String()
+}
 
-// TestRunShutsDownTheHTTPServerOnSignal: al cancelar el contexto, run debe volver, y el
-// puerto quedar libre. Si el servidor HTTP no se cierra, run se queda colgado y el
-// servicio no se puede reiniciar sin matarlo.
-func TestRunShutsDownTheHTTPServerOnSignal(t *testing.T) {}
+// TestRunServesTheAPI: el binario levanta la API donde dice la configuración.
+//
+// Se comprueba contra /api/auth/login porque es el único endpoint público: un 409 —no hay
+// contraseña configurada— prueba que el servidor está ahí y que es el nuestro, sin
+// necesidad de autenticarse ni de tocar la base.
+func TestRunServesTheAPI(t *testing.T) {
+	master, err := generateMasterKey()
+	if err != nil {
+		t.Fatalf("generateMasterKey: %v", err)
+	}
+	addr := freeAddr(t)
+	t.Setenv("SPLITSTREAM_MASTER_KEY", master)
+	t.Setenv("SPLITSTREAM_DB_PATH", filepath.Join(t.TempDir(), "api.db"))
+	t.Setenv("SPLITSTREAM_RTMP_ADDR", "127.0.0.1:0")
+	t.Setenv("SPLITSTREAM_HTTP_ADDR", addr)
 
-// TestStartupLogStillHasNoKeys: la fase 3 arregló esto dos veces (5e57f0b, 62a6dc2).
-// Ampliar el arranque es exactamente cuando se vuelve a romper.
-func TestStartupLogStillHasNoKeys(t *testing.T) {}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hecho := make(chan error, 1)
+	go func() { hecho <- run(ctx, io.Discard) }()
+
+	// Esperar a que el puerto acepte: run() hace migraciones antes de escuchar.
+	var resp *http.Response
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err = http.Post("http://"+addr+"/api/auth/login",
+			"application/json", strings.NewReader(`{"password":"x"}`))
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("la API nunca respondió en %s: %v", addr, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("código = %d, quería 409 (sin contraseña configurada)", resp.StatusCode)
+	}
+	cuerpo, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(cuerpo), "setpassword") {
+		t.Errorf("la respuesta no parece la nuestra: %s", cuerpo)
+	}
+
+	cancel()
+	select {
+	case err := <-hecho:
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run no volvió tras cancelar")
+	}
+}
+
+// TestRunShutsDownTheHTTPServerOnSignal: al cancelar el contexto, run debe volver y el
+// puerto quedar libre. Si el servidor HTTP no se cierra, run se cuelga y el servicio no se
+// puede reiniciar sin matarlo — que es exactamente el fallo que la fase 3 persiguió tres
+// rondas en el lado de la ingesta.
+func TestRunShutsDownTheHTTPServerOnSignal(t *testing.T) {
+	master, err := generateMasterKey()
+	if err != nil {
+		t.Fatalf("generateMasterKey: %v", err)
+	}
+	addr := freeAddr(t)
+	t.Setenv("SPLITSTREAM_MASTER_KEY", master)
+	t.Setenv("SPLITSTREAM_DB_PATH", filepath.Join(t.TempDir(), "cierre.db"))
+	t.Setenv("SPLITSTREAM_RTMP_ADDR", "127.0.0.1:0")
+	t.Setenv("SPLITSTREAM_HTTP_ADDR", addr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	hecho := make(chan error, 1)
+	go func() { hecho <- run(ctx, io.Discard) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-hecho:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run no volvió tras cancelar: el servidor HTTP no se cerró")
+	}
+
+	// Y el puerto queda libre: se puede volver a escuchar en él.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("el puerto sigue ocupado tras el apagado: %v", err)
+	}
+	ln.Close()
+}
 ```
 
-El tercero probablemente ya exista como `TestRunStartupLogNeverContainsTheIngestKey`
-(`cmd/splitstream/main_test.go:69`): amplíalo en vez de duplicarlo, para que cubra también
-lo que loguea el arranque del HTTP.
+El tercer test que hace falta —que el arranque siga sin volcar claves— **ya existe**:
+`TestRunStartupLogNeverContainsTheIngestKey` (`cmd/splitstream/main_test.go:85`). Amplíalo
+en vez de duplicarlo, para que cubra también lo que loguea el arranque del HTTP:
+
+```go
+	// Añadir dentro del test existente, tras las comprobaciones actuales:
+	if !strings.Contains(logged, "http") {
+		t.Errorf("el arranque no dice nada del servidor HTTP: %s", logged)
+	}
+	if strings.Contains(logged, "password") || strings.Contains(logged, "contraseña") {
+		t.Errorf("el arranque menciona la contraseña: %s", logged)
+	}
+```
+
+La fase 3 tuvo que arreglar esta propiedad dos veces (`5e57f0b`, `62a6dc2`). Ampliar el
+arranque es exactamente cuando se vuelve a romper.
+
+Añade `io`, `net`, `net/http` y `time` a los imports del archivo de test si no están.
 
 - [ ] **Step 2: Implementar el cableado**
 
