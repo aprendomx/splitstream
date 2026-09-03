@@ -3507,20 +3507,24 @@ git commit -m "test: fan-out a dos destinos y reconexión tras caída de un sink
 
 ## Definición de terminado, fase 3
 
-- [ ] `go test ./... -race -count=1` pasa entero.
-- [ ] `go vet ./...` limpio.
-- [ ] `CGO_ENABLED=0 go build ./cmd/splitstream` produce el binario.
-- [ ] `go.mod` sigue con exactamente tres directas y `go 1.25.0`.
-- [ ] `go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'` vacío.
-- [ ] `make sinks-up && make test-integration` pasa los tres tests, incluidos el de fan-out
+> Verificada entera el 2026-09-02 sobre `main` en 3ddda9e. Las evidencias, comando por
+> comando, están en el ledger: `docs/superpowers/plans/2026-09-02-fase-3-ledger.md`.
+
+
+- [x] `go test ./... -race -count=1` pasa entero.
+- [x] `go vet ./...` limpio.
+- [x] `CGO_ENABLED=0 go build ./cmd/splitstream` produce el binario.
+- [x] `go.mod` sigue con exactamente tres directas y `go 1.25.0`.
+- [x] `go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'` vacío.
+- [x] `make sinks-up && make test-integration` pasa los tres tests, incluidos el de fan-out
       a dos destinos y el de reconexión tras matar uno.
-- [ ] Un destino lento descarta **GOPs completos**, se marca `degraded`, y no bloquea al
+- [x] Un destino lento descarta **GOPs completos**, se marca `degraded`, y no bloquea al
       publisher ni a sus hermanos.
-- [ ] Un destino caído reconecta con backoff de 1 s a 30 s y reenvía el preámbulo.
-- [ ] Las métricas de cada destino reportan bytes, bitrate, descartes, uptime, reconexiones
+- [x] Un destino caído reconecta con backoff de 1 s a 30 s y reenvía el preámbulo.
+- [x] Las métricas de cada destino reportan bytes, bitrate, descartes, uptime, reconexiones
       y último error.
-- [ ] La resolución de la sesión sale del SPS y el bitrate es el medido.
-- [ ] El store aguanta 8 escritores y 4 lectores concurrentes sin perder escrituras.
+- [x] La resolución de la sesión sale del SPS y el bitrate es el medido.
+- [x] El store aguanta 8 escritores y 4 lectores concurrentes sin perder escrituras.
 
 ## Notas para la fase 4
 
