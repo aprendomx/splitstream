@@ -1,8 +1,12 @@
 .PHONY: build test test-integration sinks-up sinks-down vet tidy run clean
 
+# La versión sale del tag más cercano. Sin tags (o sin git) queda en "dev", que es
+# exactamente lo que vale un binario que no viene de una release.
+VERSION ?= $(shell git describe --tags --dirty 2>/dev/null || echo dev)
+
 # CGO_ENABLED=0 solo aquí: el binario de producción debe ser estático.
 build:
-	CGO_ENABLED=0 go build -o splitstream ./cmd/splitstream
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o splitstream ./cmd/splitstream
 
 # El detector de carreras necesita cgo, así que este target no lo desactiva.
 test:

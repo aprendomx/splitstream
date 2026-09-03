@@ -1,7 +1,8 @@
 // Command splitstream es el servicio de retransmisión RTMP.
 //
-// Fase 1: arranca, valida la configuración y la master key, migra la base de datos
-// y espera a SIGTERM. Todavía no hay servidor RTMP ni API HTTP.
+// Fase 3: recibe un stream por RTMP, lo reparte a N destinos a la vez con cola
+// acotada y reconexión con backoff, y apaga ordenadamente con SIGTERM. Todavía no
+// hay API HTTP ni panel web.
 package main
 
 import (
@@ -26,9 +27,20 @@ import (
 	"github.com/aprendomx/splitstream/internal/store"
 )
 
+// version la fija el Makefile con -ldflags a partir de `git describe`. Un `go build`
+// o un `go run` sin flags la dejan en "dev": el binario sigue siendo utilizable y dice
+// la verdad sobre su procedencia.
+var version = "dev"
+
 func main() {
 	genkey := flag.Bool("genkey", false, "imprime una SPLITSTREAM_MASTER_KEY nueva y sale")
+	showVersion := flag.Bool("version", false, "imprime la versión del binario y sale")
 	flag.Parse()
+
+	if *showVersion {
+		printVersion(os.Stdout)
+		return
+	}
 
 	if *genkey {
 		key, err := generateMasterKey()
@@ -49,6 +61,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+}
+
+// printVersion escribe la versión en una sola línea. No toca la configuración ni la
+// base de datos: debe funcionar en un contenedor recién arrancado, sin master key.
+func printVersion(out io.Writer) {
+	fmt.Fprintf(out, "splitstream %s\n", version)
 }
 
 // generateMasterKey produce una master key de 32 bytes en base64 estándar.

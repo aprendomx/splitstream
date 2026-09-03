@@ -45,6 +45,23 @@ func TestGenerateMasterKeyIsRandom(t *testing.T) {
 	}
 }
 
+func TestPrintVersionEmitsOneLineWithTheVersion(t *testing.T) {
+	old := version
+	version = "v9.9.9-test"
+	defer func() { version = old }()
+
+	var buf bytes.Buffer
+	printVersion(&buf)
+
+	got := buf.String()
+	if !strings.HasSuffix(got, "\n") || strings.Count(got, "\n") != 1 {
+		t.Errorf("quería exactamente una línea, obtuve %q", got)
+	}
+	if !strings.Contains(got, "v9.9.9-test") {
+		t.Errorf("la salida no lleva la versión: %q", got)
+	}
+}
+
 // syncWriter serializa lo que escriben las goroutines de run: el logger lo usan la
 // ingesta y los sinks a la vez.
 type syncWriter struct {
