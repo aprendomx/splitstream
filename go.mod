@@ -3,8 +3,10 @@ module github.com/aprendomx/splitstream
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/yutopp/go-rtmp v0.0.7
 	golang.org/x/crypto v0.55.0
+	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.57.0
 )
 

@@ -1586,7 +1586,7 @@ sesión, y los dos endpoints de autenticación con su limitador de intentos.
   - `func (s *Server) requireSession(next http.Handler) http.Handler`
   Las tasks 8, 9 y 10 cuelgan sus handlers de este mux y usan estos tres ayudantes.
 
-- [ ] **Step 1: Añadir la dependencia del limitador**
+- [x] **Step 1: Añadir la dependencia del limitador**
 
 ```bash
 go get golang.org/x/time@latest
@@ -1599,7 +1599,7 @@ en el bloque de directas de `go.mod` y que no entró nada más:
 git diff go.mod
 ```
 
-- [ ] **Step 2: Escribir el test de la forma de los errores**
+- [x] **Step 2: Escribir el test de la forma de los errores**
 
 Crea `internal/httpapi/errors_test.go`:
 
@@ -1710,12 +1710,12 @@ func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Disca
 Va aquí y no en `login_test.go` porque este archivo se escribe antes: si lo definieras allí,
 el paquete no compilaría entre el Step 2 y el Step 5.
 
-- [ ] **Step 3: Ejecutar el test y verificar que falla**
+- [x] **Step 3: Ejecutar el test y verificar que falla**
 
 Run: `go test ./internal/httpapi/ -run 'Error' -v`
 Expected: FAIL por `undefined: writeError`, `undefined: Server`.
 
-- [ ] **Step 4: Implementar los errores**
+- [x] **Step 4: Implementar los errores**
 
 Crea `internal/httpapi/errors.go`:
 
@@ -1791,7 +1791,7 @@ Los mensajes de `ErrNotFound`, `ErrInvalidInput` y `ErrConflict` sí van al clie
 textos que escribimos nosotros para explicar qué tiene de malo la petición, y no llevan
 estado interno. El del 500 no.
 
-- [ ] **Step 5: Escribir el test del login**
+- [x] **Step 5: Escribir el test del login**
 
 Crea `internal/httpapi/login_test.go`:
 
@@ -2073,12 +2073,12 @@ existan ya. Regístralas todas en el mux desde esta tarea; las que aún no tiene
 propio se enganchan a uno que devuelve `501 Not Implemented`, y cada task posterior lo
 sustituye por el suyo. Así la lista de rutas y la de permisos se escriben una sola vez.
 
-- [ ] **Step 6: Ejecutar los tests y verificar que fallan**
+- [x] **Step 6: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/httpapi/ -v`
 Expected: FAIL por `undefined: New`, `undefined: Config`, `undefined: Server`.
 
-- [ ] **Step 7: Implementar el servidor**
+- [x] **Step 7: Implementar el servidor**
 
 Crea `internal/httpapi/server.go`:
 
@@ -2241,7 +2241,7 @@ func clientIP(r *http.Request) string {
 1.22 sin ambigüedad: los patrones literales ganan a los que tienen wildcard. Compruébalo —
 si `reorder` acabara entrando por el handler de `{id}`, el test de la Task 8 lo cazará.
 
-- [ ] **Step 8: Implementar login, logout y el middleware**
+- [x] **Step 8: Implementar login, logout y el middleware**
 
 Añade a `internal/httpapi/auth.go`:
 
@@ -2362,15 +2362,19 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 Añade a los imports de `auth.go`: `encoding/json`, `net/http`, `sync`,
 `golang.org/x/time/rate` y el paquete `crypto` del proyecto.
 
-- [ ] **Step 9: Ejecutar los tests y verificar que pasan**
+- [x] **Step 9: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/httpapi/ -race -count=1 -v`
-Expected: PASS todos menos `TestSessionCookieOpensTheDoor`, que espera 200 de
-`GET /api/destinations` y de momento recibe 501. Ajusta ese test para aceptar 501 **con un
-comentario que diga que la Task 8 lo sube a 200**, y súbelo cuando llegues ahí. No lo
-borres: es el único test del camino feliz de la sesión.
+Expected: PASS. `TestSessionCookieOpensTheDoor` se escribe exigiendo 501 y comprobando
+que **no** es 401 —lo que prueba hoy es que la sesión pasa el middleware, no que el
+endpoint funcione—, con un comentario que dice que la Task 8 lo sube a 200. No lo borres:
+es el único test del camino feliz de la sesión.
 
-- [ ] **Step 10: Commit**
+> **Nota al ejecutar.** `go get golang.org/x/time@latest` la añade como **indirecta**,
+> porque en ese momento nadie la importa todavía. Como `go mod tidy` está prohibido, hay
+> que mover la línea al bloque de directas a mano después de escribir el import.
+
+- [x] **Step 10: Commit**
 
 ```bash
 git add internal/httpapi/ go.mod go.sum
@@ -2395,7 +2399,7 @@ copia se desincronice en silencio.
   funciones `newMetricsDTO`, `newDestinationDTO`, `newEventDTO`. Las tasks 8, 9 y 10 las
   usan; el WebSocket empuja exactamente el mismo `statusDTO` que `GET /api/status`.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Crea `internal/httpapi/dto_test.go`:
 
@@ -2535,12 +2539,12 @@ func TestDTOFieldNamesAreSnakeCase(t *testing.T) {
 
 Añade `strings` a los imports.
 
-- [ ] **Step 2: Ejecutar el test y verificar que falla**
+- [x] **Step 2: Ejecutar el test y verificar que falla**
 
 Run: `go test ./internal/httpapi/ -run DTO -v`
 Expected: FAIL por `undefined: metricsDTO`, `newMetricsDTO`, etc.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Crea `internal/httpapi/dto.go`:
 
@@ -2667,12 +2671,12 @@ type statusDTO struct {
 }
 ```
 
-- [ ] **Step 4: Ejecutar los tests y verificar que pasan**
+- [x] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/httpapi/ -race -count=1`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/httpapi/
@@ -2702,7 +2706,7 @@ edición en caliente, y copiar ese código sería garantizar que las dos copias 
   - `func (f *Factory) BuildEnabled(ctx context.Context) ([]*relay.Sink, error)`
   `*sinks.Factory` satisface `httpapi.SinkBuilder`.
 
-- [ ] **Step 1: Extraer la fábrica**
+- [x] **Step 1: Extraer la fábrica**
 
 Crea `internal/sinks/factory.go` moviendo, **sin cambiar la lógica**, el cuerpo del closure
 que hoy está en `engine.SetSinkProvider` dentro de `cmd/splitstream/main.go`. Léelo primero
@@ -2729,7 +2733,7 @@ La fábrica guarda `db`, `cipher` y `logger`, y `Build` usa
 `BuildEnabled` lista los destinos, se salta los deshabilitados y llama a `Build` por cada
 uno, registrando y continuando si uno falla, exactamente como hace hoy `main.go`.
 
-- [ ] **Step 2: Escribir el test de la fábrica**
+- [x] **Step 2: Escribir el test de la fábrica**
 
 Crea `internal/sinks/factory_test.go`:
 
@@ -2916,7 +2920,7 @@ func TestBuildEnabledWithNoDestinations(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Cambiar `main.go` para usar la fábrica**
+- [x] **Step 3: Cambiar `main.go` para usar la fábrica**
 
 Sustituye el closure de `engine.SetSinkProvider` por:
 
@@ -2931,7 +2935,7 @@ Run: `go test ./... -race -count=1` — la suite entera, incluida la de integrac
 los sinks levantados. Este paso no debe cambiar ningún comportamiento observable: si algo
 se pone rojo, el movimiento no fue mecánico y hay que revisarlo.
 
-- [ ] **Step 4: Commit del refactor, separado**
+- [x] **Step 4: Commit del refactor, separado**
 
 ```bash
 git add internal/sinks/ cmd/splitstream/main.go
@@ -2942,7 +2946,7 @@ Va en su propio commit a propósito: un refactor sin cambio de comportamiento y 
 funcionalidad nueva no deben compartir commit, porque entonces `git bisect` no puede
 distinguirlos.
 
-- [ ] **Step 5: Escribir los tests de los endpoints de destinos**
+- [x] **Step 5: Escribir los tests de los endpoints de destinos**
 
 Crea `internal/httpapi/destinations_test.go`:
 
@@ -3596,12 +3600,12 @@ func itoa(id int64) string { return strconv.FormatInt(id, 10) }
 
 Añade `errors` y `strconv` a los imports.
 
-- [ ] **Step 6: Ejecutar los tests y verificar que fallan**
+- [x] **Step 6: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/httpapi/ -run Destination -v`
 Expected: FAIL — los endpoints devuelven 501.
 
-- [ ] **Step 7: Implementar los handlers**
+- [x] **Step 7: Implementar los handlers**
 
 Crea `internal/httpapi/destinations.go`. Las decisiones que el código debe respetar:
 
@@ -3625,16 +3629,16 @@ Crea `internal/httpapi/destinations.go`. Las decisiones que el código debe resp
    la petición hizo lo que pedía —persistir el cambio—, y decir 500 haría que el usuario lo
    repitiera y creara un destino duplicado.
 
-- [ ] **Step 8: Sustituir los `notImplemented` de destinos en `routes()`**
+- [x] **Step 8: Sustituir los `notImplemented` de destinos en `routes()`**
 
 Y sube `TestSessionCookieOpensTheDoor` (Task 6, Step 9) de 501 a 200, que era el objetivo.
 
-- [ ] **Step 9: Ejecutar los tests y verificar que pasan**
+- [x] **Step 9: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./... -race -count=1`
 Expected: PASS entero.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add internal/httpapi/
@@ -3661,8 +3665,17 @@ que no sirve.
   `store.SessionByID`, `relay.Engine.SessionID`, `relay.Engine.Snapshot`, los DTO (Task 7).
 - Produces: `func (i *Ingest) DisconnectPublisher() int` — cierra las conexiones activas y
   devuelve cuántas cerró; el listener sigue escuchando. Satisface `httpapi.Disconnecter`.
+  `Config` gana `RTMPAddr`, del que solo se usa el puerto.
 
-- [ ] **Step 1: Escribir el test de `DisconnectPublisher`**
+> **Aviso al escribir el test de concurrencia.** No uses `Publisher` completos para
+> martillear `DisconnectPublisher`: el test se cuelga. Es la carrera del CLIENTE de go-rtmp
+> que el ledger de la fase 2 dejó avisada —entre `(*streams).Delete` y su goroutine de
+> lectura—, que aflora al llamar a `Publisher.Close()` sobre una conexión ya muerta. Usa
+> `net.Dial` en crudo: `track()` registra la conexión en cuanto se acepta, así que el
+> handshake RTMP no aporta nada a lo que ese test comprueba. Y pon una pausa en el bucle de
+> dial, o agotarás los puertos efímeros en TIME_WAIT y el test fallará por su propia culpa.
+
+- [x] **Step 1: Escribir el test de `DisconnectPublisher`**
 
 Añade a `internal/rtmpio/ingest_test.go` (paquete interno `rtmpio`; el `recorder` y el
 patrón de montaje ya están en ese archivo, reutilízalos):
@@ -3849,14 +3862,14 @@ func TestCloseStillWorksAfterDisconnectPublisher(t *testing.T) {
 
 `sync` ya está entre los imports del archivo; comprueba que `net` y `context` también.
 
-- [ ] **Step 2: Implementar `DisconnectPublisher`**
+- [x] **Step 2: Implementar `DisconnectPublisher`**
 
 `Ingest` ya lleva un mapa de conexiones activas desde la fase 2 —se añadió porque
 `rtmp.Server.Close()` de go-rtmp v0.0.7 solo cierra el listener y no rastrea las conexiones
 aceptadas—. `DisconnectPublisher` cierra esas conexiones y vacía el mapa, **sin** tocar el
 listener ni el `rtmp.Server`. Reutiliza el mismo mutex; no añadas otro.
 
-- [ ] **Step 3: Los endpoints de ingesta**
+- [x] **Step 3: Los endpoints de ingesta**
 
 `GET /api/ingest` devuelve `ingestDTO` con la URL de ingesta, la app y la máscara de la
 clave. La URL se compone de la dirección RTMP configurada y la app; **la clave no va en la
@@ -4094,7 +4107,7 @@ func TestRotateKeyWithoutAnIngestConfigured(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: `GET /api/status` y `GET /api/events`**
+- [x] **Step 4: `GET /api/status` y `GET /api/events`**
 
 `status` compone: `ingestDTO` desde settings; `sessionDTO` desde
 `engine.SessionID()` y, si no es 0, `db.SessionByID`; y la lista de `destinationDTO`
@@ -4328,11 +4341,11 @@ func TestEventsRejectsANonNumericLimit(t *testing.T) {
 
 Añade `net/http/httptest` a los imports.
 
-- [ ] **Step 5: Ejecutar los tests y verificar que pasan**
+- [x] **Step 5: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./... -race -count=1`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/rtmpio/ internal/httpapi/
@@ -4358,7 +4371,7 @@ tienen exactamente la misma forma.
   y llámalo desde los dos sitios. Dos compositores acabarían divergiendo.
 - Produces: nada que consuman otras tasks.
 
-- [ ] **Step 1: Añadir la dependencia**
+- [x] **Step 1: Añadir la dependencia**
 
 ```bash
 go get github.com/coder/websocket@v1.8.15
@@ -4368,7 +4381,7 @@ Verificado antes de escribir el plan: su `go.mod` no tiene ni un `require`, así
 arrastra nada. **No ejecutes `go mod tidy`.** Comprueba con `git diff go.mod` que solo entró
 esa línea.
 
-- [ ] **Step 2: Escribir los tests**
+- [x] **Step 2: Escribir los tests**
 
 Crea `internal/httpapi/ws_test.go`, con `httptest.NewServer` y el cliente del propio
 paquete `websocket`:
@@ -4606,7 +4619,7 @@ func TestWebSocketSurvivesASlowClient(t *testing.T) {
 márcalo con `if testing.Short() { t.Skip(...) }` — pero **que siga corriendo en la CI**,
 que no usa `-short`.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Puntos que el código debe respetar:
 
@@ -4623,13 +4636,13 @@ Puntos que el código debe respetar:
 6. **Un fallo al componer el estado se registra y NO cierra la conexión**: un error puntual
    de la base no debe tirar el panel de quien está transmitiendo.
 
-- [ ] **Step 4: Ejecutar los tests y verificar que pasan**
+- [x] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/httpapi/ -race -count=5`
 Con `-count=5` a propósito: los tests de goroutines y de plazos son los que fallan de forma
 intermitente, y una sola pasada verde no dice nada.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/httpapi/ go.mod go.sum
@@ -4653,7 +4666,7 @@ los sinks.
   `Ingest.DisconnectPublisher` (Task 9).
 - Produces: el binario sirve la API en `cfg.HTTPAddr`.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Añade a `cmd/splitstream/main_test.go`:
 
@@ -4798,7 +4811,7 @@ arranque es exactamente cuando se vuelve a romper.
 
 Añade `io`, `net`, `net/http` y `time` a los imports del archivo de test si no están.
 
-- [ ] **Step 2: Implementar el cableado**
+- [x] **Step 2: Implementar el cableado**
 
 Dentro de `run`, después de construir el motor y antes de arrancar la ingesta:
 
@@ -4831,7 +4844,7 @@ Un `ListenAndServe` que devuelve `http.ErrServerClosed` **no es un fallo**: es l
 devuelve siempre tras un `Shutdown`. Trátalo como la ingesta trata su error de listener
 cerrado.
 
-- [ ] **Step 3: Añadir `SecureCookies` a la configuración**
+- [x] **Step 3: Añadir `SecureCookies` a la configuración**
 
 En `internal/config/config.go`, añade el campo con su variable de entorno
 `SPLITSTREAM_SECURE_COOKIES`, por defecto `false`. Va en la configuración y no se deduce de
@@ -4839,14 +4852,14 @@ la petición porque en el despliegue del spec §12 el TLS lo termina un proxy y 
 solo ve HTTP: intentar adivinarlo daría una cookie sin `Secure` justo en producción.
 Actualiza también la tabla del README y el test de defaults de `config`.
 
-- [ ] **Step 4: Ejecutar la suite entera**
+- [x] **Step 4: Ejecutar la suite entera**
 
 Run: `go test ./... -race -count=1` y después
 `make sinks-up && make test-integration`.
 Expected: PASS los dos. La integración importa aquí: es lo que prueba que añadir el
 servidor HTTP no rompió el apagado ordenado que la fase 3 costó tres rondas de arreglos.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/splitstream/ internal/config/ README.md
@@ -4857,27 +4870,30 @@ git commit -m "feat: el binario sirve la API HTTP junto al servidor RTMP"
 
 ## Definición de terminado, fase 4
 
-- [ ] `go test ./... -race -count=1` pasa entero.
-- [ ] `go vet ./...` limpio.
-- [ ] `CGO_ENABLED=0 go build ./cmd/splitstream` produce el binario.
-- [ ] `go.mod` tiene exactamente **cinco** directas, las del spec §5, y `go 1.25.0`.
-- [ ] `go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'` sigue vacío.
+> Verificada entera el 2026-09-03 sobre la rama `feat/fase-4-api-http`. Las evidencias,
+> punto por punto, están en el ledger: `docs/superpowers/plans/2026-09-03-fase-4-ledger.md`.
+
+- [x] `go test ./... -race -count=1` pasa entero.
+- [x] `go vet ./...` limpio.
+- [x] `CGO_ENABLED=0 go build ./cmd/splitstream` produce el binario.
+- [x] `go.mod` tiene exactamente **cinco** directas, las del spec §5, y `go 1.25.0`.
+- [x] `go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'` sigue vacío.
 - [x] `go list -deps ./internal/httpapi | grep go-rtmp` vacío. *(Verificado por la CI
       desde la Task 5.)*
-- [ ] `make sinks-up && make test-integration` sigue pasando los tres tests.
-- [ ] La CI (los dos jobs) está verde.
-- [ ] Los catorce endpoints del spec §9 existen, responden y están cubiertos por tests.
-- [ ] Ninguno de los catorce, salvo `GET /api/destinations/:id/key` y la respuesta de
+- [x] `make sinks-up && make test-integration` sigue pasando los tres tests.
+- [x] La CI (los dos jobs) está verde.
+- [x] Los catorce endpoints del spec §9 existen, responden y están cubiertos por tests.
+- [x] Ninguno de los catorce, salvo `GET /api/destinations/:id/key` y la respuesta de
       `POST /api/ingest/rotate-key`, devuelve una clave en claro. Verificado por un test que
       recorre los cuerpos, no por lectura.
-- [ ] Sin cookie de sesión válida, los doce endpoints protegidos responden 401.
-- [ ] El WebSocket empuja `statusDTO` cada segundo y su JSON tiene las mismas claves que
+- [x] Sin cookie de sesión válida, los doce endpoints protegidos responden 401.
+- [x] El WebSocket empuja `statusDTO` cada segundo y su JSON tiene las mismas claves que
       `GET /api/status`.
-- [ ] Cerrar el cliente del WebSocket no deja goroutines vivas.
-- [ ] `splitstream -setpassword` fija una contraseña verificable y no la imprime.
-- [ ] Revelar una clave por la API deja siempre un evento `key_revealed`.
-- [ ] El orden de `GET /api/events` es el cronológico, con eventos del mismo segundo.
-- [ ] El apagado con SIGTERM sigue cerrando la sesión de ingesta con `ended_at` no nulo.
+- [x] Cerrar el cliente del WebSocket no deja goroutines vivas.
+- [x] `splitstream -setpassword` fija una contraseña verificable y no la imprime.
+- [x] Revelar una clave por la API deja siempre un evento `key_revealed`.
+- [x] El orden de `GET /api/events` es el cronológico, con eventos del mismo segundo.
+- [x] El apagado con SIGTERM sigue cerrando la sesión de ingesta con `ended_at` no nulo.
 
 ## Notas para la fase 5
 
@@ -4888,5 +4904,10 @@ git commit -m "feat: el binario sirve la API HTTP junto al servidor RTMP"
 - La rotación de clave devuelve la clave nueva en claro **una sola vez**, en la respuesta.
   Si la UI no la enseña ahí, el usuario la pierde y tiene que rotar otra vez.
 - El WS no reintenta: la reconexión con backoff es del cliente (spec §10).
+- **Los timestamps del JSON NO son de ancho fijo.** En la base sí lo son desde la Task 1,
+  pero `time.Time` se serializa con `RFC3339Nano`, que recorta los ceros finales: un
+  `created_at` sale como `2026-09-03T17:21:22.104106Z`. El frontend debe parsearlos a
+  `Date` y ordenar por el valor, nunca comparando las cadenas — es la misma trampa del
+  spec §15.4, un piso más arriba.
 - Queda sin pagar de la deuda del spec §15: nada. Esta fase cierra §15.2, §15.3, §15.4,
   §15.5 y §15.8, que eran las cinco que quedaban.

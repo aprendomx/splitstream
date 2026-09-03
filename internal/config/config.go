@@ -20,6 +20,13 @@ type Config struct {
 	DBPath    string
 	LogLevel  slog.Level
 	MasterKey [MasterKeyLen]byte
+	// SecureCookies marca la cookie de sesión como Secure.
+	//
+	// Va en la configuración y no se deduce de la petición porque en el despliegue del
+	// spec §12 el TLS lo termina un proxy y el binario solo ve HTTP: adivinarlo daría una
+	// cookie sin Secure justo en producción, que es donde importa. Por defecto false, para
+	// que el panel funcione en local sin TLS.
+	SecureCookies bool
 }
 
 // LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente. Receptor por
@@ -29,6 +36,7 @@ func (c Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("http_addr", c.HTTPAddr),
 		slog.String("rtmp_addr", c.RTMPAddr),
+		slog.Bool("secure_cookies", c.SecureCookies),
 		slog.String("db_path", c.DBPath),
 		slog.String("log_level", c.LogLevel.String()),
 	)
@@ -74,6 +82,8 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		HTTPAddr: get("SPLITSTREAM_HTTP_ADDR", ":8080"),
 		RTMPAddr: get("SPLITSTREAM_RTMP_ADDR", ":1935"),
 		DBPath:   get("SPLITSTREAM_DB_PATH", "splitstream.db"),
+
+		SecureCookies: get("SPLITSTREAM_SECURE_COOKIES", "false") == "true",
 	}
 
 	level, err := parseLevel(get("SPLITSTREAM_LOG_LEVEL", "info"))

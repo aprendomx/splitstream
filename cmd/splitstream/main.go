@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,8 +25,10 @@ import (
 
 	"github.com/aprendomx/splitstream/internal/config"
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/httpapi"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
+	"github.com/aprendomx/splitstream/internal/sinks"
 	"github.com/aprendomx/splitstream/internal/store"
 )
 
@@ -236,55 +239,9 @@ func run(ctx context.Context, out io.Writer) error {
 	// Los sinks se construyen por sesión, no al arrancar el proceso: cada sesión de
 	// ingesta abre su propia conexión con cada destino (spec §6.5). Arrancarlos una sola
 	// vez aquí hacía que la segunda transmisión reutilizara el timebase de la primera.
+	factory := sinks.NewFactory(db, cipher, logger)
 	engine.SetSinkProvider(func() ([]*relay.Sink, error) {
-		dests, err := db.ListDestinations(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		var out []*relay.Sink
-		for _, d := range dests {
-			if !d.Enabled {
-				continue
-			}
-			key, err := db.DestinationKeyForRelay(ctx, cipher, d.ID)
-			if err != nil {
-				logger.Error("no se pudo leer la clave del destino", "destino", d.Name, "err", err)
-				continue
-			}
-			// Validar aquí evita crear un sink que no podría conectar nunca.
-			if _, err := rtmpio.NewPublisher(rtmpio.PublisherConfig{
-				URL: d.RTMPURL, StreamKey: key, Logger: logger,
-			}); err != nil {
-				logger.Error("destino mal configurado", "destino", d.Name, "err", err)
-				continue
-			}
-
-			url, name, id := d.RTMPURL, d.Name, d.ID
-			out = append(out, relay.NewSink(relay.SinkConfig{
-				ID:   id,
-				Name: name,
-				// Cada reconexión necesita un publisher nuevo: uno cerrado no se reabre.
-				NewPub: func() (relay.Publisher, error) {
-					return rtmpio.NewPublisher(rtmpio.PublisherConfig{
-						URL: url, StreamKey: key, Logger: logger,
-					})
-				},
-				Logger: logger,
-				OnEvent: func(ev relay.EngineEvent) {
-					if _, err := db.LogEvent(ctx, store.Event{
-						DestinationID: ev.DestinationID,
-						Level:         store.Level(ev.Level),
-						Kind:          ev.Kind,
-						Message:       ev.Message,
-					}); err != nil {
-						logger.Error("no se pudo registrar el evento del destino", "err", err)
-					}
-				},
-			}))
-		}
-		logger.Info("destinos de la sesión", "n", len(out))
-		return out, nil
+		return factory.BuildEnabled(ctx)
 	})
 
 	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{
@@ -293,7 +250,40 @@ func run(ctx context.Context, out io.Writer) error {
 		Logger:  logger,
 	})
 
+	api, err := httpapi.New(httpapi.Config{
+		DB:            db,
+		Cipher:        cipher,
+		Engine:        engine,
+		Hub:           hub,
+		Ingest:        ingest,
+		Sinks:         factory,
+		MasterKey:     cfg.MasterKey,
+		RTMPAddr:      cfg.RTMPAddr,
+		Logger:        logger,
+		SecureCookies: cfg.SecureCookies,
+	})
+	if err != nil {
+		return err
+	}
+
+	httpSrv := &http.Server{
+		Addr:    cfg.HTTPAddr,
+		Handler: api.Handler(),
+		// Sin WriteTimeout: lo mataría el WebSocket, que por definición escribe durante
+		// horas. El plazo de escritura del WS va por mensaje, dentro de su handler.
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// ErrServerClosed es lo que devuelve SIEMPRE tras un Shutdown: no es un fallo.
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("el servidor HTTP dejó de atender", "err", err)
+		}
+	}()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -307,10 +297,19 @@ func run(ctx context.Context, out io.Writer) error {
 	// matices, y eso incluye la máscara con los últimos 4 caracteres, que es para la
 	// interfaz —otra superficie, con otro control de acceso—. `ingest_app` no es secreto
 	// y se queda.
-	logger.Info("splitstream arrancado", "config", cfg, "ingest_app", settings.IngestApp)
+	logger.Info("splitstream arrancado", "config", cfg,
+		"ingest_app", settings.IngestApp, "http_addr", cfg.HTTPAddr)
 
 	<-ctx.Done()
 	logger.Info("apagando")
+
+	// El HTTP se cierra PRIMERO: así no puede entrar una petición que toque la base
+	// mientras se está cerrando la sesión de ingesta.
+	httpShutdown, cancelHTTP := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := httpSrv.Shutdown(httpShutdown); err != nil {
+		logger.Warn("el servidor HTTP no cerró limpiamente", "err", err)
+	}
+	cancelHTTP()
 
 	if err := ingest.Close(); err != nil {
 		logger.Error("cerrar la ingesta", "err", err)

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"io"
+	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -133,6 +135,16 @@ func TestRunStartupLogNeverContainsTheIngestKey(t *testing.T) {
 	}
 	if !strings.Contains(logged, "ingest_app") {
 		t.Errorf("el arranque debería seguir diciendo la app de ingesta: %s", logged)
+	}
+
+	// La fase 4 añadió el servidor HTTP al arranque. Ampliar lo que se loguea es
+	// exactamente cuando esta propiedad se vuelve a romper: la fase 3 tuvo que arreglarla
+	// dos veces (5e57f0b, 62a6dc2).
+	if !strings.Contains(logged, "http_addr") {
+		t.Errorf("el arranque no dice dónde escucha el HTTP: %s", logged)
+	}
+	if strings.Contains(logged, "password") || strings.Contains(logged, "contraseña") {
+		t.Errorf("el arranque menciona la contraseña: %s", logged)
 	}
 }
 
@@ -330,4 +342,119 @@ func TestSetPasswordDoesNotDisturbTheIngestKey(t *testing.T) {
 	if got := settingsDe(t, dbPath).IngestKeyMask; got != antes {
 		t.Errorf("la clave de ingesta cambió: %q → %q", antes, got)
 	}
+}
+
+// freeAddr reserva un puerto y lo suelta. Hace falta porque run() construye el servidor
+// HTTP por dentro: con :0 el test no tendría forma de saber dónde acabó escuchando.
+//
+// Hay una ventana entre soltar el puerto y que run() lo tome; en un test local no se pisa
+// nadie, y la alternativa —exponer el listener desde run()— ensuciaría la firma solo para
+// el test.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("puerto libre: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().String()
+}
+
+// arrancaRun lanza run() en segundo plano con el entorno preparado, y devuelve la
+// dirección HTTP, la función de cancelación y el canal con el resultado.
+func arrancaRun(t *testing.T, out io.Writer) (string, context.CancelFunc, <-chan error) {
+	t.Helper()
+	master, err := generateMasterKey()
+	if err != nil {
+		t.Fatalf("generateMasterKey: %v", err)
+	}
+	addr := freeAddr(t)
+	t.Setenv("SPLITSTREAM_MASTER_KEY", master)
+	t.Setenv("SPLITSTREAM_DB_PATH", filepath.Join(t.TempDir(), "run.db"))
+	t.Setenv("SPLITSTREAM_RTMP_ADDR", "127.0.0.1:0")
+	t.Setenv("SPLITSTREAM_HTTP_ADDR", addr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	hecho := make(chan error, 1)
+	go func() { hecho <- run(ctx, out) }()
+	return addr, cancel, hecho
+}
+
+// TestRunServesTheAPI: el binario levanta la API donde dice la configuración.
+//
+// Se comprueba contra /api/auth/login porque es el único endpoint público: un 409 —no hay
+// contraseña configurada— prueba que el servidor está ahí y que es el nuestro, sin
+// necesidad de autenticarse ni de tocar la base.
+func TestRunServesTheAPI(t *testing.T) {
+	addr, cancel, hecho := arrancaRun(t, io.Discard)
+	defer cancel()
+
+	var resp *http.Response
+	var err error
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err = http.Post("http://"+addr+"/api/auth/login",
+			"application/json", strings.NewReader(`{"password":"x"}`))
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("la API nunca respondió en %s: %v", addr, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("código = %d, quería 409 (sin contraseña configurada)", resp.StatusCode)
+	}
+	cuerpo, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(cuerpo), "setpassword") {
+		t.Errorf("la respuesta no parece la nuestra: %s", cuerpo)
+	}
+
+	cancel()
+	select {
+	case err := <-hecho:
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run no volvió tras cancelar")
+	}
+}
+
+// TestRunShutsDownTheHTTPServerOnSignal: al cancelar el contexto, run debe volver y el
+// puerto quedar libre. Si el servidor HTTP no se cierra, run se cuelga y el servicio no se
+// puede reiniciar sin matarlo — que es exactamente el fallo que la fase 3 persiguió tres
+// rondas en el lado de la ingesta.
+func TestRunShutsDownTheHTTPServerOnSignal(t *testing.T) {
+	addr, cancel, hecho := arrancaRun(t, io.Discard)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-hecho:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run no volvió tras cancelar: el servidor HTTP no se cerró")
+	}
+
+	// Y el puerto queda libre: se puede volver a escuchar en él.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("el puerto sigue ocupado tras el apagado: %v", err)
+	}
+	ln.Close()
 }

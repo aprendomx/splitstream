@@ -156,6 +156,37 @@ func (i *Ingest) Close() error {
 	return err
 }
 
+// DisconnectPublisher corta las publicaciones en curso SIN dejar de escuchar, y devuelve
+// cuántas conexiones cerró.
+//
+// Existe para la rotación de la clave de ingesta con `disconnect_now` (spec §9): hay que
+// echar a quien está publicando con la clave vieja y dejar el servidor listo para que
+// vuelva a entrar con la nueva. Close() no sirve, porque cierra también el listener y
+// entonces recuperar la ingesta exigiría reiniciar el proceso — justo lo que la rotación
+// quiere evitar.
+//
+// Reutiliza el registro de conexiones que Close ya necesita, por la misma razón: go-rtmp
+// v0.0.7 no las rastrea.
+func (i *Ingest) DisconnectPublisher() int {
+	i.mu.Lock()
+	conns := make([]net.Conn, 0, len(i.conns))
+	for c := range i.conns {
+		conns = append(conns, c)
+	}
+	// El mapa se vacía pero NO se marca closed: el servidor sigue aceptando conexiones
+	// nuevas, que es la diferencia entera con Close.
+	i.conns = nil
+	i.mu.Unlock()
+
+	// Cerrar el socket hace fallar el bucle de lectura de go-rtmp, lo que dispara el
+	// OnClose del handler y con él el OnPublishEnd que el motor espera para cerrar la
+	// sesión en la base.
+	for _, c := range conns {
+		c.Close()
+	}
+	return len(conns)
+}
+
 // ingestConn atiende una conexión de publisher.
 type ingestConn struct {
 	rtmp.DefaultHandler
