@@ -204,7 +204,13 @@ func TestHubSlowSinkDoesNotBlockOthers(t *testing.T) {
 		t.Fatal("Publish se bloqueó por culpa del destino lento")
 	}
 
-	waitFor(t, func() bool { return len(fast.snapshot()) > 10 }, "el destino rápido siguió recibiendo")
+	// Plazo largo a propósito. Lo que se afirma es que el destino rápido SIGUE recibiendo
+	// pese al lento, no que lo haga en un tiempo concreto: eso depende de cómo el
+	// planificador reparta las goroutines, y con la máquina cargada —una corrida completa
+	// de la suite, o un runner compartido de CI— tres segundos no bastan. Medido: fallaba
+	// 1 de cada 6 veces con todos los núcleos saturados.
+	waitForDur(t, 20*time.Second, func() bool { return len(fast.snapshot()) > 10 },
+		"el destino rápido siguió recibiendo")
 }
 
 // stuckPublisher se queda dentro de la primera escritura hasta que se le libera: es lo
