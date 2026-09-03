@@ -159,4 +159,19 @@ func (d *DB) SetPasswordHash(ctx context.Context, hash string) error {
 // usando el mismo formato que crypto.Secret.Mask().
 func maskFromLast4(last4 string) string { return crypto.Secret(last4).Mask() }
 
-func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+// timeLayout es RFC3339 con la fracción SIEMPRE de nueve dígitos.
+//
+// No se usa time.RFC3339Nano porque recorta los ceros finales, y entonces el orden de
+// texto deja de ser el cronológico: "10:00:00.5Z" va antes que "10:00:00Z" al comparar
+// carácter a carácter, porque '.' (0x2E) < 'Z' (0x5A). Los índices idx_events_created e
+// idx_sessions_started invitan justo a esa consulta (spec §15.4).
+//
+// Al PARSEAR se sigue usando time.RFC3339Nano, que acepta cualquier número de decimales:
+// así las filas escritas antes de la migración 0002 se leen igual de bien.
+const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// formatTime rinde un instante en el formato persistente, siempre en UTC: el orden de
+// texto solo coincide con el cronológico si todas las filas comparten huso.
+func formatTime(t time.Time) string { return t.UTC().Format(timeLayout) }
+
+func nowRFC3339() string { return formatTime(time.Now()) }
