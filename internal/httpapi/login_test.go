@@ -184,9 +184,8 @@ func TestTamperedCookieIsRejected(t *testing.T) {
 // TestSessionCookieOpensTheDoor: el camino feliz completo, login y después una petición
 // autenticada.
 //
-// De momento el endpoint devuelve 501 porque su handler llega en la Task 8; lo que este
-// test comprueba HOY es que la sesión pasa el middleware, no que el endpoint funcione.
-// Cuando la Task 8 lo implemente, esto pasa a exigir 200.
+// La Task 8 implementó el handler, así que ahora exige 200: se comprueba de punta a punta
+// que la sesión abre la puerta y el endpoint responde.
 func TestSessionCookieOpensTheDoor(t *testing.T) {
 	srv, _ := newTestServer(t)
 	cookies := login(t, srv)
@@ -201,9 +200,8 @@ func TestSessionCookieOpensTheDoor(t *testing.T) {
 	if rec.Code == http.StatusUnauthorized {
 		t.Fatalf("la sesión no pasó el middleware: %s", rec.Body.String())
 	}
-	if rec.Code != http.StatusNotImplemented {
-		t.Errorf("código = %d; mientras el handler no exista se espera 501 — "+
-			"si la Task 8 ya está hecha, sube este test a 200", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("código = %d, quería 200: %s", rec.Code, rec.Body.String())
 	}
 }
 

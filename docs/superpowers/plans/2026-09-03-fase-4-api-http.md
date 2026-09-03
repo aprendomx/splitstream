@@ -2706,7 +2706,7 @@ edición en caliente, y copiar ese código sería garantizar que las dos copias 
   - `func (f *Factory) BuildEnabled(ctx context.Context) ([]*relay.Sink, error)`
   `*sinks.Factory` satisface `httpapi.SinkBuilder`.
 
-- [ ] **Step 1: Extraer la fábrica**
+- [x] **Step 1: Extraer la fábrica**
 
 Crea `internal/sinks/factory.go` moviendo, **sin cambiar la lógica**, el cuerpo del closure
 que hoy está en `engine.SetSinkProvider` dentro de `cmd/splitstream/main.go`. Léelo primero
@@ -2733,7 +2733,7 @@ La fábrica guarda `db`, `cipher` y `logger`, y `Build` usa
 `BuildEnabled` lista los destinos, se salta los deshabilitados y llama a `Build` por cada
 uno, registrando y continuando si uno falla, exactamente como hace hoy `main.go`.
 
-- [ ] **Step 2: Escribir el test de la fábrica**
+- [x] **Step 2: Escribir el test de la fábrica**
 
 Crea `internal/sinks/factory_test.go`:
 
@@ -2920,7 +2920,7 @@ func TestBuildEnabledWithNoDestinations(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Cambiar `main.go` para usar la fábrica**
+- [x] **Step 3: Cambiar `main.go` para usar la fábrica**
 
 Sustituye el closure de `engine.SetSinkProvider` por:
 
@@ -2935,7 +2935,7 @@ Run: `go test ./... -race -count=1` — la suite entera, incluida la de integrac
 los sinks levantados. Este paso no debe cambiar ningún comportamiento observable: si algo
 se pone rojo, el movimiento no fue mecánico y hay que revisarlo.
 
-- [ ] **Step 4: Commit del refactor, separado**
+- [x] **Step 4: Commit del refactor, separado**
 
 ```bash
 git add internal/sinks/ cmd/splitstream/main.go
@@ -2946,7 +2946,7 @@ Va en su propio commit a propósito: un refactor sin cambio de comportamiento y 
 funcionalidad nueva no deben compartir commit, porque entonces `git bisect` no puede
 distinguirlos.
 
-- [ ] **Step 5: Escribir los tests de los endpoints de destinos**
+- [x] **Step 5: Escribir los tests de los endpoints de destinos**
 
 Crea `internal/httpapi/destinations_test.go`:
 
@@ -3600,12 +3600,12 @@ func itoa(id int64) string { return strconv.FormatInt(id, 10) }
 
 Añade `errors` y `strconv` a los imports.
 
-- [ ] **Step 6: Ejecutar los tests y verificar que fallan**
+- [x] **Step 6: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/httpapi/ -run Destination -v`
 Expected: FAIL — los endpoints devuelven 501.
 
-- [ ] **Step 7: Implementar los handlers**
+- [x] **Step 7: Implementar los handlers**
 
 Crea `internal/httpapi/destinations.go`. Las decisiones que el código debe respetar:
 
@@ -3629,16 +3629,16 @@ Crea `internal/httpapi/destinations.go`. Las decisiones que el código debe resp
    la petición hizo lo que pedía —persistir el cambio—, y decir 500 haría que el usuario lo
    repitiera y creara un destino duplicado.
 
-- [ ] **Step 8: Sustituir los `notImplemented` de destinos en `routes()`**
+- [x] **Step 8: Sustituir los `notImplemented` de destinos en `routes()`**
 
 Y sube `TestSessionCookieOpensTheDoor` (Task 6, Step 9) de 501 a 200, que era el objetivo.
 
-- [ ] **Step 9: Ejecutar los tests y verificar que pasan**
+- [x] **Step 9: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./... -race -count=1`
 Expected: PASS entero.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add internal/httpapi/
