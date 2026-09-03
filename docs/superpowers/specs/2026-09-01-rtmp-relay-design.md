@@ -328,6 +328,8 @@ SPA Quasar servida por el binario vía `go:embed`. Dark mode por defecto, respon
   - Diálogo de alta/edición con presets por plataforma que precargan la URL conocida
     (`rtmp://a.rtmp.youtube.com/live2`, `rtmp://live.twitch.tv/app`,
     `rtmps://live-api-s.facebook.com:443/rtmp/`, …) dejando solo pegar la clave.
+    **TikTok es la excepción:** emite servidor y clave por emisión desde su Live Center, así
+    que su preset no puede precargar URL y el diálogo tiene que pedir las dos cosas.
   - Panel de log en vivo con los eventos recientes.
 
 Estado en Pinia alimentado por el WebSocket, con reconexión automática y backoff. El

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/store"
 )
 
@@ -123,4 +124,107 @@ func primerEvento(t *testing.T, db *store.DB) string {
 		t.Fatalf("consulta de orden: %v", err)
 	}
 	return msg
+}
+
+// TestTikTokIsAnAcceptedPlatform: TikTok se añadió al conjunto cerrado de plataformas en la
+// migración 0003. Sin ella, el CHECK del esquema rechaza la fila y el error llega como un
+// fallo de constraint del driver, indistinguible de un problema de disco.
+func TestTikTokIsAnAcceptedPlatform(t *testing.T) {
+	ctx := context.Background()
+	db := openTemp(t)
+
+	d, err := db.CreateDestination(ctx, testCipher(t, 1), store.NewDestination{
+		Name: "TikTok", Platform: store.PlatformTikTok,
+		// TikTok emite el servidor por emisión, así que no hay una URL fija que precargar.
+		RTMPURL: "rtmp://push-rtmp-l1-va01.tiktokcdn.com/live",
+		Key:     crypto.Secret("clave-de-tiktok"), Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateDestination con TikTok: %v", err)
+	}
+	if d.Platform != store.PlatformTikTok {
+		t.Errorf("platform = %q, quería tiktok", d.Platform)
+	}
+}
+
+// TestMigration0003KeepsExistingDestinations: la 0003 reconstruye la tabla entera, porque
+// SQLite no deja alterar un CHECK. Reconstruir es justo donde se pierden filas si se hace
+// mal, así que se prueba por el camino real: retrasar user_version y reabrir.
+func TestMigration0003KeepsExistingDestinations(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	db, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := testCipher(t, 1)
+	if err := db.Bootstrap(ctx, c); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	var creados []int64
+	for _, nombre := range []string{"uno", "dos", "tres"} {
+		d, err := db.CreateDestination(ctx, c, store.NewDestination{
+			Name: nombre, Platform: store.PlatformCustom,
+			RTMPURL: "rtmp://x/live", Key: crypto.Secret("clave-" + nombre), Enabled: true,
+		})
+		if err != nil {
+			t.Fatalf("CreateDestination(%s): %v", nombre, err)
+		}
+		creados = append(creados, d.ID)
+	}
+
+	if _, err := db.SQL().ExecContext(ctx, `PRAGMA user_version = 2`); err != nil {
+		t.Fatalf("retrasar user_version: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db2, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reabrir: %v", err)
+	}
+	t.Cleanup(func() { db2.Close() })
+
+	dests, err := db2.ListDestinations(ctx)
+	if err != nil {
+		t.Fatalf("ListDestinations: %v", err)
+	}
+	if len(dests) != 3 {
+		t.Fatalf("destinos tras migrar = %d, quería 3", len(dests))
+	}
+	for i, d := range dests {
+		if d.ID != creados[i] {
+			t.Errorf("posición %d: id = %d, quería %d", i, d.ID, creados[i])
+		}
+	}
+
+	// Las claves siguen descifrándose: la copia no tocó los BLOB.
+	k, err := db2.RevealDestinationKey(ctx, c, creados[0])
+	if err != nil {
+		t.Fatalf("RevealDestinationKey: %v", err)
+	}
+	if k.Reveal() != "clave-uno" {
+		t.Errorf("la clave se corrompió al reconstruir la tabla: %q", k.Reveal())
+	}
+
+	// El índice de orden sobrevive: se recrea, porque DROP TABLE se lo lleva.
+	var n int
+	if err := db2.SQL().QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_destinations_sort'`).Scan(&n); err != nil {
+		t.Fatalf("consultar el índice: %v", err)
+	}
+	if n != 1 {
+		t.Error("idx_destinations_sort no sobrevivió a la reconstrucción")
+	}
+
+	// Y ahora sí acepta TikTok.
+	if _, err := db2.CreateDestination(ctx, c, store.NewDestination{
+		Name: "TikTok", Platform: store.PlatformTikTok,
+		RTMPURL: "rtmp://x/live", Key: crypto.Secret("k"), Enabled: true,
+	}); err != nil {
+		t.Errorf("tras migrar sigue sin aceptar TikTok: %v", err)
+	}
 }

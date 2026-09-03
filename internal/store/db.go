@@ -17,7 +17,7 @@ import (
 )
 
 // SchemaVersion es la última migración incluida en el binario.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS

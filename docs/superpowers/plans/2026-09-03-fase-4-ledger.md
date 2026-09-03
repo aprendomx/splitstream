@@ -296,10 +296,44 @@ Con los tres arreglos y el binario definitivo, **las tres plataformas a la vez**
 arranque de la sesión. El riesgo del spec §14 queda cerrado: no era una falsa alarma, era
 real, y está resuelto.
 
+## TikTok como plataforma de primera clase (2026-09-03)
+
+TikTok no estaba en el conjunto cerrado de `platform`, ni en el `CHECK` del esquema ni en
+`Platform.Valid()`. Añadirlo obliga a reconstruir la tabla entera, porque SQLite no permite
+alterar un `CHECK`: es la migración 0003, con el procedimiento que la documentación de
+SQLite prescribe. Su test la ejerce por el camino real —retrasar `user_version` y reabrir— y
+comprueba lo que una reconstrucción puede romper: que no se pierdan filas, que los ids se
+conserven, que las claves cifradas sigan descifrándose y que el índice de orden se recree,
+porque `DROP TABLE` se lo lleva.
+
+**TikTok es distinto de los demás en algo que afecta al spec §10:** no tiene URL de ingesta
+fija. Emite servidor Y clave por emisión desde su Live Center, así que su preset no puede
+precargar una URL como los de YouTube, Twitch o Facebook — el diálogo de alta tiene que
+pedir las dos cosas. Anotado en el spec.
+
+## Hallazgo aparte: `ON DELETE SET NULL` no se aplica
+
+El esquema declara `events.destination_id REFERENCES destinations (id) ON DELETE SET NULL`,
+con un comentario que dice que borrar un destino no debe borrar la evidencia de lo que pasó
+con él. **Esa cláusula no hace nada**, porque nadie activa `PRAGMA foreign_keys` y en SQLite
+está apagado por defecto.
+
+Comprobado por ejecución sobre el esquema real: tras borrar el destino, el evento se queda
+con `destination_id = 1` apuntando a una fila que ya no existe, en lugar de pasar a `NULL`.
+`GET /api/events` devolvería ese id colgando y el panel de la fase 5 no podría resolverlo a
+ningún nombre.
+
+El arreglo es una línea —`PRAGMA foreign_keys = ON` al abrir— y es seguro, porque la única
+clave ajena del esquema es `ON DELETE SET NULL` y no hay ningún `RESTRICT` que pudiera hacer
+fallar un borrado. No se ha aplicado: se encontró mientras se añadía TikTok y queda fuera de
+ese encargo.
+
 ## Lo que queda abierto
 
 - **Las tres plataformas probadas y funcionando** (ver arriba). Queda por probar la ruta
-  RTMPS de YouTube y Twitch, aunque Facebook ya valida esa ruta.
+  RTMPS de YouTube y Twitch, aunque Facebook ya valida esa ruta. TikTok está soportado en el
+  modelo pero **sin probar contra la plataforma**.
+- **`ON DELETE SET NULL` no se aplica** (ver arriba). Una línea de arreglo, sin aplicar.
 
 - **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez durante una
   corrida de `go test ./...` y no reproducido en 19 intentos posteriores (16 del paquete
