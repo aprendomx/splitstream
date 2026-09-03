@@ -34,19 +34,19 @@ type SinkBuilder interface {
 // sesión viva sin montar un motor entero con su ingesta: montarlo costaría un servidor
 // RTMP y un publisher real en cada test de un handler.
 type EngineView interface {
-	SessionID() int64
+	// Session describe la sesión en curso: id, arranque, resolución y bitrate medido. Se
+	// pide al motor y no a la base porque la fila de sessions solo se completa al CERRAR,
+	// así que durante la emisión tendría la resolución en null — que es justo lo que el
+	// panel del spec §10 necesita enseñar en vivo.
+	Session() relay.LiveSession
 	Snapshot() map[int64]relay.Metrics
-}
 
-// HubView es lo que la API necesita del hub para aplicar un cambio en caliente. Lo cumple
-// *relay.Hub.
-//
-// Add reemplaza un sink existente con el mismo id sin dejar ventana de escritura doble, y
-// Remove lo para: los dos comportamientos son de la fase 2, y son justo lo que hace falta
-// para editar un destino a mitad de transmisión.
-type HubView interface {
-	Add(s *relay.Sink)
-	Remove(id int64)
+	// AddSink arranca el sink y lo mete en el reparto; RemoveSink lo para. Van en el
+	// motor y no en el hub porque arrancar necesita el contexto de vida del proceso y el
+	// preámbulo, y los dos los tiene él. Hub.Add solo registra: usarlo a secas dejaba el
+	// destino en idle descartando mensajes.
+	AddSink(s *relay.Sink)
+	RemoveSink(id int64)
 }
 
 // Config son las dependencias del servidor. DB y Cipher son obligatorias; el resto puede
@@ -55,7 +55,6 @@ type Config struct {
 	DB     *store.DB
 	Cipher *crypto.Cipher
 	Engine EngineView
-	Hub    HubView
 	Ingest Disconnecter
 	Sinks  SinkBuilder
 	// MasterKey solo se usa para derivar la clave de firma de la cookie; no se guarda.
@@ -76,7 +75,6 @@ type Server struct {
 	db       *store.DB
 	cipher   *crypto.Cipher
 	engine   EngineView
-	hub      HubView
 	ingest   Disconnecter
 	sinks    SinkBuilder
 	signer   *sessionSigner
@@ -104,7 +102,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine, hub: cfg.Hub,
+		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
 		ingest: cfg.Ingest, sinks: cfg.Sinks,
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),

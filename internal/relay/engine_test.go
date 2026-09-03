@@ -361,3 +361,208 @@ func mustAVCSeqHeader() []byte {
 	out = append(out, byte(len(sps)>>8), byte(len(sps)))
 	return append(out, sps...)
 }
+
+// TestEngineSessionExposesTheLiveResolution: el motor conoce la resolución desde el primer
+// sequence header, pero hasta ahora solo la escribía al CERRAR la sesión, así que la API
+// devolvía null durante toda la emisión y el panel del spec §10 no podía pintarla.
+//
+// Detectado usando el producto contra YouTube: `GET /api/status` decía "resolución
+// pendiente" durante siete minutos de directo a 720p.
+func TestEngineSessionExposesTheLiveResolution(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	// Sin sesión, no hay nada que contar.
+	if got := e.Session(); got.ID != 0 {
+		t.Errorf("sin publisher, Session().ID = %d, quería 0", got.ID)
+	}
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+
+	// Nada más arrancar: hay sesión, pero la resolución todavía no se conoce.
+	got := e.Session()
+	if got.ID == 0 {
+		t.Fatal("con publisher aceptado, Session().ID = 0")
+	}
+	if got.Width != 0 || got.Height != 0 {
+		t.Errorf("antes del sequence header, resolución = %dx%d, quería 0x0", got.Width, got.Height)
+	}
+	if got.StartedAt.IsZero() {
+		t.Error("falta StartedAt")
+	}
+
+	// Y en cuanto llega el sequence header, EN VIVO, sin esperar a cerrar.
+	e.OnMessage(&Message{Kind: KindVideo, Payload: mustAVCSeqHeader(), IsSeqHeader: true, IsKeyframe: true})
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 0, Payload: make([]byte, 100000), IsKeyframe: true})
+
+	got = e.Session()
+	if got.Width != 640 || got.Height != 360 {
+		t.Errorf("resolución en vivo = %dx%d, quería 640x360", got.Width, got.Height)
+	}
+	if got.BitrateBPS == 0 {
+		t.Error("bitrate en vivo = 0, quería un valor medido")
+	}
+}
+
+// TestEngineSessionMatchesWhatItPersists: el valor que se enseña en vivo y el que se
+// guarda al cerrar tienen que salir del mismo cálculo, o el panel diría una cosa y el
+// historial otra.
+func TestEngineSessionMatchesWhatItPersists(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	st := &fakeStore{}
+	e := NewEngine(EngineConfig{Hub: h, Store: st, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	e.OnMessage(&Message{Kind: KindVideo, Payload: mustAVCSeqHeader(), IsSeqHeader: true, IsKeyframe: true})
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 0, Payload: make([]byte, 100000), IsKeyframe: true})
+
+	vivo := e.Session()
+	e.OnPublishEnd()
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if vivo.Width != st.lastWidth || vivo.Height != st.lastHeight {
+		t.Errorf("en vivo %dx%d, persistido %dx%d",
+			vivo.Width, vivo.Height, st.lastWidth, st.lastHeight)
+	}
+}
+
+// TestEngineSessionResetsBetweenSessions: un Stop→Start en OBS es la acción más común, y
+// la resolución de la transmisión anterior no puede quedarse pegada.
+func TestEngineSessionResetsBetweenSessions(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("primer OnPublishStart: %v", err)
+	}
+	e.OnMessage(&Message{Kind: KindVideo, Payload: mustAVCSeqHeader(), IsSeqHeader: true, IsKeyframe: true})
+	if e.Session().Width != 640 {
+		t.Fatal("la primera sesión no detectó la resolución")
+	}
+	e.OnPublishEnd()
+
+	if got := e.Session(); got.ID != 0 {
+		t.Errorf("tras cerrar, Session().ID = %d, quería 0", got.ID)
+	}
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("segundo OnPublishStart: %v", err)
+	}
+	got := e.Session()
+	if got.Width != 0 || got.Height != 0 {
+		t.Errorf("la segunda sesión arrancó con %dx%d pegado de la primera", got.Width, got.Height)
+	}
+	if got.BitrateBPS != 0 {
+		t.Errorf("la segunda sesión arrancó con bitrate %d pegado de la primera", got.BitrateBPS)
+	}
+}
+
+// TestEngineAddSinkStartsIt es el test del fallo que encontró la prueba con Facebook: la
+// API añadía el sink al hub sin arrancarlo, así que el destino se quedaba en `idle`,
+// acumulaba mensajes, los descartaba por desbordar la cola y no conectaba jamás. Desde
+// fuera parecía "degradado", que es justo la pista equivocada.
+//
+// Hub.Add solo registra; arrancar es responsabilidad de quien tiene el contexto de vida y
+// el preámbulo, y eso es el motor.
+func TestEngineAddSinkStartsIt(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	// Preámbulo mínimo para que el sink tenga qué reenviar al conectar.
+	e.OnMessage(&Message{Kind: KindMeta, Payload: []byte{0xFF}})
+	e.OnMessage(&Message{Kind: KindVideo, Payload: mustAVCSeqHeader(), IsSeqHeader: true, IsKeyframe: true})
+
+	pub := &fakePublisher{}
+	s := NewSink(SinkConfig{ID: 42, Name: "en caliente", Pub: pub})
+	e.AddSink(s)
+
+	waitFor(t, func() bool { return s.State() == StateLive }, "el sink añadido en caliente llega a live")
+
+	if h.Len() != 1 {
+		t.Errorf("sinks en el hub = %d, quería 1", h.Len())
+	}
+
+	// Y recibe lo que se publique a partir de ahora, sin descartar.
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 1000, Payload: []byte{0x17, 0x01}, IsKeyframe: true})
+	waitFor(t, func() bool { return len(pub.snapshot()) > 0 }, "el sink recibe media")
+
+	if got := s.Dropped(); got != 0 {
+		t.Errorf("descartes = %d, quería 0: un sink arrancado no debe acumular y tirar", got)
+	}
+}
+
+// TestEngineAddSinkSurvivesTheRequestThatCreatedIt: el sink NO puede heredar el contexto de
+// la petición HTTP que lo creó, o moriría en cuanto esa petición termine. Debe vivir con el
+// contexto del proceso.
+func TestEngineAddSinkSurvivesTheRequestThatCreatedIt(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+
+	// Un contexto de petición que se cancela justo después de añadir, como haría un
+	// handler HTTP al devolver la respuesta.
+	peticion, cancelarPeticion := context.WithCancel(context.Background())
+	s := NewSink(SinkConfig{ID: 42, Name: "en caliente", Pub: &fakePublisher{}})
+	e.AddSink(s)
+	cancelarPeticion()
+	_ = peticion
+
+	waitFor(t, func() bool { return s.State() == StateLive }, "sigue live tras acabar la petición")
+	time.Sleep(100 * time.Millisecond)
+	if got := s.State(); got != StateLive {
+		t.Errorf("estado = %v tras acabar la petición, quería live", got)
+	}
+}
+
+// TestEngineRemoveSinkStopsIt: apagar o borrar un destino en caliente tiene que cerrar su
+// conexión, no solo quitarlo del reparto.
+func TestEngineRemoveSinkStopsIt(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	pub := &fakePublisher{}
+	s := NewSink(SinkConfig{ID: 42, Name: "en caliente", Pub: pub})
+	e.AddSink(s)
+	waitFor(t, func() bool { return s.State() == StateLive }, "live antes de quitarlo")
+
+	e.RemoveSink(42)
+
+	if h.Len() != 0 {
+		t.Errorf("sinks en el hub = %d, quería 0", h.Len())
+	}
+	pub.mu.Lock()
+	closes := pub.closes
+	pub.mu.Unlock()
+	if closes == 0 {
+		t.Error("quitar un destino debe cerrar su Publisher")
+	}
+}

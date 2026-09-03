@@ -24,17 +24,29 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 		KeyMask: settings.IngestKeyMask,
 	}
 
+	// Los datos de la sesión salen del MOTOR, no de la fila de sessions: esa solo se
+	// completa en FinishSession, así que durante la emisión tendría la resolución y el
+	// bitrate en null — y el spec §10 pide enseñarlos en vivo.
+	//
+	// Width y Height llegan en 0 hasta el primer sequence header, que en la práctica es el
+	// primer segundo. Se mandan como null para que la interfaz distinga "todavía no se
+	// sabe" de un valor real, en vez de pintar "0x0".
 	if s.engine != nil {
-		if id := s.engine.SessionID(); id != 0 {
+		if ses := s.engine.Session(); ses.ID != 0 {
 			out.Session.Live = true
-			out.Session.ID = id
-			// La fila puede no estar todavía si la sesión acaba de abrirse: no es un
-			// error, simplemente se devuelve lo que se sabe.
-			if ses, err := s.db.SessionByID(ctx, id); err == nil {
-				out.Session.StartedAt = &ses.StartedAt
-				out.Session.Width = ses.Width
-				out.Session.Height = ses.Height
-				out.Session.BitrateBPS = ses.BitrateBPS
+			out.Session.ID = ses.ID
+			// En UTC: el motor lo tiene en hora local, y el resto de timestamps del
+			// JSON —los que salen de la base— van en Z. Mezclar husos en el mismo
+			// contrato es una fuente de confusión gratuita para el frontend.
+			arranque := ses.StartedAt.UTC()
+			out.Session.StartedAt = &arranque
+			if ses.Width != 0 && ses.Height != 0 {
+				w, h := ses.Width, ses.Height
+				out.Session.Width, out.Session.Height = &w, &h
+			}
+			if ses.BitrateBPS != 0 {
+				b := ses.BitrateBPS
+				out.Session.BitrateBPS = &b
 			}
 		}
 	}

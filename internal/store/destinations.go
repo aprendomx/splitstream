@@ -78,13 +78,18 @@ const (
 	PlatformFacebook Platform = "facebook"
 	PlatformKick     Platform = "kick"
 	PlatformX        Platform = "x"
-	PlatformCustom   Platform = "custom"
+	// PlatformTikTok se añadió en la migración 0003. A diferencia de las demás, TikTok
+	// emite el servidor de ingesta POR EMISIÓN desde su Live Center, así que su preset no
+	// puede precargar una URL: hay que pegar servidor y clave.
+	PlatformTikTok Platform = "tiktok"
+	PlatformCustom Platform = "custom"
 )
 
 // Valid indica si p es una de las plataformas soportadas.
 func (p Platform) Valid() bool {
 	switch p {
-	case PlatformYouTube, PlatformTwitch, PlatformFacebook, PlatformKick, PlatformX, PlatformCustom:
+	case PlatformYouTube, PlatformTwitch, PlatformFacebook, PlatformKick, PlatformX,
+		PlatformTikTok, PlatformCustom:
 		return true
 	}
 	return false

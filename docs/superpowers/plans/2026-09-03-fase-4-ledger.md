@@ -138,11 +138,203 @@ Task 1 en producción: nueve dígitos fijos de fracción.
 queda **saldada entera la deuda del spec §15**: §15.1 y §15.6 en la fase 2, §15.7 en la 3, y
 §15.2, §15.3, §15.4, §15.5 y §15.8 en esta.
 
+## Prueba contra YouTube real (2026-09-03)
+
+Hecha con la cuenta del usuario y su OBS local, contra `rtmp://a.rtmp.youtube.com/live2`.
+
+**El riesgo del spec §14 NO se materializó.** YouTube aceptó el publish y recibió el stream
+pese a que mandamos `releaseStream`/`FCPublish` sobre el stream ya creado y con
+`TransactionID: 0`, en lugar del orden de FMLE. Queda pendiente repetirlo con `rtmps://` y
+contra Twitch y Facebook, que pueden ser más estrictos.
+
+Métricas tras 195 s de emisión a 720p:
+
+| | |
+| --- | --- |
+| estado | `live`, `degraded=false` |
+| descartes | **0** |
+| cola | 0 bytes, 0 mensajes |
+| bitrate | 3,12 Mbps sostenidos (76,9 MB) |
+| reconexiones | 0, sin último error |
+
+YouTube avisó de un intervalo de keyframes de 8,3 s, por encima de su máximo de 4. **No era
+nuestro:** 8,3 s × 30 fps = 250 fotogramas, que es el `keyint` por defecto de x264 cuando
+OBS está en modo de salida Simple y deja el GOP al encoder. El motor no descartó ni un
+frame, y el descarte por GOP ni siquiera llegó a activarse porque no hubo contrapresión.
+
+Verificado además que las propiedades del spec §8 se sostienen en producción: la clave del
+destino quedó cifrada en la base (52 bytes de AES-256-GCM, solo `last4` en claro para la
+máscara) y no aparece ni una vez en el log, con el nivel en `debug`.
+
+### Hallazgo: la resolución no se expone mientras la sesión está viva
+
+`session.width`, `height` y `bitrate_bps` salen `null` en `GET /api/status` durante toda la
+emisión, aunque el motor detecta la resolución al primer segundo —lo loguea como
+`resolución detectada ancho=1280 alto=720`—. Solo se persisten en `FinishSession`, al
+cerrar la sesión.
+
+El spec §10 pide que el panel enseñe «señal entrante, resolución, bitrate, tiempo
+transmitiendo» como estado global **en vivo**, así que la fase 5 no podría pintarlo.
+
+**Arreglado en el acto** (`relay.Engine.Session()`), y verificado contra el mismo directo
+que lo destapó: `GET /api/status` pasó de `"width": null` a `"width": 1280, "height": 720,
+"bitrate_bps": 2566136` mientras la fila de esa sesión en la base sigue con `NULL`, porque
+solo se escribe al cerrar. La API ya no depende de esa fila.
+
+Dos decisiones del arreglo:
+- El bitrate en vivo se calcula con la **misma fórmula** que `OnPublishEnd` persiste, con un
+  test que lo fija: si divergieran, el panel diría una cosa y el historial otra.
+- La resolución sale como `null`, no como `0x0`, entre que el publisher conecta y llega el
+  primer sequence header. La interfaz debe distinguir «todavía no se sabe» de un valor real.
+- `started_at` se normaliza a UTC: el motor lo tiene en hora local y el resto de timestamps
+  del JSON van en `Z`. Lo vi en el volcado del directo, no en un test.
+
+## Prueba con Facebook y Twitch (2026-09-03)
+
+**Facebook conecta por RTMPS.** La ruta TLS funciona contra una plataforma real: fan-out
+simultáneo a YouTube y Facebook, `live` en ambos, 3,8 Mbps cada uno, cero descartes.
+También quedó demostrado el aislamiento entre destinos de la fase 3: mientras Facebook
+entraba en bucle de reconexión, YouTube siguió a 3,8 Mbps con cero reconexiones.
+
+Pero la prueba destapó **tres fallos**, todos invisibles para los 72 tests del paquete y
+todos del mismo tipo: cosas que solo pasan cuando el producto se usa de verdad.
+
+### 1. El destino añadido en caliente nunca se conectaba
+
+`applyHot` metía el sink en el hub con `Hub.Add`, que **solo registra**. Arrancar necesita
+el contexto de vida del proceso y el preámbulo, y el único que llamaba a `Start` era el
+motor. El destino se quedaba en `idle` acumulando mensajes y descartándolos al desbordar la
+cola: 517 descartes, 0 bytes enviados, `DEGRADADO`. Desde fuera parecía un problema de
+rendimiento, que es la pista equivocada.
+
+Y si `applyHot` hubiera llamado a `Start`, lo habría hecho con `r.Context()`: el sink habría
+muerto al devolver la respuesta HTTP.
+
+Arreglado moviendo la responsabilidad a quien tiene las dos cosas: `Engine.AddSink()`. El
+arranque de sesión usa ahora el mismo camino, para que no haya dos formas de hacerlo, y
+`HubView` desaparece de la API.
+
+**Por qué los tests no lo vieron:** el `fakeHub.Add` solo apuntaba el id. Comprobaba que la
+API *pedía* añadir el destino, no que el destino *acabara transmitiendo*. Los tests nuevos
+usan hub y sink de verdad y exigen que llegue a `live` con cero descartes; uno cancela un
+contexto de petición justo después de añadir.
+
+### 2. Los destinos en caliente no registraban ni un evento
+
+El `OnEvent` de la fábrica capturaba el contexto de quien llamaba a `Build`. Desde el
+arranque de sesión da igual —es el del proceso—, pero desde un handler HTTP es el de la
+petición. Se vio como `"registrar evento: context canceled"` en el log y como un destino sin
+ningún evento en el panel.
+
+Arreglado con `context.Background()` para los eventos: ocurren a lo largo de toda la
+transmisión, no pueden depender de la llamada que construyó el sink.
+
+### 3. El bucle de reconexión agotó el cupo de streams de la cuenta
+
+El más serio. `if transmitted { s.bo.reset() }` reiniciaba el backoff con que la conexión
+hubiera escrito **un solo frame**. Facebook aceptaba la conexión, tragaba unos 200 KB y
+cortaba, así que el backoff volvía a su suelo de 1 s y ahí se quedaba clavado: una conexión
+nueva por segundo, indefinidamente. Facebook cuenta cada una como un stream ACTIVO, y acabó
+respondiendo *«Alcanzaste el límite de streams activos permitidos»* — la cuenta del usuario
+quedó sin poder emitir por culpa de nuestro reintento.
+
+Arreglado con `minHealthySession = 30 s`: transmitir un poco no es señal de que la
+configuración sea buena, solo lo es una sesión que dura. Y `flapThreshold = 3` emite
+`destination_flapping` con un mensaje que nombra la causa probable, porque `suspectThreshold`
+solo cubría el caso de "nunca llega a transmitir".
+
+Medido: 13 conexiones en 12 s con el fallo, 4 o 5 con el arreglo. Treinta veces menos
+streams creados por minuto contra la plataforma.
+
+## La causa raíz: `releaseStream`/`FCPublish` (2026-09-03)
+
+Twitch fallaba igual que Facebook: aceptaba `connect`, `createStream` y `publish`, y cortaba
+en cuanto empezábamos a escribir. El log señalaba `sendPreamble` → `WriteAudio` → *broken
+pipe*, que es el síntoma que el ledger de la fase 2 predijo para un rechazo de plataforma:
+`Publish` es fire-and-forget, así que el rechazo no llega como error sino como escritura
+rota una o dos operaciones después.
+
+**El experimento que lo decidió:** publicar con `ffmpeg` DIRECTAMENTE a Twitch con la misma
+clave. ffmpeg aguantó 45 s. Luego la clave y el canal estaban bien, y el problema era
+nuestro. Sin ese experimento habríamos seguido culpando a la plataforma.
+
+**La causa.** FMLE —el cliente que las plataformas esperan— manda `releaseStream` y
+`FCPublish` sobre el stream 0 y ANTES de `createStream`. Nosotros solo podíamos mandarlos
+sobre el stream ya creado y con `TransactionID: 0`, porque go-rtmp v0.0.7 no expone su
+stream de control: es interno (`cc.conn.streams.At(ControlStreamID)`) y el único `Stream`
+que su API pública devuelve es el de `CreateStream`. Es exactamente el riesgo que el spec
+§14 anotó al empezar la fase 2.
+
+**El arreglo:** no mandarlos. Medido contra las plataformas reales — Twitch pasa de cortar
+siempre a transmitir sin un solo descarte, y YouTube funciona igual de las dos formas.
+`FCUnpublish` se mantiene porque va al cerrar, cuando la conexión se tira igualmente.
+
+### Todo encadenaba a esta causa
+
+El desastre de Facebook fue una consecuencia, no un problema aparte:
+
+1. `releaseStream`/`FCPublish` en el stream equivocado → la plataforma rechaza el publish.
+2. El rechazo aflora como *broken pipe* una o dos escrituras después, no como error.
+3. El sink había escrito algo, así que daba la conexión por buena y **reiniciaba el
+   backoff** → una reconexión por segundo.
+4. Facebook contaba cada una como stream activo → cupo agotado y cuenta bloqueada.
+
+Los cuatro eslabones eran defectos reales y cada uno se arregló por separado, pero solo el
+primero era la causa.
+
+### Resultado final
+
+Con los tres arreglos y el binario definitivo, **las tres plataformas a la vez**:
+
+| Destino | Estado | Bitrate | Descartes | Reconexiones |
+| --- | --- | --- | --- | --- |
+| YouTube (RTMP) | live | 3696 kbps | 0 | 0 |
+| Facebook (RTMPS) | live | 3696 kbps | 0 | 0 |
+| Twitch (RTMP) | live | 3696 kbps | 0 | 0 |
+
+78,6 MB por destino, tres minutos, **cero errores y cero avisos** en el log desde el
+arranque de la sesión. El riesgo del spec §14 queda cerrado: no era una falsa alarma, era
+real, y está resuelto.
+
+## TikTok como plataforma de primera clase (2026-09-03)
+
+TikTok no estaba en el conjunto cerrado de `platform`, ni en el `CHECK` del esquema ni en
+`Platform.Valid()`. Añadirlo obliga a reconstruir la tabla entera, porque SQLite no permite
+alterar un `CHECK`: es la migración 0003, con el procedimiento que la documentación de
+SQLite prescribe. Su test la ejerce por el camino real —retrasar `user_version` y reabrir— y
+comprueba lo que una reconstrucción puede romper: que no se pierdan filas, que los ids se
+conserven, que las claves cifradas sigan descifrándose y que el índice de orden se recree,
+porque `DROP TABLE` se lo lleva.
+
+**TikTok es distinto de los demás en algo que afecta al spec §10:** no tiene URL de ingesta
+fija. Emite servidor Y clave por emisión desde su Live Center, así que su preset no puede
+precargar una URL como los de YouTube, Twitch o Facebook — el diálogo de alta tiene que
+pedir las dos cosas. Anotado en el spec.
+
+## Hallazgo aparte: `ON DELETE SET NULL` no se aplica
+
+El esquema declara `events.destination_id REFERENCES destinations (id) ON DELETE SET NULL`,
+con un comentario que dice que borrar un destino no debe borrar la evidencia de lo que pasó
+con él. **Esa cláusula no hace nada**, porque nadie activa `PRAGMA foreign_keys` y en SQLite
+está apagado por defecto.
+
+Comprobado por ejecución sobre el esquema real: tras borrar el destino, el evento se queda
+con `destination_id = 1` apuntando a una fila que ya no existe, en lugar de pasar a `NULL`.
+`GET /api/events` devolvería ese id colgando y el panel de la fase 5 no podría resolverlo a
+ningún nombre.
+
+El arreglo es una línea —`PRAGMA foreign_keys = ON` al abrir— y es seguro, porque la única
+clave ajena del esquema es `ON DELETE SET NULL` y no hay ningún `RESTRICT` que pudiera hacer
+fallar un borrado. No se ha aplicado: se encontró mientras se añadía TikTok y queda fuera de
+ese encargo.
+
 ## Lo que queda abierto
 
-- **Nada se ha probado todavía contra una plataforma real** (YouTube, Twitch, Facebook).
-  Sigue siendo el riesgo del spec §14 que la fase 3 dejó abierto, y no se cierra con tests
-  locales: hace falta una clave real.
+- **Las tres plataformas probadas y funcionando** (ver arriba). Queda por probar la ruta
+  RTMPS de YouTube y Twitch, aunque Facebook ya valida esa ruta. TikTok está soportado en el
+  modelo pero **sin probar contra la plataforma**.
+- **`ON DELETE SET NULL` no se aplica** (ver arriba). Una línea de arreglo, sin aplicar.
+
 - **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez durante una
   corrida de `go test ./...` y no reproducido en 19 intentos posteriores (16 del paquete
   aislado, 3 de la suite entera, cinco con los núcleos saturados). El log mostraba un

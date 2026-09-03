@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/relay"
@@ -20,15 +21,17 @@ import (
 
 // fakeEngine simula el motor. sessionID a 0 significa que no hay nadie transmitiendo.
 type fakeEngine struct {
-	mu        sync.Mutex
-	sessionID int64
-	metrics   map[int64]relay.Metrics
+	mu      sync.Mutex
+	sesion  relay.LiveSession
+	metrics map[int64]relay.Metrics
+	added   []int64
+	removed []int64
 }
 
-func (f *fakeEngine) SessionID() int64 {
+func (f *fakeEngine) Session() relay.LiveSession {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.sessionID
+	return f.sesion
 }
 
 func (f *fakeEngine) Snapshot() map[int64]relay.Metrics {
@@ -44,39 +47,42 @@ func (f *fakeEngine) Snapshot() map[int64]relay.Metrics {
 func (f *fakeEngine) setLive(id int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.sessionID = id
+	f.sesion = relay.LiveSession{ID: id, StartedAt: time.Now()}
+}
+
+// setSesion fija la sesión entera, para los tests que miran resolución o bitrate.
+func (f *fakeEngine) setSesion(s relay.LiveSession) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sesion = s
+}
+
+// AddSink y RemoveSink registran lo que la API pidió. Se apuntan sobre el fake del MOTOR y
+// no sobre uno del hub porque arrancar el sink es responsabilidad del motor: cuando la API
+// hablaba directamente con el hub, el destino se añadía sin arrancar y se quedaba en idle
+// descartando mensajes. El fake de entonces solo miraba el id, así que no lo vio.
+func (f *fakeEngine) AddSink(s *relay.Sink) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.added = append(f.added, s.ID())
+}
+
+func (f *fakeEngine) RemoveSink(id int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, id)
+}
+
+func (f *fakeEngine) snapshotSinks() (added, removed []int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.added...), append([]int64(nil), f.removed...)
 }
 
 func (f *fakeEngine) setMetrics(m map[int64]relay.Metrics) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.metrics = m
-}
-
-// fakeHub registra qué se le pidió, para poder afirmar sobre el efecto en caliente sin
-// abrir conexiones RTMP de verdad.
-type fakeHub struct {
-	mu      sync.Mutex
-	added   []int64
-	removed []int64
-}
-
-func (f *fakeHub) Add(s *relay.Sink) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.added = append(f.added, s.ID())
-}
-
-func (f *fakeHub) Remove(id int64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.removed = append(f.removed, id)
-}
-
-func (f *fakeHub) snapshot() (added, removed []int64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]int64(nil), f.added...), append([]int64(nil), f.removed...)
 }
 
 // fakeSinks construye sinks que no conectan a ninguna parte: basta con que tengan el id
@@ -93,14 +99,16 @@ func (f *fakeSinks) Build(ctx context.Context, d store.Destination) (*relay.Sink
 // --- andamiaje ---
 
 // newDestServer levanta un servidor con los dobles puestos y una sesión ya autenticada.
-func newDestServer(t *testing.T) (*Server, *store.DB, *fakeEngine, *fakeHub, []*http.Cookie) {
+func newDestServer(t *testing.T) (*Server, *store.DB, *fakeEngine, *fakeEngine, []*http.Cookie) {
 	t.Helper()
 	srv, db := newTestServer(t)
 
-	eng, hub := &fakeEngine{}, &fakeHub{}
-	srv.engine, srv.hub, srv.sinks = eng, hub, &fakeSinks{}
+	eng := &fakeEngine{}
+	srv.engine, srv.sinks = eng, &fakeSinks{}
 
-	return srv, db, eng, hub, login(t, srv)
+	// Se devuelve dos veces para no reescribir las llamadas de los tests: el motor hace
+	// ahora también lo que antes se le pedía al hub.
+	return srv, db, eng, eng, login(t, srv)
 }
 
 // do lanza una petición autenticada.
@@ -547,7 +555,7 @@ func TestCreateDestinationAppliesToTheLiveSessionImmediately(t *testing.T) {
 		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
 	}
 
-	added, _ := hub.snapshot()
+	added, _ := hub.snapshotSinks()
 	if len(added) != 1 {
 		t.Fatalf("sinks añadidos al hub = %d, quería 1", len(added))
 	}
@@ -567,7 +575,7 @@ func TestCreateDestinationDoesNothingHotWhenThereIsNoSession(t *testing.T) {
 		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
 	}
 
-	added, removed := hub.snapshot()
+	added, removed := hub.snapshotSinks()
 	if len(added) != 0 || len(removed) != 0 {
 		t.Errorf("se tocó el hub sin sesión viva: added=%v removed=%v", added, removed)
 	}
@@ -593,7 +601,7 @@ func TestCreateDestinationDisabledDoesNotGoLive(t *testing.T) {
 		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
 	}
 
-	if added, _ := hub.snapshot(); len(added) != 0 {
+	if added, _ := hub.snapshotSinks(); len(added) != 0 {
 		t.Errorf("se conectó un destino que se creó apagado: %v", added)
 	}
 }
@@ -608,7 +616,7 @@ func TestDeleteDestinationStopsItsSinkWhenLive(t *testing.T) {
 		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
 	}
 
-	_, removed := hub.snapshot()
+	_, removed := hub.snapshotSinks()
 	if len(removed) != 1 || removed[0] != d.ID {
 		t.Errorf("removed = %v, quería [%d]", removed, d.ID)
 	}
@@ -622,7 +630,7 @@ func TestToggleOffStopsTheSinkAndToggleOnStartsIt(t *testing.T) {
 	if rec := do(t, srv, cookies, http.MethodPost, destPath(d.ID)+"/toggle", ""); rec.Code != http.StatusOK {
 		t.Fatalf("apagar: %d — %s", rec.Code, rec.Body.String())
 	}
-	added, removed := hub.snapshot()
+	added, removed := hub.snapshotSinks()
 	if len(removed) != 1 || removed[0] != d.ID {
 		t.Fatalf("al apagar, removed = %v", removed)
 	}
@@ -633,7 +641,7 @@ func TestToggleOffStopsTheSinkAndToggleOnStartsIt(t *testing.T) {
 	if rec := do(t, srv, cookies, http.MethodPost, destPath(d.ID)+"/toggle", ""); rec.Code != http.StatusOK {
 		t.Fatalf("encender: %d — %s", rec.Code, rec.Body.String())
 	}
-	added, _ = hub.snapshot()
+	added, _ = hub.snapshotSinks()
 	if len(added) != 1 || added[0] != d.ID {
 		t.Errorf("al encender, added = %v, quería [%d]", added, d.ID)
 	}
@@ -651,7 +659,7 @@ func TestPatchAppliesToTheLiveSessionByReplacingTheSink(t *testing.T) {
 		t.Fatalf("patch: %d — %s", rec.Code, rec.Body.String())
 	}
 
-	added, _ := hub.snapshot()
+	added, _ := hub.snapshotSinks()
 	if len(added) != 1 || added[0] != d.ID {
 		t.Errorf("added = %v, quería [%d]: el destino editado debe reemplazarse en el hub", added, d.ID)
 	}
@@ -667,7 +675,7 @@ func TestPatchDisablingRemovesTheSink(t *testing.T) {
 		t.Fatalf("patch: %d — %s", rec.Code, rec.Body.String())
 	}
 
-	added, removed := hub.snapshot()
+	added, removed := hub.snapshotSinks()
 	if len(removed) != 1 || removed[0] != d.ID {
 		t.Errorf("removed = %v, quería [%d]", removed, d.ID)
 	}
@@ -696,7 +704,7 @@ func TestHotApplyFailureDoesNotFailTheRequest(t *testing.T) {
 func TestHotApplyIsSkippedWithoutAHub(t *testing.T) {
 	srv, _, eng, _, cookies := newDestServer(t)
 	eng.setLive(42)
-	srv.hub, srv.sinks = nil, nil
+	srv.sinks = nil
 
 	rec := do(t, srv, cookies, http.MethodPost, "/api/destinations",
 		`{"name":"nuevo","platform":"custom","rtmp_url":"rtmp://x/live","key":"k","enabled":true}`)

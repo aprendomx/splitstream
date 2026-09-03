@@ -328,6 +328,8 @@ SPA Quasar servida por el binario vía `go:embed`. Dark mode por defecto, respon
   - Diálogo de alta/edición con presets por plataforma que precargan la URL conocida
     (`rtmp://a.rtmp.youtube.com/live2`, `rtmp://live.twitch.tv/app`,
     `rtmps://live-api-s.facebook.com:443/rtmp/`, …) dejando solo pegar la clave.
+    **TikTok es la excepción:** emite servidor y clave por emisión desde su Live Center, así
+    que su preset no puede precargar URL y el diálogo tiene que pedir las dos cosas.
   - Panel de log en vivo con los eventos recientes.
 
 Estado en Pinia alimentado por el WebSocket, con reconexión automática y backoff. El
@@ -385,7 +387,7 @@ Parada para revisión al final de cada fase.
 
 | Riesgo | Mitigación |
 | --- | --- |
-| El cliente de `go-rtmp` no publica bien contra plataformas reales | Spike al inicio de la fase 2; plan B con publisher propio detrás de la interfaz `Publisher` |
+| El cliente de `go-rtmp` no publica bien contra plataformas reales | ~~Spike al inicio de la fase 2~~ → **Materializado y resuelto en la fase 4**: `releaseStream`/`FCPublish` en el stream equivocado rompían Twitch. Quitados; ver §15.9. YouTube, Twitch y Facebook conectan |
 | Cada plataforma tiene su propio dialecto de handshake | Probar contra `mediamtx` primero, luego contra un destino real por plataforma antes de cerrar la fase 3 |
 | El VPS no tiene subida suficiente para N destinos | Documentado en el README; la UI muestra el bitrate real por destino para diagnosticarlo |
 | Pérdida de `SPLITSTREAM_MASTER_KEY` | Irrecuperable por diseño; el README lo dice explícitamente y recomienda respaldarla aparte del `.db` |
@@ -495,6 +497,23 @@ para un destino, donde la clave la da la plataforma y no se inventa.
 
 **Acción:** renombrar a `GenerateIngestKey()`.
 
+
+## 15.9 `releaseStream`/`FCPublish` rompían Twitch — resuelto en la fase 4
+
+El spike de la §16 supuso que hacían falta, y el §14 anotó el riesgo de mandarlos en el
+orden equivocado. La prueba contra plataformas reales del 2026-09-03 resolvió la duda: no
+hacen falta, y mandarlos mal es peor que no mandarlos.
+
+FMLE los manda sobre el stream 0 y ANTES de `createStream`. Nosotros solo podíamos mandarlos
+sobre el stream ya creado y con `TransactionID: 0`, porque go-rtmp v0.0.7 no expone su
+stream de control. Twitch aceptaba `connect`, `createStream` y `publish`, y cortaba en
+cuanto empezábamos a escribir; sin esos dos comandos transmite sin un descarte. YouTube
+funciona igual de las dos formas.
+
+Se aisló publicando con `ffmpeg` directamente a Twitch con la misma clave: ffmpeg aguantaba
+45 s, nosotros no. El problema era nuestro.
+
+`FCUnpublish` se mantiene: va al cerrar, cuando la conexión se tira igualmente.
 
 ## 16. Resultado del spike de `go-rtmp` (2026-09-02)
 

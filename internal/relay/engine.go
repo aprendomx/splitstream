@@ -171,13 +171,35 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 		e.log.Error("no se pudieron construir los destinos de la sesión", "err", err)
 	}
 	for _, s := range sinks {
-		s.Start(e.baseCtx, e.hub.Preamble())
-		e.hub.Add(s)
+		e.AddSink(s)
 	}
 
 	e.logEvent(ctx, &id, nil, "info", "publisher_connected", "el publisher conectó")
 	e.log.Info("sesión iniciada", "sesion_id", id, "app", app)
 	return nil
+}
+
+// AddSink añade un destino a la sesión en curso y lo ARRANCA.
+//
+// Existe porque Hub.Add solo registra: arrancar necesita el contexto de vida del proceso y
+// el preámbulo, y los dos los tiene el motor. Cuando la API añadía el sink al hub por su
+// cuenta, el destino se quedaba en idle acumulando mensajes hasta desbordar la cola, y
+// desde fuera parecía "degradado" — la pista equivocada. Se descubrió probando con Facebook
+// contra un directo real.
+//
+// El contexto es e.baseCtx a propósito, NO el de la petición HTTP que provocó el alta: con
+// el de la petición, el sink moriría al devolver la respuesta.
+//
+// Añadir un sink con un id que ya está reemplaza al anterior sin ventana de escritura
+// doble, que es lo que hace falta al editar un destino en caliente.
+func (e *Engine) AddSink(s *Sink) {
+	s.Start(e.baseCtx, e.hub.Preamble())
+	e.hub.Add(s)
+}
+
+// RemoveSink quita un destino de la sesión en curso y para su sink, cerrando su conexión.
+func (e *Engine) RemoveSink(id int64) {
+	e.hub.Remove(id)
 }
 
 // OnMessage reparte un mensaje a los destinos y acumula lo que la sesión necesita medir.
@@ -208,6 +230,47 @@ func (e *Engine) observe(msg *Message) {
 	}
 	e.sessionWidth, e.sessionHeight = w, h
 	e.log.Info("resolución detectada", "ancho", w, "alto", h)
+}
+
+// LiveSession describe la sesión de ingesta en curso. ID a 0 significa que no hay ninguna,
+// y entonces el resto de los campos no significan nada.
+//
+// Width y Height valen 0 hasta que llega el primer AVC sequence header, que en la práctica
+// es el primer segundo: la interfaz debe tratar el cero como "todavía no se sabe", no como
+// un error.
+type LiveSession struct {
+	ID         int64
+	StartedAt  time.Time
+	Width      int
+	Height     int
+	BitrateBPS int
+}
+
+// Session devuelve lo que se sabe de la sesión en curso, sin esperar a que termine.
+//
+// Existe porque el spec §10 pide que el panel enseñe resolución y bitrate EN VIVO, y hasta
+// ahora esos datos solo se escribían en FinishSession: la API devolvía null durante toda la
+// emisión. Se detectó usando el producto contra YouTube, no por un test.
+//
+// El bitrate se calcula igual que en OnPublishEnd —bytes de media entre tiempo transcurrido—
+// para que lo que se enseña en vivo y lo que queda en el historial no se contradigan.
+func (e *Engine) Session() LiveSession {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.sessionID == 0 {
+		return LiveSession{}
+	}
+	out := LiveSession{
+		ID:        e.sessionID,
+		StartedAt: e.sessionStarted,
+		Width:     e.sessionWidth,
+		Height:    e.sessionHeight,
+	}
+	if elapsed := time.Since(e.sessionStarted); elapsed > 0 {
+		out.BitrateBPS = int(float64(e.sessionBytes*8) / elapsed.Seconds())
+	}
+	return out
 }
 
 // OnPublishEnd cierra la sesión y olvida el preámbulo: los sequence headers de esta

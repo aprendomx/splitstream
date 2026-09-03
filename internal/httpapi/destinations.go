@@ -41,7 +41,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 // sabe nada de él. El nil se convierte en el null del JSON, que es lo que la interfaz usa
 // para distinguir "sin métricas" de "métricas en cero".
 func (s *Server) metricsFor(id int64) *relay.Metrics {
-	if s.engine == nil || s.engine.SessionID() == 0 {
+	if s.engine == nil || s.engine.Session().ID == 0 {
 		return nil
 	}
 	m, ok := s.engine.Snapshot()[id]
@@ -261,9 +261,9 @@ func (s *Server) applyHot(r *http.Request, d store.Destination) {
 			"destino_id", d.ID, "destino", d.Name, "err", err)
 		return
 	}
-	// Add reemplaza un sink con el mismo id sin dejar ventana de escritura doble (fase 2),
-	// así que sirve igual para el alta y para la edición.
-	s.hub.Add(sink)
+	// AddSink arranca el sink y lo mete en el hub. Reemplaza uno con el mismo id sin dejar
+	// ventana de escritura doble (fase 2), así que sirve igual para el alta y la edición.
+	s.engine.AddSink(sink)
 }
 
 // removeHot para el sink de un destino si hay sesión en curso.
@@ -271,11 +271,11 @@ func (s *Server) removeHot(id int64) {
 	if !s.liveSession() {
 		return
 	}
-	s.hub.Remove(id)
+	s.engine.RemoveSink(id)
 }
 
 // liveSession dice si hay algo que tocar en caliente. Con el motor o el hub sin cablear
 // —arranque parcial, o un test que no los ejercita— la respuesta es no.
 func (s *Server) liveSession() bool {
-	return s.engine != nil && s.hub != nil && s.engine.SessionID() != 0
+	return s.engine != nil && s.engine.Session().ID != 0
 }
