@@ -328,6 +328,28 @@ clave ajena del esquema es `ON DELETE SET NULL` y no hay ningún `RESTRICT` que 
 fallar un borrado. No se ha aplicado: se encontró mientras se añadía TikTok y queda fuera de
 ese encargo.
 
+## El ciclo en caliente, verificado en producción (2026-09-03)
+
+Con la sesión viva emitiendo a YouTube, Facebook y Twitch, se ejercitó el alta, el apagado,
+el encendido y la edición en caliente contra un `mediamtx` local —no contra una plataforma
+real, para no arriesgar más cuentas—:
+
+| Operación | Resultado |
+| --- | --- |
+| Alta con sesión viva | de 0 a `live` a 3702 kbps, **0 descartes**, sin tocar los otros tres |
+| Apagado | el destino pasa a `(sin sesión) activo=False` |
+| Encendido | vuelve a `live`, 0 descartes |
+| Cambio de clave | máscara nueva y reconexión con ella |
+
+No se comprobó por contadores sino **por el vídeo**: `ffprobe` leyó h264 1280x720 + aac
+48 kHz en el destino recién añadido. Y tras cambiar la clave, la ruta nueva sirve el stream
+mientras la vieja devuelve `404 Not Found` — la conexión anterior se cerró de verdad, que es
+`Hub.Add` reemplazando sin ventana de solape (fase 2) más `Engine.AddSink` arrancando el
+sink (esta fase) funcionando juntos.
+
+Durante las cuatro operaciones, Twitch mantuvo 0 descartes y 0 reconexiones: tocar un
+destino no perturba a los demás.
+
 ## Lo que queda abierto
 
 - **Las tres plataformas probadas y funcionando** (ver arriba). Queda por probar la ruta

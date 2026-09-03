@@ -1,0 +1,74 @@
+// Cliente de la API. Fino a propósito: la validación vive en el backend, que ya devuelve
+// mensajes escritos para personas ("la clave no puede estar vacía", "URL de destino
+// inválida: falta el host"). Duplicarlos aquí crearía dos fuentes de verdad que se
+// desincronizarían a la primera.
+
+/** Error de la API, con el `code` del spec §9 para que quien llame pueda decidir. */
+export class ApiError extends Error {
+  constructor(status, code, message) {
+    super(message)
+    this.status = status
+    this.code = code
+  }
+}
+
+async function pedir(metodo, ruta, cuerpo) {
+  const opciones = {
+    method: metodo,
+    // La sesión es una cookie httpOnly: nunca la tocamos desde JS, solo hay que
+    // asegurarse de que viaja.
+    credentials: 'same-origin',
+    headers: {},
+  }
+  if (cuerpo !== undefined) {
+    opciones.headers['Content-Type'] = 'application/json'
+    opciones.body = JSON.stringify(cuerpo)
+  }
+
+  let res
+  try {
+    res = await fetch(ruta, opciones)
+  } catch (e) {
+    // Fallo de red: el servidor no responde. Es distinto de un error de la API y merece
+    // otro mensaje, porque la acción del usuario es otra.
+    throw new ApiError(0, 'network', 'No se pudo contactar con el servidor')
+  }
+
+  if (res.status === 204) return null
+
+  const texto = await res.text()
+  let datos = null
+  if (texto) {
+    try {
+      datos = JSON.parse(texto)
+    } catch {
+      throw new ApiError(res.status, 'internal', 'El servidor devolvió una respuesta ilegible')
+    }
+  }
+
+  if (!res.ok) {
+    const e = datos?.error
+    throw new ApiError(res.status, e?.code ?? 'internal', e?.message ?? `Error ${res.status}`)
+  }
+  return datos
+}
+
+export const api = {
+  login: (password) => pedir('POST', '/api/auth/login', { password }),
+  logout: () => pedir('POST', '/api/auth/logout'),
+
+  estado: () => pedir('GET', '/api/status'),
+  eventos: (limit = 50) => pedir('GET', `/api/events?limit=${limit}`),
+
+  ingesta: () => pedir('GET', '/api/ingest'),
+  rotarClave: (desconectarAhora) =>
+    pedir('POST', '/api/ingest/rotate-key', { disconnect_now: desconectarAhora }),
+
+  destinos: () => pedir('GET', '/api/destinations'),
+  crearDestino: (d) => pedir('POST', '/api/destinations', d),
+  editarDestino: (id, patch) => pedir('PATCH', `/api/destinations/${id}`, patch),
+  borrarDestino: (id) => pedir('DELETE', `/api/destinations/${id}`),
+  alternarDestino: (id) => pedir('POST', `/api/destinations/${id}/toggle`),
+  reordenarDestinos: (ids) => pedir('POST', '/api/destinations/reorder', { ids }),
+  revelarClave: (id) => pedir('GET', `/api/destinations/${id}/key`),
+}

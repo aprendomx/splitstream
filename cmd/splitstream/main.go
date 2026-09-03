@@ -30,6 +30,7 @@ import (
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
 	"github.com/aprendomx/splitstream/internal/store"
+	"github.com/aprendomx/splitstream/web"
 )
 
 // version la fija el Makefile con -ldflags a partir de `git describe`. Un `go build`
@@ -250,6 +251,13 @@ func run(ctx context.Context, out io.Writer) error {
 		Logger:  logger,
 	})
 
+	panelFS, err := web.FS()
+	if err != nil {
+		// No es fatal: el binario puede servir solo la API. Se dice y se sigue.
+		logger.Warn("el panel no está disponible en este binario", "err", err)
+		panelFS = nil
+	}
+
 	api, err := httpapi.New(httpapi.Config{
 		DB:            db,
 		Cipher:        cipher,
@@ -258,6 +266,7 @@ func run(ctx context.Context, out io.Writer) error {
 		Sinks:         factory,
 		MasterKey:     cfg.MasterKey,
 		RTMPAddr:      cfg.RTMPAddr,
+		SPA:           panelFS,
 		Logger:        logger,
 		SecureCookies: cfg.SecureCookies,
 	})

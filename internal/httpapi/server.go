@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -64,6 +65,9 @@ type Config struct {
 	// la URL que se le enseña al usuario sale de la petición, porque el panel se alcanza
 	// por algún nombre concreto y la ingesta está en esa misma máquina.
 	RTMPAddr string
+	// SPA son los archivos del panel compilado. Si es nil, el binario solo sirve la API:
+	// útil en los tests, que no necesitan el frontend para nada.
+	SPA fs.FS
 	// SecureCookies marca la cookie como Secure. Va en la configuración y no se deduce de
 	// la petición porque en el despliegue del spec §12 el TLS lo termina un proxy y el
 	// binario solo ve HTTP: adivinarlo daría una cookie sin Secure justo en producción.
@@ -80,6 +84,7 @@ type Server struct {
 	signer   *sessionSigner
 	limiter  *loginLimiter
 	logger   *slog.Logger
+	spa      fs.FS
 	secure   bool
 	rtmpPort string
 	mux      *http.ServeMux
@@ -104,7 +109,7 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
 		ingest: cfg.Ingest, sinks: cfg.Sinks,
-		signer: signer, limiter: newLoginLimiter(), logger: logger,
+		signer: signer, limiter: newLoginLimiter(), logger: logger, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
@@ -142,6 +147,26 @@ func (s *Server) routes() {
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
 	protegida("GET /ws", s.handleWS)
+
+	// El panel va en la raíz y se registra el ÚLTIMO: en el mux de Go 1.22 los patrones
+	// más específicos ganan, así que /api/... y /ws siguen entrando por sus handlers.
+	//
+	// No lleva requireSession: sin sesión, la propia interfaz enseña el login. Protegerlo
+	// obligaría a servir una página de login aparte, y todo lo que hay detrás —los datos—
+	// ya está protegido en la API.
+	if s.spa != nil {
+		// Cortafuegos antes del panel: cualquier /api/... que no case con un endpoint
+		// concreto responde JSON, no HTML. Sin esto, una ruta mal escrita devolvería el
+		// index y el cliente fallaría al parsear con un error que no dice nada. El patrón
+		// "/api/" es menos específico que los endpoints, así que solo recoge lo que sobra.
+		s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+			writeError(w, http.StatusNotFound, codeNotFound, "no existe ese endpoint")
+		})
+		// Sin método en el patrón: "GET /" y "/api/" son ambiguos para el mux —uno tiene
+		// método pero ruta más general que el otro— y registrar los dos hace panic. El
+		// método se comprueba dentro del handler.
+		s.mux.HandleFunc("/", s.serveSPA(s.spa))
+	}
 }
 
 // clientIP saca la IP para el limitador. No se mira X-Forwarded-For: quien llega directo
