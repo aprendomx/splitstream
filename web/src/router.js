@@ -6,6 +6,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', name: 'panel', component: () => import('@/pages/Panel.vue') },
+    { path: '/creditos', name: 'creditos', component: () => import('@/pages/Creditos.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

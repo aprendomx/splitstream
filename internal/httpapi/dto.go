@@ -120,6 +120,9 @@ type ingestDTO struct {
 // GET para no depender de que el WS conecte primero, y eso solo funciona si las dos fuentes
 // tienen exactamente la misma forma.
 type statusDTO struct {
+	// Version del binario. Va en el estado y no en un endpoint público aparte para no
+	// anunciar a cualquiera qué versión corre este servicio.
+	Version      string           `json:"version"`
 	Ingest       ingestDTO        `json:"ingest"`
 	Session      sessionDTO       `json:"session"`
 	Destinations []destinationDTO `json:"destinations"`

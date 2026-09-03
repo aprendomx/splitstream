@@ -1,7 +1,8 @@
 <script setup>
-import { iBroadcast, iOcultar, iSalir, iVer } from '@/iconos'
+import { iBroadcast, iInfo, iOcultar, iSalir, iVer } from '@/iconos'
 import { ref, onMounted } from 'vue'
 import { usePanel } from '@/stores/panel'
+import Asistente from '@/components/Asistente.vue'
 import { ApiError } from '@/api'
 
 const panel = usePanel()
@@ -32,6 +33,12 @@ async function entrar() {
       <q-toolbar>
         <q-icon :name="iBroadcast" size="24px" class="q-mr-sm text-primary" />
         <q-toolbar-title class="text-weight-medium">Splitstream</q-toolbar-title>
+        <q-btn
+          v-if="panel.autenticado"
+          flat round dense :icon="iInfo"
+          aria-label="Créditos y licencias"
+          :to="{ name: 'creditos' }"
+        />
         <q-btn v-if="panel.autenticado" flat round dense :icon="iSalir"
                aria-label="Cerrar sesión" @click="panel.salir()" />
       </q-toolbar>
@@ -42,6 +49,15 @@ async function entrar() {
            entre los dos es peor que esperar medio segundo. -->
       <q-page v-if="panel.cargando" class="flex flex-center">
         <q-spinner size="32px" color="primary" />
+      </q-page>
+
+      <!-- Primer arranque: el asistente sustituye al login mientras no haya contraseña. -->
+      <q-page v-else-if="panel.necesitaSetup" class="flex flex-center q-pa-md">
+        <Asistente
+          :pide-codigo="panel.pideCodigo"
+          :local="panel.esLocal"
+          @listo="panel.trasSetup()"
+        />
       </q-page>
 
       <q-page v-else-if="!panel.autenticado" class="flex flex-center q-pa-md">

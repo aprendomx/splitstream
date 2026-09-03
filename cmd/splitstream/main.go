@@ -91,6 +91,10 @@ func printVersion(out io.Writer) {
 // minPasswordLen es el mínimo aceptable. No es una política de seguridad seria, es un
 // filtro contra el descuido: el panel queda expuesto a internet y una contraseña de tres
 // letras no es una contraseña.
+//
+// internal/httpapi tiene su propia constante con el mismo valor, para el asistente del
+// primer arranque. Son dos caminos distintos hacia la misma regla; si uno cambia, el otro
+// también debe hacerlo.
 const minPasswordLen = 8
 
 // readPassword lee una contraseña de una línea de r.
@@ -251,6 +255,19 @@ func run(ctx context.Context, out io.Writer) error {
 		Logger:  logger,
 	})
 
+	// Primer arranque: si no hay contraseña, se genera un código de un solo uso y se
+	// imprime bien visible. Solo hace falta para configurar desde OTRA máquina; desde el
+	// propio equipo el asistente no lo pide, porque quien está en el teclado ya lo
+	// controla.
+	var setupCode string
+	if settings.PasswordHash == "" {
+		setupCode, err = httpapi.GenerateSetupCode()
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(out, avisoPrimerArranque(cfg.HTTPAddr, setupCode))
+	}
+
 	panelFS, err := web.FS()
 	if err != nil {
 		// No es fatal: el binario puede servir solo la API. Se dice y se sigue.
@@ -266,6 +283,8 @@ func run(ctx context.Context, out io.Writer) error {
 		Sinks:         factory,
 		MasterKey:     cfg.MasterKey,
 		RTMPAddr:      cfg.RTMPAddr,
+		Version:       version,
+		SetupCode:     setupCode,
 		SPA:           panelFS,
 		Logger:        logger,
 		SecureCookies: cfg.SecureCookies,
@@ -347,6 +366,37 @@ func run(ctx context.Context, out io.Writer) error {
 		logger.Warn("la ingesta no cerró en 3s; se sigue adelante")
 	}
 	return nil
+}
+
+// avisoPrimerArranque es lo primero que ve alguien que acaba de instalar esto.
+//
+// Va a la salida estándar y no al logger a propósito: el logger escribe una línea por
+// evento, pensada para leerla después en journalctl. Esto hay que verlo AHORA, y el código
+// hay que poder copiarlo de un vistazo.
+func avisoPrimerArranque(httpAddr, codigo string) string {
+	url := httpAddr
+	if strings.HasPrefix(url, ":") {
+		url = "localhost" + url
+	}
+	return "\n" +
+		"  ┌───────────────────────────────────────────────────────────┐\n" +
+		"  │  Splitstream todavía no está configurado                  │\n" +
+		"  └───────────────────────────────────────────────────────────┘\n" +
+		"\n" +
+		"  Abre el panel y elige tu contraseña:\n" +
+		"\n" +
+		"      http://" + url + "\n" +
+		"\n" +
+		"  Si lo abres desde ESTA misma máquina, no hace falta nada más.\n" +
+		"\n" +
+		"  Si lo abres desde otro equipo —un servidor, el móvil—, el panel\n" +
+		"  te pedirá este código:\n" +
+		"\n" +
+		"      " + codigo + "\n" +
+		"\n" +
+		"  Sirve una sola vez y cambia en cada arranque. Existe para que\n" +
+		"  nadie que llegue antes que tú se quede con el servicio.\n" +
+		"\n"
 }
 
 // storeAdapter traduce el store al contrato EngineStore, para que internal/relay no

@@ -1,0 +1,117 @@
+name: Release
+
+# Al empujar una etiqueta v*, se compila para cada plataforma y se adjunta a la release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  binarios:
+    name: ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: darwin,  arch: arm64, nombre: macos-apple-silicon }
+          - { os: darwin,  arch: amd64, nombre: macos-intel }
+          - { os: linux,   arch: amd64, nombre: linux-x86_64 }
+          - { os: linux,   arch: arm64, nombre: linux-arm64 }
+          - { os: windows, arch: amd64, nombre: windows-x86_64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # El panel va DENTRO del binario vía go:embed, así que hay que compilarlo antes.
+      - name: compilar el panel
+        run: cd web && npm ci && npm run build
+
+      # La compilación cruzada solo es posible porque no hay cgo: modernc.org/sqlite es
+      # SQLite reescrito en Go puro. Con el driver de C haría falta un toolchain por
+      # plataforma y esta matriz no existiría.
+      - name: compilar el binario
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          SALIDA="splitstream"
+          [ "${{ matrix.os }}" = "windows" ] && SALIDA="splitstream.exe"
+          go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$SALIDA" ./cmd/splitstream
+          ls -la "$SALIDA"
+
+      - name: comprobar que el panel viaja dentro
+        # Un binario sin el panel arranca igual y sirve solo la API: el fallo no se vería
+        # hasta que alguien abriera la página y encontrara un 404.
+        run: |
+          SALIDA="splitstream"
+          [ "${{ matrix.os }}" = "windows" ] && SALIDA="splitstream.exe"
+          if ! grep -qa 'id="app"' "$SALIDA"; then
+            echo "::error::el binario no lleva el panel embebido"
+            exit 1
+          fi
+          echo "el panel está dentro del binario"
+
+      - name: empaquetar
+        run: |
+          NOMBRE="splitstream-${GITHUB_REF_NAME}-${{ matrix.nombre }}"
+          mkdir -p "$NOMBRE"
+          cp README.md LICENSE "$NOMBRE"/
+          cp docs/manual-de-usuario.md "$NOMBRE"/ 2>/dev/null || true
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            cp splitstream.exe "$NOMBRE"/
+            zip -r "$NOMBRE.zip" "$NOMBRE"
+          else
+            cp splitstream "$NOMBRE"/
+            tar czf "$NOMBRE.tar.gz" "$NOMBRE"
+          fi
+          ls -la splitstream-*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: splitstream-${{ matrix.nombre }}
+          path: |
+            splitstream-*.tar.gz
+            splitstream-*.zip
+
+  publicar:
+    name: publicar la release
+    needs: binarios
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefactos
+          merge-multiple: true
+
+      # Un checksum por archivo: sirve para verificar una descarga y para detectar que dos
+      # plataformas produjeron el mismo binario por error de la matriz.
+      - name: sumas de verificación
+        run: |
+          cd artefactos
+          sha256sum splitstream-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: adjuntar a la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" artefactos/* --clobber \
+            || gh release create "${GITHUB_REF_NAME}" artefactos/* \
+                 --title "${GITHUB_REF_NAME}" --generate-notes

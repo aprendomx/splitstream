@@ -1,6 +1,6 @@
 <script setup>
 import { iArrastrar, iBroadcast, iCopiar, iMas, iRotar } from '@/iconos'
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useQuasar } from 'quasar'
 import draggable from 'vuedraggable'
 import { usePanel } from '@/stores/panel'
@@ -16,14 +16,26 @@ const dialogo = ref(false)
 const editando = ref(null)
 const claveIngestaVisible = ref(false)
 const claveIngesta = ref(null)
-// Copia local para el arrastre: mutar directamente lo que empuja el WebSocket haría que la
-// lista saltara bajo el dedo en mitad del gesto.
-const ordenLocal = ref(null)
+// Copia local para el arrastre.
+//
+// Se usa un ref de verdad y no un computed con setter: el getter devolvía un array NUEVO en
+// cada evaluación, y vuedraggable con v-model reescribía el valor en cada render, lo que
+// realimentaba el computed y bloqueaba el hilo principal en un bucle infinito. Se veía como
+// una pestaña que no responde ni a una captura de pantalla.
+//
+// La copia local también evita que la lista salte bajo el dedo: el WebSocket empuja estado
+// cada segundo, y mientras se arrastra hay que ignorarlo.
+const lista = ref([])
+const arrastrando = ref(false)
 
-const lista = computed({
-  get: () => ordenLocal.value ?? panel.destinos,
-  set: (v) => { ordenLocal.value = v },
-})
+watch(
+  () => panel.destinos,
+  (nuevos) => {
+    if (arrastrando.value) return
+    lista.value = [...nuevos]
+  },
+  { immediate: true, deep: false },
+)
 
 const tiempoEmitiendo = computed(() => {
   const t = panel.sesion.started_at
@@ -89,15 +101,16 @@ async function revelar(d) {
 }
 
 async function guardarOrden() {
-  if (!ordenLocal.value) return
-  const ids = ordenLocal.value.map((d) => d.id)
+  const ids = lista.value.map((d) => d.id)
   try {
     await api.reordenarDestinos(ids)
     await panel.cargar()
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   } finally {
-    ordenLocal.value = null
+    // Se suelta después de recargar: hasta entonces manda la copia local, o la lista
+    // volvería un instante al orden viejo delante del usuario.
+    arrastrando.value = false
   }
 }
 
@@ -139,12 +152,14 @@ function copiar(texto, que) {
 
       <q-card-section v-if="panel.ingesta" class="q-gutter-sm">
         <div class="text-caption text-grey-5">Configura esto en OBS</div>
-        <div class="row items-center no-wrap q-gutter-sm">
+        <!-- Ancho acotado: el botón de copiar pegado al texto en vez de al otro extremo
+             de un monitor de 27 pulgadas. -->
+        <div class="row items-center no-wrap q-gutter-sm bloque-ingesta">
           <div class="col campo-mono">{{ panel.ingesta.url }}</div>
           <q-btn flat round dense :icon="iCopiar" aria-label="Copiar el servidor"
                  @click="copiar(panel.ingesta.url, 'Servidor')" />
         </div>
-        <div class="row items-center no-wrap q-gutter-sm">
+        <div class="row items-center no-wrap q-gutter-sm bloque-ingesta">
           <div class="col campo-mono">{{ panel.ingesta.key_mask }}</div>
           <q-btn flat dense no-caps size="sm" label="Rotar clave" :icon="iRotar"
                  @click="$emit('rotar')" />
@@ -160,7 +175,7 @@ function copiar(texto, que) {
     </div>
 
     <!-- Estado vacío con la acción, no solo un texto triste. -->
-    <q-card v-if="!panel.destinos.length" flat bordered class="q-pa-lg text-center">
+    <q-card v-if="!lista.length" flat bordered class="q-pa-lg text-center">
       <q-icon :name="iBroadcast" size="42px" class="text-grey-7" />
       <div class="text-subtitle1 q-mt-sm">Todavía no hay canales vinculados</div>
       <div class="text-body2 text-grey-5 q-mt-xs q-mb-md">
@@ -210,11 +225,19 @@ function copiar(texto, que) {
   background: var(--q-positive);
   box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18);
 }
+.bloque-ingesta { max-width: 560px; }
 .campo-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
   word-break: break-all;
   color: rgba(255, 255, 255, 0.85);
 }
-.arrastre { cursor: grab; touch-action: none; }
+.rejilla-canales {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  /* Las tarjetas de una fila igualan altura: con alturas dispares la rejilla se ve rota,
+     y aquí las alturas varían según haya consejo de diagnóstico o no. */
+  align-items: stretch;
+}
 </style>

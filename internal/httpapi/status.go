@@ -13,6 +13,7 @@ import (
 // compositores acabarían divergiendo y la UI vería saltar el estado al conectar.
 func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error) {
 	var out statusDTO
+	out.Version = s.version
 
 	settings, err := s.db.Settings(ctx)
 	if err != nil {
