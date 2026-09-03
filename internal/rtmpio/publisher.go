@@ -406,9 +406,20 @@ func (p *Publisher) Close() error {
 		if err := p.writeCommand(stream, "FCUnpublish"); err != nil {
 			p.log.Debug("FCUnpublish falló al cerrar", "err", err)
 		}
-		if err := conn.DeleteStream(&message.NetStreamDeleteStream{StreamID: stream.StreamID()}); err != nil {
-			p.log.Debug("deleteStream falló al cerrar", "err", err)
-		}
+		// NO se manda deleteStream. Provoca una carrera de datos DENTRO de go-rtmp
+		// v0.0.7: su `streams.Delete` toma el mutex del mapa de streams, pero su
+		// `streams.At` —que usa la goroutine de lectura de la conexión— lo lee SIN
+		// tomarlo (streams.go:86). Uno protege y el otro no.
+		//
+		// El ledger de la fase 2 dejó anotada esa carrera como riesgo; apareció bajo
+		// -race el 2026-09-03. No es un problema de tests: en producción Close() se llama
+		// en CADA reconexión —con un destino aleteando fueron 55 seguidas— y una escritura
+		// concurrente sobre un mapa de Go puede abortar el proceso con "concurrent map
+		// writes", llevándose por delante la emisión a todos los destinos.
+		//
+		// Cerrar el socket termina el stream igual, y FCUnpublish ya le dijo a la
+		// plataforma que suelte el slot. ClientConn.Close solo cierra la conexión y no
+		// toca ese mapa, así que por ahí no hay carrera.
 	}
 	if conn != nil {
 		return conn.Close()
