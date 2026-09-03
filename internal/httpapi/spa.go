@@ -29,29 +29,37 @@ func (s *Server) serveSPA(archivos fs.FS) http.HandlerFunc {
 		}
 
 		ruta := strings.TrimPrefix(r.URL.Path, "/")
-		if ruta == "" {
-			ruta = "index.html"
-		}
+		esIndex := ruta == "" || ruta == "index.html"
 
-		if f, err := archivos.Open(ruta); err == nil && ruta != "index.html" {
-			f.Close()
-			// Los assets llevan hash en el nombre, así que se pueden cachear para siempre.
-			// index.html no: es lo que apunta a los assets nuevos tras una actualización.
-			if strings.HasPrefix(ruta, "assets/") {
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			} else {
-				w.Header().Set("Cache-Control", "no-cache")
+		// Un archivo que existe se sirve tal cual. El index no pasa por aquí: el
+		// FileServer redirige con un 301 cualquier petición a "/index.html" hacia "./",
+		// así que recargar en una ruta del cliente devolvería un redirect y no el panel.
+		if !esIndex {
+			if f, err := archivos.Open(ruta); err == nil {
+				f.Close()
+				// Los assets llevan hash en el nombre, así que se cachean para siempre. El
+				// index no: es lo que apunta a los assets nuevos tras una actualización, y
+				// cachearlo dejaría al usuario en la versión vieja.
+				if strings.HasPrefix(ruta, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
+				servidor.ServeHTTP(w, r)
+				return
 			}
-			servidor.ServeHTTP(w, r)
-			return
+
+			// Una ruta con extensión es un archivo que no existe, no una ruta del cliente.
+			// Devolver el index para /favicon.ico o para un .js cuyo hash cambió da HTML
+			// donde el navegador espera otra cosa, y el error que sale por consola no dice
+			// nada de lo que pasó realmente.
+			if i := strings.LastIndex(ruta, "/"); strings.Contains(ruta[i+1:], ".") {
+				writeError(w, http.StatusNotFound, codeNotFound, "no existe ese archivo")
+				return
+			}
 		}
 
-		// Ruta del cliente: se devuelve el index y el router se encarga.
-		//
-		// Se escribe a mano en vez de delegar en el FileServer porque este redirige con un
-		// 301 cualquier petición a "/index.html" hacia "./" — comportamiento suyo de
-		// siempre. Recargar en una ruta del cliente habría devuelto un redirect en lugar
-		// del panel.
+		// Raíz o ruta del cliente: se devuelve el index y el router se encarga.
 		index, err := fs.ReadFile(archivos, "index.html")
 		if err != nil {
 			writeError(w, http.StatusNotFound, codeNotFound,

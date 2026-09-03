@@ -52,6 +52,10 @@ export const usePanel = defineStore('panel', {
         this.autenticado = true
         this.errorConexion = null
         this.refrescarEventos()
+        // Al recargar la página la cookie sigue siendo válida, así que se entra por aquí
+        // y no por entrar(). Sin esto el panel se quedaba con la foto del GET inicial y
+        // no volvía a actualizarse nunca.
+        this.conectarWs()
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) {
           this.autenticado = false

@@ -114,6 +114,33 @@ func TestSPACachesAssetsButNotTheIndex(t *testing.T) {
 	}
 }
 
+// TestSPADoesNotServeHTMLForMissingFiles: una ruta con extensión es un archivo que no
+// existe, no una ruta del cliente. Devolver el index para /favicon.ico o para un .js cuyo
+// hash cambió da HTML donde el navegador espera otra cosa, y el error de consola resultante
+// no dice nada de lo que pasó.
+func TestSPADoesNotServeHTMLForMissingFiles(t *testing.T) {
+	srv, _ := servidorConPanel(t)
+
+	for _, ruta := range []string{"/favicon.ico", "/assets/viejo-abc.js", "/algo.css"} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, ruta, nil))
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: código = %d, quería 404", ruta, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "id=app") {
+			t.Errorf("%s: devolvió el panel en vez de un 404", ruta)
+		}
+	}
+
+	// Pero una ruta del cliente sin extensión sigue cayendo al index.
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ajustes/red", nil))
+	if !strings.Contains(rec.Body.String(), "id=app") {
+		t.Error("una ruta del cliente dejó de caer al index")
+	}
+}
+
 // TestWithoutABuiltPanelTheAPIStillWorks: un binario sin frontend compilado debe seguir
 // sirviendo la API y decir qué hacer, en vez de devolver una página en blanco.
 func TestWithoutABuiltPanelTheAPIStillWorks(t *testing.T) {
