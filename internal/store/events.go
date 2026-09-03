@@ -9,7 +9,7 @@ import (
 )
 
 // ErrSessionNotFound se devuelve cuando el id de sesión no existe.
-var ErrSessionNotFound = errors.New("sesión no encontrada")
+var ErrSessionNotFound = notFound("sesión no encontrada")
 
 // Level es la severidad de un evento.
 type Level string

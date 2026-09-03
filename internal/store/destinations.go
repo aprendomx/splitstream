@@ -13,10 +13,10 @@ import (
 )
 
 // ErrDestinationNotFound se devuelve cuando el id no existe.
-var ErrDestinationNotFound = errors.New("destino no encontrado")
+var ErrDestinationNotFound = notFound("destino no encontrado")
 
 // ErrInvalidDestinationURL indica que la URL del destino no sirve para retransmitir.
-var ErrInvalidDestinationURL = errors.New("URL de destino inválida")
+var ErrInvalidDestinationURL = invalidInput("URL de destino inválida")
 
 // validateRTMPURL comprueba que la URL sea rtmp:// o rtmps:// y tenga host y app.
 //
@@ -36,6 +36,34 @@ func validateRTMPURL(raw string) error {
 	}
 	if strings.Trim(u.Path, "/") == "" {
 		return fmt.Errorf("%w: falta la app tras el host", ErrInvalidDestinationURL)
+	}
+	return nil
+}
+
+// validateName rechaza el nombre vacío o de solo espacios. El esquema no lo impide y sin
+// esto el destino aparecería en la interfaz como una fila sin etiqueta.
+func validateName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return invalidInput("el nombre no puede estar vacío")
+	}
+	return nil
+}
+
+// validatePlatform delega en Platform.Valid, que ya conoce el conjunto cerrado, y le pone
+// la clase de error encima: sin ella la API no podría distinguir esto de un fallo de disco.
+func validatePlatform(p Platform) error {
+	if !p.Valid() {
+		return invalidInput(fmt.Sprintf("plataforma %q no soportada", p))
+	}
+	return nil
+}
+
+// validateKey rechaza la clave vacía. Un destino sin clave conecta y la plataforma lo
+// rechaza en la primera escritura, que es el modo de fallo más confuso que tenemos: el
+// sink queda reintentando contra un destino que nunca lo va a aceptar.
+func validateKey(k crypto.Secret) error {
+	if k.Reveal() == "" {
+		return invalidInput("la clave no puede estar vacía")
 	}
 	return nil
 }
@@ -121,13 +149,16 @@ func (d *DB) ListDestinations(ctx context.Context) ([]Destination, error) {
 
 // CreateDestination cifra la clave y añade el destino al final del orden.
 func (d *DB) CreateDestination(ctx context.Context, c *crypto.Cipher, in NewDestination) (*Destination, error) {
-	if !in.Platform.Valid() {
-		return nil, fmt.Errorf("plataforma desconocida %q", in.Platform)
+	if err := validateName(in.Name); err != nil {
+		return nil, err
 	}
-	if in.Name == "" {
-		return nil, errors.New("el nombre no puede estar vacío")
+	if err := validatePlatform(in.Platform); err != nil {
+		return nil, err
 	}
 	if err := validateRTMPURL(in.RTMPURL); err != nil {
+		return nil, err
+	}
+	if err := validateKey(in.Key); err != nil {
 		return nil, err
 	}
 
@@ -169,15 +200,15 @@ func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, 
 	args := []any{}
 
 	if patch.Name != nil {
-		if *patch.Name == "" {
-			return nil, errors.New("el nombre no puede estar vacío")
+		if err := validateName(*patch.Name); err != nil {
+			return nil, err
 		}
 		sets = append(sets, "name = ?")
 		args = append(args, *patch.Name)
 	}
 	if patch.Platform != nil {
-		if !patch.Platform.Valid() {
-			return nil, fmt.Errorf("plataforma desconocida %q", *patch.Platform)
+		if err := validatePlatform(*patch.Platform); err != nil {
+			return nil, err
 		}
 		sets = append(sets, "platform = ?")
 		args = append(args, string(*patch.Platform))
@@ -190,6 +221,9 @@ func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, 
 		args = append(args, *patch.RTMPURL)
 	}
 	if patch.Key != nil {
+		if err := validateKey(*patch.Key); err != nil {
+			return nil, err
+		}
 		encrypted, err := c.Encrypt([]byte(patch.Key.Reveal()))
 		if err != nil {
 			return nil, fmt.Errorf("cifrar la clave del destino: %w", err)
