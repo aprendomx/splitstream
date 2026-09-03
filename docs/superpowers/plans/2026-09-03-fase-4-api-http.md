@@ -4371,7 +4371,7 @@ tienen exactamente la misma forma.
   y llámalo desde los dos sitios. Dos compositores acabarían divergiendo.
 - Produces: nada que consuman otras tasks.
 
-- [ ] **Step 1: Añadir la dependencia**
+- [x] **Step 1: Añadir la dependencia**
 
 ```bash
 go get github.com/coder/websocket@v1.8.15
@@ -4381,7 +4381,7 @@ Verificado antes de escribir el plan: su `go.mod` no tiene ni un `require`, así
 arrastra nada. **No ejecutes `go mod tidy`.** Comprueba con `git diff go.mod` que solo entró
 esa línea.
 
-- [ ] **Step 2: Escribir los tests**
+- [x] **Step 2: Escribir los tests**
 
 Crea `internal/httpapi/ws_test.go`, con `httptest.NewServer` y el cliente del propio
 paquete `websocket`:
@@ -4619,7 +4619,7 @@ func TestWebSocketSurvivesASlowClient(t *testing.T) {
 márcalo con `if testing.Short() { t.Skip(...) }` — pero **que siga corriendo en la CI**,
 que no usa `-short`.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Puntos que el código debe respetar:
 
@@ -4636,13 +4636,13 @@ Puntos que el código debe respetar:
 6. **Un fallo al componer el estado se registra y NO cierra la conexión**: un error puntual
    de la base no debe tirar el panel de quien está transmitiendo.
 
-- [ ] **Step 4: Ejecutar los tests y verificar que pasan**
+- [x] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/httpapi/ -race -count=5`
 Con `-count=5` a propósito: los tests de goroutines y de plazos son los que fallan de forma
 intermitente, y una sola pasada verde no dice nada.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/httpapi/ go.mod go.sum

@@ -121,9 +121,8 @@ func (s *Server) Handler() http.Handler { return s.mux }
 // routes registra las rutas del spec §9. Los patrones con método son de Go 1.22, así que
 // no hace falta router externo.
 //
-// Se declaran TODAS aquí, incluidas las que aún no tienen handler: así la lista de qué
-// existe y qué necesita sesión se escribe en un solo sitio, y no se puede añadir un
-// endpoint olvidándose de protegerlo.
+// Se declaran TODAS aquí: así la lista de qué existe y qué necesita sesión se escribe en un
+// solo sitio, y no se puede añadir un endpoint olvidándose de protegerlo.
 func (s *Server) routes() {
 	// Públicas: son el camino para conseguir una sesión.
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
@@ -144,12 +143,7 @@ func (s *Server) routes() {
 	protegida("GET /api/destinations/{id}/key", s.handleRevealDestinationKey)
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
-	protegida("GET /ws", s.notImplemented)
-}
-
-// notImplemented es el andamio de las tasks 8 a 10. Cada una sustituye las suyas.
-func (s *Server) notImplemented(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, codeInternal, "todavía no implementado")
+	protegida("GET /ws", s.handleWS)
 }
 
 // clientIP saca la IP para el limitador. No se mira X-Forwarded-For: quien llega directo
