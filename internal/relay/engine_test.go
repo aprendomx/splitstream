@@ -467,3 +467,102 @@ func TestEngineSessionResetsBetweenSessions(t *testing.T) {
 		t.Errorf("la segunda sesión arrancó con bitrate %d pegado de la primera", got.BitrateBPS)
 	}
 }
+
+// TestEngineAddSinkStartsIt es el test del fallo que encontró la prueba con Facebook: la
+// API añadía el sink al hub sin arrancarlo, así que el destino se quedaba en `idle`,
+// acumulaba mensajes, los descartaba por desbordar la cola y no conectaba jamás. Desde
+// fuera parecía "degradado", que es justo la pista equivocada.
+//
+// Hub.Add solo registra; arrancar es responsabilidad de quien tiene el contexto de vida y
+// el preámbulo, y eso es el motor.
+func TestEngineAddSinkStartsIt(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	// Preámbulo mínimo para que el sink tenga qué reenviar al conectar.
+	e.OnMessage(&Message{Kind: KindMeta, Payload: []byte{0xFF}})
+	e.OnMessage(&Message{Kind: KindVideo, Payload: mustAVCSeqHeader(), IsSeqHeader: true, IsKeyframe: true})
+
+	pub := &fakePublisher{}
+	s := NewSink(SinkConfig{ID: 42, Name: "en caliente", Pub: pub})
+	e.AddSink(s)
+
+	waitFor(t, func() bool { return s.State() == StateLive }, "el sink añadido en caliente llega a live")
+
+	if h.Len() != 1 {
+		t.Errorf("sinks en el hub = %d, quería 1", h.Len())
+	}
+
+	// Y recibe lo que se publique a partir de ahora, sin descartar.
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 1000, Payload: []byte{0x17, 0x01}, IsKeyframe: true})
+	waitFor(t, func() bool { return len(pub.snapshot()) > 0 }, "el sink recibe media")
+
+	if got := s.Dropped(); got != 0 {
+		t.Errorf("descartes = %d, quería 0: un sink arrancado no debe acumular y tirar", got)
+	}
+}
+
+// TestEngineAddSinkSurvivesTheRequestThatCreatedIt: el sink NO puede heredar el contexto de
+// la petición HTTP que lo creó, o moriría en cuanto esa petición termine. Debe vivir con el
+// contexto del proceso.
+func TestEngineAddSinkSurvivesTheRequestThatCreatedIt(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+
+	// Un contexto de petición que se cancela justo después de añadir, como haría un
+	// handler HTTP al devolver la respuesta.
+	peticion, cancelarPeticion := context.WithCancel(context.Background())
+	s := NewSink(SinkConfig{ID: 42, Name: "en caliente", Pub: &fakePublisher{}})
+	e.AddSink(s)
+	cancelarPeticion()
+	_ = peticion
+
+	waitFor(t, func() bool { return s.State() == StateLive }, "sigue live tras acabar la petición")
+	time.Sleep(100 * time.Millisecond)
+	if got := s.State(); got != StateLive {
+		t.Errorf("estado = %v tras acabar la petición, quería live", got)
+	}
+}
+
+// TestEngineRemoveSinkStopsIt: apagar o borrar un destino en caliente tiene que cerrar su
+// conexión, no solo quitarlo del reparto.
+func TestEngineRemoveSinkStopsIt(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	pub := &fakePublisher{}
+	s := NewSink(SinkConfig{ID: 42, Name: "en caliente", Pub: pub})
+	e.AddSink(s)
+	waitFor(t, func() bool { return s.State() == StateLive }, "live antes de quitarlo")
+
+	e.RemoveSink(42)
+
+	if h.Len() != 0 {
+		t.Errorf("sinks en el hub = %d, quería 0", h.Len())
+	}
+	pub.mu.Lock()
+	closes := pub.closes
+	pub.mu.Unlock()
+	if closes == 0 {
+		t.Error("quitar un destino debe cerrar su Publisher")
+	}
+}

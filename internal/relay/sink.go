@@ -47,6 +47,23 @@ func (s State) String() string {
 // mal pegada produce un bucle silencioso para siempre.
 const suspectThreshold = 5
 
+// minHealthySession es lo que una sesión tiene que durar para considerarse sana y merecer
+// que el backoff vuelva a su suelo.
+//
+// Antes bastaba con transmitir un solo frame, y eso resultó peligroso: en la prueba real
+// contra Facebook, la plataforma aceptaba la conexión, tragaba unos 200 KB y cortaba. Como
+// "había transmitido", el backoff se reiniciaba y volvíamos a conectar un segundo después,
+// indefinidamente. Cada intento abre un stream que Facebook cuenta como ACTIVO, así que el
+// bucle acabó agotando el cupo de la cuenta y dejándola sin poder emitir.
+//
+// Treinta segundos separa con holgura los dos casos: un rechazo muere en uno o dos, y una
+// transmisión de verdad dura minutos u horas.
+const minHealthySession = 30 * time.Second
+
+// flapThreshold es cuántas sesiones cortas seguidas hacen falta para avisar de que el
+// destino aletea. Como suspectThreshold, no deja de reintentar (spec §6.5): deja constancia.
+const flapThreshold = 3
+
 // SinkConfig son los datos para construir un sink.
 type SinkConfig struct {
 	ID   int64
@@ -225,6 +242,9 @@ func (s *Sink) waitStopped(grace <-chan struct{}) bool {
 func (s *Sink) run(ctx context.Context, pre *Preamble) {
 	defer close(s.done)
 
+	// flaps cuenta sesiones cortas seguidas: conectó, transmitió un poco y murió.
+	var flaps int
+
 	for {
 		select {
 		case <-s.quit:
@@ -242,7 +262,9 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 			s.setState(StateReconnecting)
 		}
 
+		inicio := time.Now()
 		transmitted, err := s.session(ctx, pre)
+		duracion := time.Since(inicio)
 		if err == nil {
 			// Solo se sale sin error al pararse.
 			s.setState(StateIdle)
@@ -252,12 +274,32 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 		s.fail(err)
 		s.met.disconnected()
 
-		if transmitted {
-			// La conexión llegó a transmitir, así que la configuración es buena: se
-			// reinicia el backoff para que una caída puntual reconecte rápido.
+		switch {
+		case transmitted && duracion >= minHealthySession:
+			// La conexión transmitió durante un rato largo, así que la configuración es
+			// buena y esto fue una caída puntual: se reinicia el backoff para reconectar
+			// rápido, que es para lo que existe.
 			s.bo.reset()
+			flaps = 0
 			s.emit("warn", "destination_disconnected", "el destino se desconectó: "+err.Error())
-		} else if s.bo.attempts() == suspectThreshold {
+
+		case transmitted:
+			// Transmitió, pero poquísimo. Es el patrón de una plataforma que acepta la
+			// conexión y la rechaza justo después. NO se reinicia el backoff: reintentar
+			// cada segundo abre un stream nuevo cada segundo, y hay plataformas que los
+			// cuentan como activos hasta agotar el cupo de la cuenta.
+			flaps++
+			s.emit("warn", "destination_disconnected", "el destino se desconectó: "+err.Error())
+			if flaps == flapThreshold {
+				s.emit("error", "destination_flapping",
+					"el destino acepta la conexión y la corta enseguida, una y otra vez; "+
+						"revisa si la emisión sigue abierta en la plataforma o si has "+
+						"alcanzado su límite de streams activos")
+				s.log.Error("el destino aletea: conecta, transmite poco y corta",
+					"sesiones_cortas", flaps)
+			}
+
+		case s.bo.attempts() == suspectThreshold:
 			// Nunca llegó a transmitir en varios intentos seguidos. Se sigue
 			// reintentando (spec §6.5), pero se deja constancia: lo más probable es una
 			// clave incorrecta, y go-rtmp no la reporta como tal.

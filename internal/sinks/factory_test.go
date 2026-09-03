@@ -2,10 +2,16 @@ package sinks_test
 
 import (
 	"context"
+	"io"
+	"log/slog"
+	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/relay"
+	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
 	"github.com/aprendomx/splitstream/internal/store"
 )
@@ -208,3 +214,76 @@ func TestBuildEnabledPreservesSortOrder(t *testing.T) {
 		t.Errorf("orden = [%d %d], quería [%d %d]", got[0].ID(), got[1].ID(), a.ID, b.ID)
 	}
 }
+
+// TestBuiltSinkLogsEventsAfterTheCallerContextDies es el test del segundo fallo que
+// encontró la prueba con Facebook.
+//
+// El OnEvent del sink capturaba el contexto de quien llamaba a Build. Desde el arranque de
+// sesión eso da igual —es el del proceso—, pero desde un handler HTTP es el de la petición,
+// que se cancela al devolver la respuesta. Resultado: un destino añadido en caliente no
+// registraba NI UN evento en toda su vida, y el panel del spec §10 no tendría nada que
+// enseñar de él. Lo delató un "context canceled" en el log justo al conectar Facebook.
+//
+// El destino apunta a un servidor RTMP real —el nuestro— para que la conexión PROSPERE y
+// emita `destination_connected` enseguida. Con una dirección muerta el sink solo emitiría
+// a los cinco intentos fallidos, que con el backoff son unos quince segundos, y además no
+// sería el caso que ocurrió: Facebook conectó bien y el evento se perdió igual.
+func TestBuiltSinkLogsEventsAfterTheCallerContextDies(t *testing.T) {
+	db, c, f := setup(t)
+
+	// Un servidor RTMP que acepta lo que le llegue, para que el sink conecte de verdad.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ing := rtmpio.NewIngest(rtmpio.IngestConfig{
+		Addr: ln.Addr().String(), Handler: aceptaTodo{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	go ing.Serve(ln)
+	defer ing.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	d, err := db.CreateDestination(context.Background(), c, store.NewDestination{
+		Name: "local", Platform: store.PlatformCustom,
+		RTMPURL: "rtmp://" + ln.Addr().String() + "/live", Key: crypto.Secret("k"), Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+
+	// Se construye con un contexto de petición y se cancela justo después, como haría un
+	// handler HTTP al responder.
+	peticion, cancelar := context.WithCancel(context.Background())
+	s, err := f.Build(peticion, *d)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	cancelar()
+	defer s.Stop()
+
+	s.Start(context.Background(), nil)
+
+	limite := time.Now().Add(10 * time.Second)
+	for time.Now().Before(limite) {
+		eventos, err := db.RecentEvents(context.Background(), 50)
+		if err != nil {
+			t.Fatalf("RecentEvents: %v", err)
+		}
+		for _, e := range eventos {
+			if e.DestinationID != nil && *e.DestinationID == d.ID {
+				return // registrado: el contexto de la petición no lo tumbó
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Error("el sink conectó pero no registró el evento: su OnEvent murió con el contexto " +
+		"de quien lo construyó")
+}
+
+// aceptaTodo es un destino RTMP que acepta cualquier publisher y tira lo que reciba.
+type aceptaTodo struct{}
+
+func (aceptaTodo) OnPublishStart(app, key string) error { return nil }
+func (aceptaTodo) OnMessage(msg *relay.Message)         {}
+func (aceptaTodo) OnPublishEnd()                        {}

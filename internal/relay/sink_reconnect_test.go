@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -153,5 +154,114 @@ func TestSinkStopInterruptsBackoff(t *testing.T) {
 	s.Stop()
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("Stop tardó %v: debería cortar la espera del backoff", d)
+	}
+}
+
+// flappingPublisher imita lo que hizo Facebook en la prueba real: acepta la conexión, deja
+// escribir unos pocos mensajes, y entonces corta. Una y otra vez.
+type flappingPublisher struct {
+	mu       sync.Mutex
+	conexion int
+	escritas int
+	// permitidas es cuántas escrituras acepta antes de cortar cada conexión.
+	permitidas int
+}
+
+func (f *flappingPublisher) Connect(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.conexion++
+	f.escritas = 0
+	return nil
+}
+
+func (f *flappingPublisher) write() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.escritas++
+	if f.escritas > f.permitidas {
+		return errors.New("broken pipe")
+	}
+	return nil
+}
+
+func (f *flappingPublisher) WriteMeta(ts uint32, p []byte) error  { return f.write() }
+func (f *flappingPublisher) WriteAudio(ts uint32, p []byte) error { return f.write() }
+func (f *flappingPublisher) WriteVideo(ts uint32, p []byte) error { return f.write() }
+func (f *flappingPublisher) Close() error                         { return nil }
+
+func (f *flappingPublisher) conexiones() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.conexion
+}
+
+// TestSinkBacksOffWhenTheDestinationFlaps es el test del fallo que la prueba con Facebook
+// destapó, y que le costó el cupo de streams activos a la cuenta del usuario.
+//
+// El backoff se reiniciaba en cuanto la conexión había transmitido ALGO. Facebook aceptaba
+// unos 200 KB y cortaba, así que el backoff volvía a su suelo de 1 s y ahí se quedaba
+// clavado: una conexión nueva cada segundo, indefinidamente. Cada una abre un stream que
+// Facebook contabiliza como activo, y al llenarse el cupo la cuenta se queda sin poder
+// emitir.
+//
+// Transmitir un poco NO es señal de que la configuración sea buena. Solo una sesión que
+// DURA lo es.
+//
+// Se afirma sobre las conexiones que cuenta el publisher, no sobre backoff.attempts: el
+// backoff pertenece a la goroutine del sink y leerlo desde el test es una data race, que es
+// justo lo que -race señaló al primer intento.
+//
+// Los números: con el fallo el backoff se queda en su suelo de 1 s, así que en doce
+// segundos salen once o doce conexiones. Con el arreglo va 1, 2, 4, 8… y salen cuatro o
+// cinco. Cada una de esas conexiones es un stream que la plataforma puede estar contando
+// como activo.
+func TestSinkBacksOffWhenTheDestinationFlaps(t *testing.T) {
+	// 6 escrituras: las 3 del preámbulo más 3 frames. Tiene que llegar a entregar MEDIA,
+	// porque es eso —y no el preámbulo— lo que marca `transmitted` y reinicia el backoff.
+	pub := &flappingPublisher{permitidas: 6}
+	s := NewSink(SinkConfig{ID: 1, Name: "aleteante", Pub: pub})
+	s.Start(context.Background(), preambleWith())
+	defer s.Stop()
+
+	fin := make(chan struct{})
+	defer close(fin)
+	go func() {
+		for {
+			select {
+			case <-fin:
+				return
+			default:
+			}
+			s.Enqueue(videoKey(1000))
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	// Tiempo para varios aleteos: con el arreglo el backoff va 1 s, 2 s, 4 s…
+	time.Sleep(12 * time.Second)
+
+	got := pub.conexiones()
+	if got < 2 {
+		t.Fatalf("conexiones = %d: el test no llegó a provocar aleteo", got)
+	}
+	if got > 6 {
+		t.Errorf("conexiones en 12 s = %d: el backoff se reinicia con cada aleteo y se "+
+			"queda clavado en su suelo, abriendo un stream por segundo en la plataforma", got)
+	}
+}
+
+// TestSinkStillRecoversFastFromARealBlip: el arreglo no puede penalizar el caso que el
+// reinicio del backoff existía para servir — una caída puntual de una conexión sana.
+func TestSinkStillRecoversFastFromARealBlip(t *testing.T) {
+	// Acepta muchísimas escrituras: la sesión dura, es sana.
+	pub := &flappingPublisher{permitidas: 1 << 30}
+	s := NewSink(SinkConfig{ID: 1, Name: "sano", Pub: pub})
+	s.Start(context.Background(), preambleWith())
+	defer s.Stop()
+
+	waitFor(t, func() bool { return s.State() == StateLive }, "conecta")
+	if n := pub.conexiones(); n != 1 {
+		t.Errorf("conexiones = %d, quería 1: una conexión sana no debe reintentar", n)
 	}
 }

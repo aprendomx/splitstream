@@ -189,10 +189,68 @@ Dos decisiones del arreglo:
 - `started_at` se normaliza a UTC: el motor lo tiene en hora local y el resto de timestamps
   del JSON van en `Z`. Lo vi en el volcado del directo, no en un test.
 
+## Prueba con Facebook y Twitch (2026-09-03)
+
+**Facebook conecta por RTMPS.** La ruta TLS funciona contra una plataforma real: fan-out
+simultáneo a YouTube y Facebook, `live` en ambos, 3,8 Mbps cada uno, cero descartes.
+También quedó demostrado el aislamiento entre destinos de la fase 3: mientras Facebook
+entraba en bucle de reconexión, YouTube siguió a 3,8 Mbps con cero reconexiones.
+
+Pero la prueba destapó **tres fallos**, todos invisibles para los 72 tests del paquete y
+todos del mismo tipo: cosas que solo pasan cuando el producto se usa de verdad.
+
+### 1. El destino añadido en caliente nunca se conectaba
+
+`applyHot` metía el sink en el hub con `Hub.Add`, que **solo registra**. Arrancar necesita
+el contexto de vida del proceso y el preámbulo, y el único que llamaba a `Start` era el
+motor. El destino se quedaba en `idle` acumulando mensajes y descartándolos al desbordar la
+cola: 517 descartes, 0 bytes enviados, `DEGRADADO`. Desde fuera parecía un problema de
+rendimiento, que es la pista equivocada.
+
+Y si `applyHot` hubiera llamado a `Start`, lo habría hecho con `r.Context()`: el sink habría
+muerto al devolver la respuesta HTTP.
+
+Arreglado moviendo la responsabilidad a quien tiene las dos cosas: `Engine.AddSink()`. El
+arranque de sesión usa ahora el mismo camino, para que no haya dos formas de hacerlo, y
+`HubView` desaparece de la API.
+
+**Por qué los tests no lo vieron:** el `fakeHub.Add` solo apuntaba el id. Comprobaba que la
+API *pedía* añadir el destino, no que el destino *acabara transmitiendo*. Los tests nuevos
+usan hub y sink de verdad y exigen que llegue a `live` con cero descartes; uno cancela un
+contexto de petición justo después de añadir.
+
+### 2. Los destinos en caliente no registraban ni un evento
+
+El `OnEvent` de la fábrica capturaba el contexto de quien llamaba a `Build`. Desde el
+arranque de sesión da igual —es el del proceso—, pero desde un handler HTTP es el de la
+petición. Se vio como `"registrar evento: context canceled"` en el log y como un destino sin
+ningún evento en el panel.
+
+Arreglado con `context.Background()` para los eventos: ocurren a lo largo de toda la
+transmisión, no pueden depender de la llamada que construyó el sink.
+
+### 3. El bucle de reconexión agotó el cupo de streams de la cuenta
+
+El más serio. `if transmitted { s.bo.reset() }` reiniciaba el backoff con que la conexión
+hubiera escrito **un solo frame**. Facebook aceptaba la conexión, tragaba unos 200 KB y
+cortaba, así que el backoff volvía a su suelo de 1 s y ahí se quedaba clavado: una conexión
+nueva por segundo, indefinidamente. Facebook cuenta cada una como un stream ACTIVO, y acabó
+respondiendo *«Alcanzaste el límite de streams activos permitidos»* — la cuenta del usuario
+quedó sin poder emitir por culpa de nuestro reintento.
+
+Arreglado con `minHealthySession = 30 s`: transmitir un poco no es señal de que la
+configuración sea buena, solo lo es una sesión que dura. Y `flapThreshold = 3` emite
+`destination_flapping` con un mensaje que nombra la causa probable, porque `suspectThreshold`
+solo cubría el caso de "nunca llega a transmitir".
+
+Medido: 13 conexiones en 12 s con el fallo, 4 o 5 con el arreglo. Treinta veces menos
+streams creados por minuto contra la plataforma.
+
 ## Lo que queda abierto
 
-- **YouTube por RTMP: probado y funcionando** (ver arriba). Faltan `rtmps://`, Twitch y
-  Facebook, que pueden ser más estrictos con el orden del handshake.
+- **YouTube (RTMP) y Facebook (RTMPS): el handshake funciona en ambos.** Falta Twitch, y
+  falta volver a probar Facebook de punta a punta cuando su cupo de streams se libere: el
+  bucle de reintentos lo agotó antes de poder confirmar una emisión sostenida.
 
 - **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez durante una
   corrida de `go test ./...` y no reproducido en 19 intentos posteriores (16 del paquete

@@ -254,7 +254,6 @@ func run(ctx context.Context, out io.Writer) error {
 		DB:            db,
 		Cipher:        cipher,
 		Engine:        engine,
-		Hub:           hub,
 		Ingest:        ingest,
 		Sinks:         factory,
 		MasterKey:     cfg.MasterKey,

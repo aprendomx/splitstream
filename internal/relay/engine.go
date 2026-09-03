@@ -171,13 +171,35 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 		e.log.Error("no se pudieron construir los destinos de la sesión", "err", err)
 	}
 	for _, s := range sinks {
-		s.Start(e.baseCtx, e.hub.Preamble())
-		e.hub.Add(s)
+		e.AddSink(s)
 	}
 
 	e.logEvent(ctx, &id, nil, "info", "publisher_connected", "el publisher conectó")
 	e.log.Info("sesión iniciada", "sesion_id", id, "app", app)
 	return nil
+}
+
+// AddSink añade un destino a la sesión en curso y lo ARRANCA.
+//
+// Existe porque Hub.Add solo registra: arrancar necesita el contexto de vida del proceso y
+// el preámbulo, y los dos los tiene el motor. Cuando la API añadía el sink al hub por su
+// cuenta, el destino se quedaba en idle acumulando mensajes hasta desbordar la cola, y
+// desde fuera parecía "degradado" — la pista equivocada. Se descubrió probando con Facebook
+// contra un directo real.
+//
+// El contexto es e.baseCtx a propósito, NO el de la petición HTTP que provocó el alta: con
+// el de la petición, el sink moriría al devolver la respuesta.
+//
+// Añadir un sink con un id que ya está reemplaza al anterior sin ventana de escritura
+// doble, que es lo que hace falta al editar un destino en caliente.
+func (e *Engine) AddSink(s *Sink) {
+	s.Start(e.baseCtx, e.hub.Preamble())
+	e.hub.Add(s)
+}
+
+// RemoveSink quita un destino de la sesión en curso y para su sink, cerrando su conexión.
+func (e *Engine) RemoveSink(id int64) {
+	e.hub.Remove(id)
 }
 
 // OnMessage reparte un mensaje a los destinos y acumula lo que la sesión necesita medir.

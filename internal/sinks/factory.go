@@ -66,8 +66,19 @@ func (f *Factory) Build(ctx context.Context, d store.Destination) (*relay.Sink, 
 			})
 		},
 		Logger: f.logger,
+		// El contexto de los eventos NO es el de quien llamó a Build.
+		//
+		// Los eventos del sink —conectar, caerse, reconectar— ocurren mucho después, a lo
+		// largo de toda la transmisión. Con el contexto del llamante, un destino añadido
+		// desde un handler HTTP dejaba de registrar en cuanto la petición respondía: se
+		// veía como "context canceled" en el log y como un destino sin ningún evento en el
+		// panel. Se descubrió añadiendo Facebook a un directo en curso.
+		//
+		// context.Background() y no el del proceso: escribir un evento es una operación
+		// corta, y durante el apagado interesa que los últimos eventos LLEGUEN a la base en
+		// vez de cancelarse a medias.
 		OnEvent: func(ev relay.EngineEvent) {
-			if _, err := f.db.LogEvent(ctx, store.Event{
+			if _, err := f.db.LogEvent(context.Background(), store.Event{
 				DestinationID: ev.DestinationID,
 				Level:         store.Level(ev.Level),
 				Kind:          ev.Kind,
