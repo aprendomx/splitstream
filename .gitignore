@@ -24,3 +24,6 @@
 
 # macOS
 .DS_Store
+
+# El .env del despliegue lleva la clave maestra: nunca se versiona.
+/deploy/.env

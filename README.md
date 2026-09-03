@@ -10,9 +10,9 @@ despreciable y el de subida es `bitrate × número de destinos`.
 
 ## Estado
 
-**Fase 5 de 6 en curso.** El motor está terminado y probado contra plataformas reales
-—YouTube, Twitch y Facebook a la vez, sin descartes ni reconexiones—. La API y el panel
-web funcionan; falta pulir el panel y la fase 6 de empaquetado.
+**Las seis fases están completas.** El motor está probado contra plataformas reales
+—YouTube, Twitch y Facebook a la vez, sin descartes ni reconexiones durante quince minutos
+seguidos— y el producto se instala descargando un archivo.
 
 | Fase | Contenido | Estado |
 | --- | --- | --- |
@@ -20,8 +20,8 @@ web funcionan; falta pulir el panel y la fase 6 de empaquetado.
 | 2 | Ingesta RTMP, hub y un destino de punta a punta (RTMP y RTMPS) | ✅ |
 | 3 | N destinos, cola con descarte por GOP, reconexión, métricas | ✅ |
 | 4 | API HTTP completa + WebSocket | ✅ |
-| 5 | Panel web | en curso |
-| 6 | Docker, systemd, documentación de operación | pendiente |
+| 5 | Panel web | ✅ |
+| 6 | Docker, systemd, documentación de operación | ✅ |
 
 ---
 
@@ -50,12 +50,25 @@ cd splitstream-*/
 chmod +x splitstream
 ```
 
-En macOS, la primera vez el sistema lo bloqueará por no estar firmado. Ábrelo con
-**clic derecho → Abrir**, o quítale la marca de cuarentena:
+**En macOS verás este aviso la primera vez:**
+
+> «Apple no pudo verificar que "splitstream" no contenga software malicioso.»
+
+Es Gatekeeper. Los binarios no están firmados con un certificado de desarrollador de
+Apple —eso cuesta una suscripción anual— así que el sistema los bloquea aunque el
+programa sea correcto. Tienes dos formas de desbloquearlo:
 
 ```bash
-xattr -d com.apple.quarantine splitstream
+# Quita la marca que el navegador puso al descargar
+xattr -dr com.apple.quarantine splitstream-v0.5.0-macos-apple-silicon
 ```
+
+O sin terminal: **Ajustes del Sistema → Privacidad y seguridad**, baja hasta el aviso
+sobre `splitstream` y pulsa **Abrir de todos modos**.
+
+> El «clic derecho → Abrir» de toda la vida ya no siempre ofrece la opción en las
+> versiones recientes de macOS. Si el menú no te la da, usa cualquiera de las dos vías de
+> arriba.
 
 **Windows**: descomprime el `.zip`. SmartScreen avisará de que el editor es desconocido;
 elige **Más información → Ejecutar de todas formas**.
@@ -147,38 +160,41 @@ read -rs PW && printf '%s' "$PW" | splitstream -setpassword && unset PW
 
 ---
 
+## Con Docker
+
+```bash
+git clone https://github.com/aprendomx/splitstream && cd splitstream
+cp deploy/env.example deploy/.env
+
+# Genera la clave maestra y pégala en deploy/.env
+docker compose -f deploy/docker-compose.yml run --rm splitstream -genkey
+
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+La imagen pesa unos 18 MB y no lleva ni shell: es el binario sobre `scratch`, con los
+certificados raíz —que hacen falta para los destinos `rtmps://`— y nada más. Corre como
+usuario sin privilegios y con el sistema de archivos en solo lectura salvo su base de
+datos.
+
+**Desde Docker, el asistente te pedirá el código del primer arranque.** Es normal: la
+petición llega por la red puente del contenedor y no por `localhost`, así que el servicio
+la trata como si viniera de otra máquina. Míralo con:
+
+```bash
+docker compose -f deploy/docker-compose.yml logs | grep -A2 "te pedirá este código"
+```
+
+El panel se publica solo en `127.0.0.1:8080` a propósito. Si quieres alcanzarlo desde
+fuera, ponlo detrás de un proxy con HTTPS en lugar de abrir el puerto: sin TLS, tu
+contraseña viaja en claro.
+
 ## Dejarlo funcionando siempre
 
 ### Linux con systemd
 
-```ini
-# /etc/systemd/system/splitstream.service
-[Unit]
-Description=Splitstream
-After=network-online.target
-
-[Service]
-Type=simple
-User=splitstream
-WorkingDirectory=/var/lib/splitstream
-ExecStart=/usr/local/bin/splitstream
-Restart=always
-RestartSec=5
-
-# La clave maestra va en un archivo con permisos 600, no en esta unidad: lo que se
-# escribe aquí lo puede leer cualquiera con `systemctl cat`.
-EnvironmentFile=/etc/splitstream/env
-
-# Endurecimiento básico. Solo necesita escribir su base de datos.
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/splitstream
-
-[Install]
-WantedBy=multi-user.target
-```
+Hay una unidad lista en [`deploy/splitstream.service`](deploy/splitstream.service), con
+las instrucciones de instalación en su cabecera. Lo esencial:
 
 ```bash
 sudo install -d -o splitstream -g splitstream /var/lib/splitstream
@@ -186,9 +202,16 @@ sudo install -d -m 700 /etc/splitstream
 printf 'SPLITSTREAM_MASTER_KEY=%s\n' "$(splitstream -genkey)" \
   | sudo tee /etc/splitstream/env > /dev/null
 sudo chmod 600 /etc/splitstream/env
+sudo install -m 644 deploy/splitstream.service /etc/systemd/system/
 sudo systemctl enable --now splitstream
-journalctl -u splitstream -f
+
+# El código del primer arranque:
+journalctl -u splitstream | grep -A2 "te pedirá este código"
 ```
+
+La unidad da 30 segundos de margen al apagado. No es adorno: al recibir `SIGTERM`, el
+servicio manda `FCUnpublish` a cada destino, espera la gracia de 3 segundos del diseño y
+cierra la sesión en la base. Matarlo antes deja sesiones abiertas para siempre.
 
 ### macOS
 

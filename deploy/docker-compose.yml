@@ -1,0 +1,47 @@
+# Despliegue de Splitstream con Docker.
+#
+#   1. cp deploy/env.example deploy/.env
+#   2. docker compose -f deploy/docker-compose.yml run --rm splitstream -genkey
+#      y pega el resultado en deploy/.env
+#   3. docker compose -f deploy/docker-compose.yml up -d
+#   4. docker compose -f deploy/docker-compose.yml logs | grep -A2 "te pedirá este código"
+#
+# El paso 4 hace falta porque desde Docker el panel se ve como si viniera de otra máquina
+# —la petición llega por la red puente, no por loopback— así que el asistente pide el
+# código del primer arranque. Es lo conservador: no hay forma de distinguir Docker en tu
+# portátil de Docker en un servidor expuesto.
+
+services:
+  splitstream:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: splitstream:latest
+    container_name: splitstream
+    restart: unless-stopped
+
+    env_file: .env
+
+    ports:
+      # RTMP: es donde publica OBS.
+      - "1935:1935"
+      # Panel. Se ata a 127.0.0.1 a propósito: si quieres alcanzarlo desde fuera, ponlo
+      # detrás de un proxy con HTTPS en vez de abrir este puerto al mundo. La contraseña
+      # viajaría en claro.
+      - "127.0.0.1:8080:8080"
+
+    volumes:
+      # La base de datos: las claves de tus canales y la contraseña del panel. Sin este
+      # volumen se pierde todo al recrear el contenedor.
+      - splitstream-datos:/data
+
+    # El contenedor no necesita escribir en ningún otro sitio.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
+    # Sin healthcheck con curl: la imagen es scratch y no tiene shell ni binarios. Docker
+    # ya reinicia el contenedor si el proceso muere, que es lo que puede pasar aquí.
+
+volumes:
+  splitstream-datos:

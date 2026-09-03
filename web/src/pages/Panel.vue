@@ -14,8 +14,7 @@ const panel = usePanel()
 
 const dialogo = ref(false)
 const editando = ref(null)
-const claveIngestaVisible = ref(false)
-const claveIngesta = ref(null)
+const rotando = ref(false)
 // Copia local para el arrastre.
 //
 // Se usa un ref de verdad y no un computed con setter: el getter devolvía un array NUEVO en
@@ -114,15 +113,89 @@ async function guardarOrden() {
   }
 }
 
-async function verClaveIngesta() {
-  claveIngestaVisible.value = !claveIngestaVisible.value
+/**
+ * Copia al portapapeles.
+ *
+ * navigator.clipboard SOLO existe en contextos seguros: HTTPS o localhost. Al abrir el
+ * panel por la IP de la red —que es justo el caso de mirarlo desde el móvil— no existe, y
+ * con encadenamiento opcional la llamada era un no-op silencioso: ni copiaba ni avisaba.
+ *
+ * El respaldo con execCommand está obsoleto pero funciona en contexto inseguro, que es
+ * donde hace falta. Si tampoco puede, se dice, en vez de fingir que copió.
+ */
+async function copiar(texto, que) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(texto)
+      $q.notify({ type: 'positive', message: `${que} copiado` })
+      return true
+    }
+    const ta = document.createElement('textarea')
+    ta.value = texto
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (!ok) throw new Error('execCommand devolvió false')
+    $q.notify({ type: 'positive', message: `${que} copiado` })
+    return true
+  } catch {
+    $q.notify({
+      type: 'warning',
+      message: 'Tu navegador no deja copiar aquí. Selecciona el texto y cópialo a mano.',
+      timeout: 6000,
+    })
+    return false
+  }
 }
 
-function copiar(texto, que) {
-  navigator.clipboard?.writeText(texto).then(
-    () => $q.notify({ type: 'positive', message: `${que} copiado` }),
-    () => $q.notify({ type: 'negative', message: 'No se pudo copiar' }),
-  )
+/** Rota la clave de ingesta, tras confirmar y avisando de lo que implica. */
+function confirmarRotacion() {
+  $q.dialog({
+    title: 'Rotar la clave de ingesta',
+    message:
+      'La clave actual dejará de servir y tendrás que pegar la nueva en OBS.' +
+      (panel.haySesion
+        ? '<br><br><b>Estás transmitiendo ahora mismo.</b> La transmisión en curso ' +
+          'continúa; la clave nueva hará falta la próxima vez que arranques OBS.'
+        : ''),
+    html: true,
+    cancel: { flat: true, noCaps: true, label: 'Cancelar' },
+    ok: { color: 'primary', unelevated: true, noCaps: true, label: 'Rotar' },
+  }).onOk(rotarClave)
+}
+
+async function rotarClave() {
+  rotando.value = true
+  try {
+    const { key } = await api.rotarClave(false)
+    await panel.cargar()
+    panel.refrescarEventos()
+
+    // La clave se enseña UNA sola vez: es la única ocasión de copiarla. Por eso el diálogo
+    // no se puede cerrar por accidente pulsando fuera.
+    $q.dialog({
+      title: 'Tu clave nueva',
+      message:
+        '<p>Pégala en OBS ahora. <b>No volverá a mostrarse.</b></p>' +
+        `<p class="clave-nueva">${key}</p>`,
+      html: true,
+      persistent: true,
+      ok: { flat: true, noCaps: true, label: 'Ya la copié' },
+      cancel: { unelevated: true, color: 'primary', noCaps: true, label: 'Copiar' },
+    }).onCancel(() => {
+      // El botón "Copiar" ocupa el sitio de cancelar para que quede a la derecha, que es
+      // donde va la acción principal.
+      copiar(key, 'Clave')
+    })
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  } finally {
+    rotando.value = false
+  }
 }
 </script>
 
@@ -162,7 +235,7 @@ function copiar(texto, que) {
         <div class="row items-center no-wrap q-gutter-sm bloque-ingesta">
           <div class="col campo-mono">{{ panel.ingesta.key_mask }}</div>
           <q-btn flat dense no-caps size="sm" label="Rotar clave" :icon="iRotar"
-                 @click="$emit('rotar')" />
+                 :loading="rotando" @click="confirmarRotacion" />
         </div>
       </q-card-section>
     </q-card>
@@ -215,6 +288,23 @@ function copiar(texto, que) {
     <DialogoDestino v-model="dialogo" :destino="editando" @guardado="trasGuardar" />
   </q-page>
 </template>
+
+<!-- El diálogo de Quasar se monta fuera de este componente, así que su estilo no puede ir
+     en el bloque scoped. -->
+<style>
+.clave-nueva, .clave-revelada {
+  display: block;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  word-break: break-all;
+  /* Seleccionable a mano: es el último recurso si el navegador no deja copiar. */
+  user-select: all;
+}
+</style>
 
 <style scoped>
 .indicador {
