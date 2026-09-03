@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -143,8 +144,56 @@ func TestRunStartupLogNeverContainsTheIngestKey(t *testing.T) {
 	if !strings.Contains(logged, "http_addr") {
 		t.Errorf("el arranque no dice dónde escucha el HTTP: %s", logged)
 	}
-	if strings.Contains(logged, "password") || strings.Contains(logged, "contraseña") {
-		t.Errorf("el arranque menciona la contraseña: %s", logged)
+	// Nota: NO se prohíbe la palabra "contraseña". El aviso del primer arranque dice
+	// legítimamente "elige tu contraseña", y prohibir la palabra confundía nombrar un
+	// concepto con filtrar un secreto. Lo que se vigila son los secretos, arriba.
+}
+
+// TestFirstRunNoticeOnlyAppearsWhenUnconfigured: el código de configuración se imprime al
+// arrancar sin contraseña, que es cuando sirve. Seguir imprimiéndolo en cada reinicio de un
+// servicio ya configurado lo dejaría en el journal para siempre sin ninguna razón.
+func TestFirstRunNoticeOnlyAppearsWhenUnconfigured(t *testing.T) {
+	master, err := generateMasterKey()
+	if err != nil {
+		t.Fatalf("generateMasterKey: %v", err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "primero.db")
+	t.Setenv("SPLITSTREAM_MASTER_KEY", master)
+	t.Setenv("SPLITSTREAM_DB_PATH", dbPath)
+	t.Setenv("SPLITSTREAM_RTMP_ADDR", "127.0.0.1:0")
+	t.Setenv("SPLITSTREAM_HTTP_ADDR", "127.0.0.1:0")
+
+	arranque := func() string {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		var out syncWriter
+		if err := run(ctx, &out); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		return out.String()
+	}
+
+	// Sin configurar: el aviso está.
+	primero := arranque()
+	if !strings.Contains(primero, "todavía no está configurado") {
+		t.Fatalf("el primer arranque no avisó:\n%s", primero)
+	}
+	if !regexp.MustCompile(`[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}`).MatchString(primero) {
+		t.Error("el primer arranque no imprimió ningún código")
+	}
+
+	// Se configura, y el aviso desaparece para siempre.
+	if err := setPassword(context.Background(),
+		strings.NewReader("una-contraseña-cualquiera\n"), io.Discard); err != nil {
+		t.Fatalf("setPassword: %v", err)
+	}
+
+	segundo := arranque()
+	if strings.Contains(segundo, "todavía no está configurado") {
+		t.Errorf("un servicio ya configurado sigue avisando:\n%s", segundo)
+	}
+	if regexp.MustCompile(`[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}`).MatchString(segundo) {
+		t.Error("un servicio ya configurado sigue imprimiendo un código de configuración")
 	}
 }
 
