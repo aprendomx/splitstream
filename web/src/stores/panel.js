@@ -7,6 +7,10 @@ import { api, ApiError } from '@/api'
 export const usePanel = defineStore('panel', {
   state: () => ({
     autenticado: false,
+    // Primer arranque: mientras no haya contraseña, el panel enseña el asistente.
+    necesitaSetup: false,
+    pideCodigo: false,
+    esLocal: true,
     cargando: true,
     estado: null,      // statusDTO
     eventos: [],
@@ -59,12 +63,33 @@ export const usePanel = defineStore('panel', {
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) {
           this.autenticado = false
+          // Un 401 puede significar "hay que entrar" o "esto no está configurado
+          // todavía". Solo el segundo lleva al asistente.
+          await this.comprobarSetup()
         } else {
           this.errorConexion = e.message
         }
       } finally {
         this.cargando = false
       }
+    },
+
+    async comprobarSetup() {
+      try {
+        const s = await api.estadoSetup()
+        this.necesitaSetup = s.necesario
+        this.pideCodigo = s.pide_codigo
+        this.esLocal = s.local
+      } catch {
+        // Si esto falla, se enseña el login: es el camino conservador.
+        this.necesitaSetup = false
+      }
+    },
+
+    /** Tras el asistente ya hay sesión: el backend deja la cookie puesta. */
+    async trasSetup() {
+      this.necesitaSetup = false
+      await this.cargar()
     },
 
     async refrescarEventos() {

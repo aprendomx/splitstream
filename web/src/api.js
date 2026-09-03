@@ -54,6 +54,11 @@ async function pedir(metodo, ruta, cuerpo) {
 }
 
 export const api = {
+  // Configuración inicial. Es pública por definición: existe justo cuando todavía no hay
+  // contraseña con la que autenticarse.
+  estadoSetup: () => pedir('GET', '/api/setup'),
+  configurar: (password, codigo) => pedir('POST', '/api/setup', { password, codigo }),
+
   login: (password) => pedir('POST', '/api/auth/login', { password }),
   logout: () => pedir('POST', '/api/auth/logout'),
 

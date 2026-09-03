@@ -65,6 +65,10 @@ type Config struct {
 	// la URL que se le enseña al usuario sale de la petición, porque el panel se alcanza
 	// por algún nombre concreto y la ingesta está en esa misma máquina.
 	RTMPAddr string
+	// SetupCode es el código de un solo uso del primer arranque. Solo hace falta cuando el
+	// panel se abre desde OTRA máquina: en local, quien está en el teclado ya controla el
+	// equipo. Vacío si el servicio ya tiene contraseña.
+	SetupCode string
 	// SPA son los archivos del panel compilado. Si es nil, el binario solo sirve la API:
 	// útil en los tests, que no necesitan el frontend para nada.
 	SPA fs.FS
@@ -76,18 +80,19 @@ type Config struct {
 
 // Server sirve la API del spec §9.
 type Server struct {
-	db       *store.DB
-	cipher   *crypto.Cipher
-	engine   EngineView
-	ingest   Disconnecter
-	sinks    SinkBuilder
-	signer   *sessionSigner
-	limiter  *loginLimiter
-	logger   *slog.Logger
-	spa      fs.FS
-	secure   bool
-	rtmpPort string
-	mux      *http.ServeMux
+	db        *store.DB
+	cipher    *crypto.Cipher
+	engine    EngineView
+	ingest    Disconnecter
+	sinks     SinkBuilder
+	signer    *sessionSigner
+	limiter   *loginLimiter
+	logger    *slog.Logger
+	setupCode string
+	spa       fs.FS
+	secure    bool
+	rtmpPort  string
+	mux       *http.ServeMux
 }
 
 func New(cfg Config) (*Server, error) {
@@ -109,7 +114,8 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
 		ingest: cfg.Ingest, sinks: cfg.Sinks,
-		signer: signer, limiter: newLoginLimiter(), logger: logger, spa: cfg.SPA,
+		signer: signer, limiter: newLoginLimiter(), logger: logger,
+		setupCode: cfg.SetupCode, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
@@ -130,6 +136,12 @@ func (s *Server) routes() {
 	// Públicas: son el camino para conseguir una sesión.
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
+
+	// La configuración inicial también es pública, por definición: existe justo cuando
+	// todavía no hay contraseña con la que autenticarse. Se protege de otra forma —solo
+	// funciona mientras no haya contraseña, y desde fuera exige el código de la consola—.
+	s.mux.HandleFunc("GET /api/setup", s.handleSetupEstado)
+	s.mux.HandleFunc("POST /api/setup", s.handleSetup)
 
 	protegida := func(pattern string, h http.HandlerFunc) {
 		s.mux.Handle(pattern, s.requireSession(h))
