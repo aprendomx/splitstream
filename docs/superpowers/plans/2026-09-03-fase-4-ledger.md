@@ -138,11 +138,53 @@ Task 1 en producción: nueve dígitos fijos de fracción.
 queda **saldada entera la deuda del spec §15**: §15.1 y §15.6 en la fase 2, §15.7 en la 3, y
 §15.2, §15.3, §15.4, §15.5 y §15.8 en esta.
 
+## Prueba contra YouTube real (2026-09-03)
+
+Hecha con la cuenta del usuario y su OBS local, contra `rtmp://a.rtmp.youtube.com/live2`.
+
+**El riesgo del spec §14 NO se materializó.** YouTube aceptó el publish y recibió el stream
+pese a que mandamos `releaseStream`/`FCPublish` sobre el stream ya creado y con
+`TransactionID: 0`, en lugar del orden de FMLE. Queda pendiente repetirlo con `rtmps://` y
+contra Twitch y Facebook, que pueden ser más estrictos.
+
+Métricas tras 195 s de emisión a 720p:
+
+| | |
+| --- | --- |
+| estado | `live`, `degraded=false` |
+| descartes | **0** |
+| cola | 0 bytes, 0 mensajes |
+| bitrate | 3,12 Mbps sostenidos (76,9 MB) |
+| reconexiones | 0, sin último error |
+
+YouTube avisó de un intervalo de keyframes de 8,3 s, por encima de su máximo de 4. **No era
+nuestro:** 8,3 s × 30 fps = 250 fotogramas, que es el `keyint` por defecto de x264 cuando
+OBS está en modo de salida Simple y deja el GOP al encoder. El motor no descartó ni un
+frame, y el descarte por GOP ni siquiera llegó a activarse porque no hubo contrapresión.
+
+Verificado además que las propiedades del spec §8 se sostienen en producción: la clave del
+destino quedó cifrada en la base (52 bytes de AES-256-GCM, solo `last4` en claro para la
+máscara) y no aparece ni una vez en el log, con el nivel en `debug`.
+
+### Hallazgo: la resolución no se expone mientras la sesión está viva
+
+`session.width`, `height` y `bitrate_bps` salen `null` en `GET /api/status` durante toda la
+emisión, aunque el motor detecta la resolución al primer segundo —lo loguea como
+`resolución detectada ancho=1280 alto=720`—. Solo se persisten en `FinishSession`, al
+cerrar la sesión.
+
+El spec §10 pide que el panel enseñe «señal entrante, resolución, bitrate, tiempo
+transmitiendo» como estado global **en vivo**, así que la fase 5 no podría pintarlo con lo
+que hay. El arreglo natural es que el motor lo exponga en su snapshot, junto a las métricas
+por destino, en vez de solo escribirlo al cerrar. Es trabajo para la fase 5 o para un
+arreglo puntual antes.
+
 ## Lo que queda abierto
 
-- **Nada se ha probado todavía contra una plataforma real** (YouTube, Twitch, Facebook).
-  Sigue siendo el riesgo del spec §14 que la fase 3 dejó abierto, y no se cierra con tests
-  locales: hace falta una clave real.
+- **YouTube por RTMP: probado y funcionando** (ver arriba). Faltan `rtmps://`, Twitch y
+  Facebook, que pueden ser más estrictos con el orden del handshake.
+- **La resolución de la sesión viva no se expone por la API** (ver arriba). Bloquea una
+  parte del panel de la fase 5.
 - **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez durante una
   corrida de `go test ./...` y no reproducido en 19 intentos posteriores (16 del paquete
   aislado, 3 de la suite entera, cinco con los núcleos saturados). El log mostraba un
