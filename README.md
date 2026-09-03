@@ -73,36 +73,40 @@ sobre `splitstream` y pulsa **Abrir de todos modos**.
 **Windows**: descomprime el `.zip`. SmartScreen avisará de que el editor es desconocido;
 elige **Más información → Ejecutar de todas formas**.
 
-### Genera tu clave maestra
-
-Cifra las claves de tus canales. Se genera una vez y **hay que guardarla**:
-
-```bash
-./splitstream -genkey
-```
-
-Copia lo que imprime. Es la variable `SPLITSTREAM_MASTER_KEY`.
-
-> **Respáldala aparte de la base de datos.** Si la pierdes, las claves de tus canales son
-> irrecuperables por diseño y hay que volver a pegarlas todas.
-
 ### Arranca
 
-**macOS y Linux**
+Doble clic sobre el ejecutable, o desde la terminal:
 
 ```bash
-export SPLITSTREAM_MASTER_KEY="lo-que-imprimió-genkey"
 ./splitstream
 ```
 
-**Windows (PowerShell)**
+No hace falta configurar nada. La primera vez crea su clave maestra en un archivo
+`splitstream.key` junto a la base de datos, y te lo dice:
 
-```powershell
-$env:SPLITSTREAM_MASTER_KEY = "lo-que-imprimió-genkey"
-.\splitstream.exe
+```
+  Se ha creado tu clave maestra:
+
+      splitstream.key
+
+  Cifra las claves de tus canales. RESPÁLDALA junto a la base de datos:
+  si la pierdes, tendrás que volver a pegar la clave de cada plataforma.
 ```
 
-La primera vez verás algo así:
+> **Respalda los dos archivos juntos**, `splitstream.db` y `splitstream.key`. Copiar solo
+> la base no sirve de nada: sin la clave, lo que hay dentro es ilegible.
+
+Están uno al lado del otro a propósito, para que se muevan juntos. Eso también significa
+que **quien tenga acceso a esa carpeta lo tiene todo**. En un equipo compartido o en un
+servidor, pasa la clave por el entorno y guárdala en otro sitio:
+
+```bash
+./splitstream -genkey                       # imprime una clave nueva
+export SPLITSTREAM_MASTER_KEY="la-que-imprimió"
+./splitstream                               # la variable manda sobre el archivo
+```
+
+Después verás algo así:
 
 ```
   ┌───────────────────────────────────────────────────────────┐
@@ -137,7 +141,7 @@ Todo se controla con variables de entorno:
 
 | Variable | Por defecto | Para qué |
 | --- | --- | --- |
-| `SPLITSTREAM_MASTER_KEY` | — | **Obligatoria.** 32 bytes en base64. Genérala con `-genkey` |
+| `SPLITSTREAM_MASTER_KEY` | archivo `.key` junto a la base | 32 bytes en base64. Si no la pones, se crea un archivo de clave y se usa. La variable siempre manda |
 | `SPLITSTREAM_HTTP_ADDR` | `:8080` | Dónde escucha el panel |
 | `SPLITSTREAM_RTMP_ADDR` | `:1935` | Dónde escucha la ingesta de OBS |
 | `SPLITSTREAM_DB_PATH` | `splitstream.db` | Archivo SQLite |

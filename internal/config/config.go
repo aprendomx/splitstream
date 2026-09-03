@@ -2,6 +2,12 @@
 package config
 
 import (
+	"crypto/rand"
+	"errors"
+	"io/fs"
+	"path/filepath"
+	"strings"
+
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -20,6 +26,12 @@ type Config struct {
 	DBPath    string
 	LogLevel  slog.Level
 	MasterKey [MasterKeyLen]byte
+	// MasterKeyPath es dónde se guardó la clave, cuando viene de un archivo y no del
+	// entorno. Vacío si se usó SPLITSTREAM_MASTER_KEY.
+	MasterKeyPath string
+	// MasterKeyAutogenerada es true si esta ejecución acaba de crear la clave. Sirve para
+	// avisar al usuario una sola vez de que tiene que respaldarla.
+	MasterKeyAutogenerada bool
 	// SecureCookies marca la cookie de sesión como Secure.
 	//
 	// Va en la configuración y no se deduce de la petición porque en el despliegue del
@@ -68,6 +80,58 @@ func Load() (*Config, error) {
 	return LoadFrom(os.LookupEnv)
 }
 
+// KeyPathFor devuelve dónde vive el archivo de clave de una base dada: al lado y con el
+// mismo nombre, cambiando la extensión. Junto a la base y no en otro sitio porque los dos
+// archivos se respaldan y se mueven juntos; separarlos garantizaba que alguien copiara solo
+// uno y perdiera el otro.
+func KeyPathFor(dbPath string) string {
+	ext := filepath.Ext(dbPath)
+	return strings.TrimSuffix(dbPath, ext) + ".key"
+}
+
+// claveDelArchivo lee la clave del archivo, o la crea si no existe.
+//
+// Devuelve también si acaba de crearla, para que el binario pueda avisar una sola vez.
+func claveDelArchivo(ruta string) (string, bool, error) {
+	datos, err := os.ReadFile(ruta)
+	if err == nil {
+		clave := strings.TrimSpace(string(datos))
+		if clave == "" {
+			return "", false, fmt.Errorf("el archivo de clave %s está vacío: bórralo para "+
+				"generar una nueva, pero perderás las claves de tus destinos", ruta)
+		}
+		return clave, false, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", false, fmt.Errorf("leer el archivo de clave %s: %w", ruta, err)
+	}
+
+	// No existe: se genera una.
+	buf := make([]byte, MasterKeyLen)
+	if _, err := rand.Read(buf); err != nil {
+		return "", false, fmt.Errorf("generar la clave maestra: %w", err)
+	}
+	clave := base64.StdEncoding.EncodeToString(buf)
+
+	if dir := filepath.Dir(ruta); dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", false, fmt.Errorf("crear el directorio de %s: %w", ruta, err)
+		}
+	}
+	// 0600 y O_EXCL: solo el dueño puede leerla, y si otro proceso la creó entre el
+	// ReadFile de arriba y esta línea, se falla en vez de pisarla. Pisarla dejaría las
+	// claves de los destinos ilegibles para siempre.
+	f, err := os.OpenFile(ruta, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", false, fmt.Errorf("crear el archivo de clave %s: %w", ruta, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(clave + "\n"); err != nil {
+		return "", false, fmt.Errorf("escribir el archivo de clave %s: %w", ruta, err)
+	}
+	return clave, true, nil
+}
+
 // LoadFrom lee la configuración de una función de consulta arbitraria, para poder
 // testear sin tocar el entorno del proceso.
 func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
@@ -94,7 +158,16 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 
 	raw, ok := lookup("SPLITSTREAM_MASTER_KEY")
 	if !ok || raw == "" {
-		return nil, fmt.Errorf("falta SPLITSTREAM_MASTER_KEY: genera una con `splitstream -genkey`")
+		// Sin variable de entorno: se busca el archivo de clave junto a la base, y si no
+		// existe se crea. Es lo que permite abrir el programa con doble clic desde el
+		// Finder o el Explorador, donde no hay variables de entorno que valgan.
+		//
+		// La variable manda SIEMPRE cuando está: el camino del servidor no cambia.
+		raw, cfg.MasterKeyAutogenerada, err = claveDelArchivo(KeyPathFor(cfg.DBPath))
+		if err != nil {
+			return nil, err
+		}
+		cfg.MasterKeyPath = KeyPathFor(cfg.DBPath)
 	}
 	// Los mensajes de error de aquí abajo nunca incluyen `raw` ni los bytes decodificados.
 	decoded, err := base64.StdEncoding.DecodeString(raw)

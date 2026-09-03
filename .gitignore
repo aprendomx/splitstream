@@ -27,3 +27,7 @@
 
 # El .env del despliegue lleva la clave maestra: nunca se versiona.
 /deploy/.env
+
+# Archivos de clave maestra. El binario crea uno junto a la base cuando no hay
+# SPLITSTREAM_MASTER_KEY, y durante el desarrollo la base suele quedar en la raíz.
+*.key
