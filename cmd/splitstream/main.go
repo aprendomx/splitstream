@@ -157,7 +157,7 @@ func run(ctx context.Context, out io.Writer) error {
 			if !d.Enabled {
 				continue
 			}
-			key, err := db.RevealDestinationKey(ctx, cipher, d.ID)
+			key, err := db.DestinationKeyForRelay(ctx, cipher, d.ID)
 			if err != nil {
 				logger.Error("no se pudo leer la clave del destino", "destino", d.Name, "err", err)
 				continue

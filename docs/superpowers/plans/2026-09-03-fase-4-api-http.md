@@ -766,7 +766,7 @@ existe camino que revele sin dejar rastro.
   - El evento auditado tiene `Kind == "key_revealed"`, `Level == LevelWarn` y
     `DestinationID` puesto.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Añade a `internal/store/destinations_test.go`:
 
@@ -881,13 +881,13 @@ func TestRevealDestinationKeyMissingIDDoesNotAudit(t *testing.T) {
 
 Añade `errors` y `strings` a los imports del archivo de test si no están.
 
-- [ ] **Step 2: Ejecutar los tests y verificar que fallan**
+- [x] **Step 2: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/store/ -run 'Reveal|ForRelay' -v`
 Expected: FAIL por `undefined: DestinationKeyForRelay`, y `TestRevealDestinationKeyAlwaysAudits`
 por 0 eventos donde quería 1.
 
-- [ ] **Step 3: Implementar la separación**
+- [x] **Step 3: Implementar la separación**
 
 Sustituye el bloque de `internal/store/destinations.go:290-307` por:
 
@@ -952,7 +952,7 @@ func (d *DB) RevealDestinationKey(ctx context.Context, c *crypto.Cipher, id int6
 de `RevealDestinationKey` esté ya dentro de un `InTx`; hoy solo lo llama `main.go`, que no
 lo está — y ese llamador pasa a la variante `ForRelay` en el Step 4.
 
-- [ ] **Step 4: Mover al motor a la variante sin auditoría**
+- [x] **Step 4: Mover al motor a la variante sin auditoría**
 
 En `cmd/splitstream/main.go`, dentro de `engine.SetSinkProvider`, cambia
 `db.RevealDestinationKey(ctx, cipher, d.ID)` por `db.DestinationKeyForRelay(ctx, cipher, d.ID)`.
@@ -965,12 +965,12 @@ grep -rn "RevealDestinationKey" --include="*.go" .
 Tras este paso, el único uso de `RevealDestinationKey` debe ser el de los tests, hasta que
 la Task 9 añada el endpoint.
 
-- [ ] **Step 5: Ejecutar los tests y verificar que pasan**
+- [x] **Step 5: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./... -race -count=1`
 Expected: PASS entero.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/store/ cmd/splitstream/main.go
