@@ -65,6 +65,8 @@ type Config struct {
 	// la URL que se le enseña al usuario sale de la petición, porque el panel se alcanza
 	// por algún nombre concreto y la ingesta está en esa misma máquina.
 	RTMPAddr string
+	// Version es la del binario, para enseñarla en los créditos del panel.
+	Version string
 	// SetupCode es el código de un solo uso del primer arranque. Solo hace falta cuando el
 	// panel se abre desde OTRA máquina: en local, quien está en el teclado ya controla el
 	// equipo. Vacío si el servicio ya tiene contraseña.
@@ -89,6 +91,7 @@ type Server struct {
 	limiter   *loginLimiter
 	logger    *slog.Logger
 	setupCode string
+	version   string
 	spa       fs.FS
 	secure    bool
 	rtmpPort  string
@@ -115,7 +118,7 @@ func New(cfg Config) (*Server, error) {
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
 		ingest: cfg.Ingest, sinks: cfg.Sinks,
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
-		setupCode: cfg.SetupCode, spa: cfg.SPA,
+		setupCode: cfg.SetupCode, version: cfg.Version, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {

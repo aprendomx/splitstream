@@ -283,6 +283,7 @@ func run(ctx context.Context, out io.Writer) error {
 		Sinks:         factory,
 		MasterKey:     cfg.MasterKey,
 		RTMPAddr:      cfg.RTMPAddr,
+		Version:       version,
 		SetupCode:     setupCode,
 		SPA:           panelFS,
 		Logger:        logger,

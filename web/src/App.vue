@@ -1,5 +1,5 @@
 <script setup>
-import { iBroadcast, iOcultar, iSalir, iVer } from '@/iconos'
+import { iBroadcast, iInfo, iOcultar, iSalir, iVer } from '@/iconos'
 import { ref, onMounted } from 'vue'
 import { usePanel } from '@/stores/panel'
 import Asistente from '@/components/Asistente.vue'
@@ -33,6 +33,12 @@ async function entrar() {
       <q-toolbar>
         <q-icon :name="iBroadcast" size="24px" class="q-mr-sm text-primary" />
         <q-toolbar-title class="text-weight-medium">Splitstream</q-toolbar-title>
+        <q-btn
+          v-if="panel.autenticado"
+          flat round dense :icon="iInfo"
+          aria-label="Créditos y licencias"
+          :to="{ name: 'creditos' }"
+        />
         <q-btn v-if="panel.autenticado" flat round dense :icon="iSalir"
                aria-label="Cerrar sesión" @click="panel.salir()" />
       </q-toolbar>
