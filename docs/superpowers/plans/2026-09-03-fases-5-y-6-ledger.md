@@ -150,6 +150,20 @@ También hubo un test cuya aserción estaba mal planteada: prohibía la palabra 
 en la salida de arranque, y el aviso del primer arranque dice legítimamente «elige tu
 contraseña». Confundía nombrar un concepto con filtrar un secreto.
 
+## El fallo intermitente de `relay`, identificado
+
+Quedaba abierto desde la fase 4: visto una vez, no reproducido en 19 intentos. Volvió a
+aparecer en una corrida completa de la suite y esta vez se aisló.
+
+Es `TestHubSlowSinkDoesNotBlockOthers`, y **no es un fallo del producto**: el test daba tres
+segundos para que el destino rápido entregara más de diez mensajes. Lo que la prueba afirma
+es que un destino lento no bloquea a los demás, no que lo haga en un plazo concreto — y eso
+depende de cómo el planificador reparta las goroutines. Medido con todos los núcleos
+saturados: fallaba 1 de cada 6 veces. Con un plazo de veinte segundos, 0 de 8.
+
+También quedó claro que **no** era la carrera de go-rtmp: aquella estaba en `rtmpio` y esta
+en `relay`. Dos problemas distintos que se parecían por ser intermitentes.
+
 ## Lo que queda abierto
 
 - **`ON DELETE SET NULL` no se aplica**, porque nadie activa `PRAGMA foreign_keys`.
