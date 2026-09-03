@@ -26,6 +26,7 @@ import (
 	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
+	"github.com/aprendomx/splitstream/internal/sinks"
 	"github.com/aprendomx/splitstream/internal/store"
 )
 
@@ -236,55 +237,9 @@ func run(ctx context.Context, out io.Writer) error {
 	// Los sinks se construyen por sesión, no al arrancar el proceso: cada sesión de
 	// ingesta abre su propia conexión con cada destino (spec §6.5). Arrancarlos una sola
 	// vez aquí hacía que la segunda transmisión reutilizara el timebase de la primera.
+	factory := sinks.NewFactory(db, cipher, logger)
 	engine.SetSinkProvider(func() ([]*relay.Sink, error) {
-		dests, err := db.ListDestinations(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		var out []*relay.Sink
-		for _, d := range dests {
-			if !d.Enabled {
-				continue
-			}
-			key, err := db.DestinationKeyForRelay(ctx, cipher, d.ID)
-			if err != nil {
-				logger.Error("no se pudo leer la clave del destino", "destino", d.Name, "err", err)
-				continue
-			}
-			// Validar aquí evita crear un sink que no podría conectar nunca.
-			if _, err := rtmpio.NewPublisher(rtmpio.PublisherConfig{
-				URL: d.RTMPURL, StreamKey: key, Logger: logger,
-			}); err != nil {
-				logger.Error("destino mal configurado", "destino", d.Name, "err", err)
-				continue
-			}
-
-			url, name, id := d.RTMPURL, d.Name, d.ID
-			out = append(out, relay.NewSink(relay.SinkConfig{
-				ID:   id,
-				Name: name,
-				// Cada reconexión necesita un publisher nuevo: uno cerrado no se reabre.
-				NewPub: func() (relay.Publisher, error) {
-					return rtmpio.NewPublisher(rtmpio.PublisherConfig{
-						URL: url, StreamKey: key, Logger: logger,
-					})
-				},
-				Logger: logger,
-				OnEvent: func(ev relay.EngineEvent) {
-					if _, err := db.LogEvent(ctx, store.Event{
-						DestinationID: ev.DestinationID,
-						Level:         store.Level(ev.Level),
-						Kind:          ev.Kind,
-						Message:       ev.Message,
-					}); err != nil {
-						logger.Error("no se pudo registrar el evento del destino", "err", err)
-					}
-				},
-			}))
-		}
-		logger.Info("destinos de la sesión", "n", len(out))
-		return out, nil
+		return factory.BuildEnabled(ctx)
 	})
 
 	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{
