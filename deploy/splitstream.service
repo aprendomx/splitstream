@@ -1,0 +1,59 @@
+# Unidad systemd para Splitstream.
+#
+#   sudo useradd --system --home /var/lib/splitstream --shell /usr/sbin/nologin splitstream
+#   sudo install -d -o splitstream -g splitstream /var/lib/splitstream
+#   sudo install -m 755 splitstream /usr/local/bin/
+#   sudo install -d -m 700 /etc/splitstream
+#   printf 'SPLITSTREAM_MASTER_KEY=%s\n' "$(splitstream -genkey)" | sudo tee /etc/splitstream/env
+#   sudo chmod 600 /etc/splitstream/env
+#   sudo install -m 644 deploy/splitstream.service /etc/systemd/system/
+#   sudo systemctl enable --now splitstream
+#
+# El código del primer arranque se lee con:
+#   journalctl -u splitstream | grep -A2 "te pedirá este código"
+
+[Unit]
+Description=Splitstream — retransmisión RTMP a varias plataformas
+Documentation=https://github.com/aprendomx/splitstream
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=splitstream
+Group=splitstream
+WorkingDirectory=/var/lib/splitstream
+ExecStart=/usr/local/bin/splitstream
+
+# La clave maestra va en un archivo con permisos 600, NO como Environment= en esta unidad:
+# lo que se escribe aquí lo puede leer cualquiera con `systemctl cat splitstream`.
+EnvironmentFile=/etc/splitstream/env
+
+Restart=always
+RestartSec=5
+
+# El apagado ordenado necesita margen: al recibir SIGTERM, el servicio manda FCUnpublish a
+# cada destino, espera la gracia de 3 s del diseño y cierra la sesión en la base. Matarlo
+# antes dejaría sesiones abiertas para siempre.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Endurecimiento. Solo necesita escribir su propia base de datos.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/var/lib/splitstream
+
+# Solo hacen falta sockets de red normales.
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

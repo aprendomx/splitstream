@@ -87,6 +87,53 @@ jobs:
           test -f web/dist/spa/.gitkeep || { echo "::error::el build se llevó el .gitkeep"; exit 1; }
           ls -la web/dist/spa/assets | head
 
+  # La imagen se construye igual que en producción y se ejecuta. Construirla no basta: el
+  # fallo que encontramos al escribirla —la base sin permisos porque /data pertenecía a
+  # root y el contenedor corre como 65532— solo aparece al arrancarla.
+  docker:
+    name: imagen de Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: construir
+        run: docker build -f deploy/Dockerfile -t splitstream:ci --build-arg VERSION=ci .
+
+      - name: arranca, abre su base y sirve el panel
+        run: |
+          CLAVE=$(docker run --rm splitstream:ci -genkey)
+          docker run -d --name ss -p 18100:8080 \
+            -e SPLITSTREAM_MASTER_KEY="$CLAVE" -v ss-datos:/data splitstream:ci
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:18100/ && break
+            sleep 1
+          done
+          docker logs ss
+
+          curl -sf -o /dev/null http://127.0.0.1:18100/ \
+            || { echo "::error::la imagen no sirve el panel"; docker logs ss; exit 1; }
+          curl -sf http://127.0.0.1:18100/api/setup | grep -q '"necesario":true' \
+            || { echo "::error::la API no responde en la imagen"; exit 1; }
+          # Si /data no fuera escribible, el arranque habría muerto con
+          # "unable to open database file (14)" antes de llegar aquí.
+          docker logs ss 2>&1 | grep -q "unable to open database" \
+            && { echo "::error::el contenedor no puede escribir su base"; exit 1; }
+          echo "la imagen arranca, abre su base y sirve el panel"
+
+      - name: los certificados raíz viajan dentro
+        # Sin ellos, cualquier destino rtmps:// falla con "certificate signed by unknown
+        # authority", y Facebook solo acepta RTMPS. La imagen es scratch: no hay shell para
+        # comprobarlo desde dentro, así que se mira el sistema de archivos de la imagen.
+        run: |
+          docker create --name tmp splitstream:ci
+          docker export tmp | tar -t | grep -q "etc/ssl/certs/ca-certificates.crt" \
+            || { echo "::error::la imagen no lleva certificados raíz"; exit 1; }
+          docker rm tmp
+          echo "los certificados raíz están en la imagen"
+
+      - name: la unidad de systemd es válida
+        run: systemd-analyze verify deploy/splitstream.service
+
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:
     name: integración contra mediamtx
