@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -163,4 +164,170 @@ func revealIngestKey(t *testing.T, dbPath, masterB64 string) crypto.Secret {
 		t.Fatalf("RevealIngestKey: %v", err)
 	}
 	return key
+}
+
+// TestReadPasswordRejectsUnusableInput: una contraseña vacía o demasiado corta protege tan
+// poco que aceptarla sería mentir sobre el estado del servicio.
+func TestReadPasswordRejectsUnusableInput(t *testing.T) {
+	casos := []struct{ nombre, in string }{
+		{"vacía", "\n"},
+		{"solo espacios", "        \n"},
+		{"demasiado corta", "corta\n"},
+		{"stdin cerrado", ""},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			if _, err := readPassword(strings.NewReader(c.in)); err == nil {
+				t.Error("se aceptó una contraseña inservible")
+			}
+		})
+	}
+}
+
+// TestReadPasswordKeepsInteriorSpaces: una frase de paso lleva espacios y no hay que
+// comérselos. Solo se quita el salto de línea final.
+func TestReadPasswordKeepsInteriorSpaces(t *testing.T) {
+	got, err := readPassword(strings.NewReader("correcto caballo batería grapa\n"))
+	if err != nil {
+		t.Fatalf("readPassword: %v", err)
+	}
+	if quiero := "correcto caballo batería grapa"; got != quiero {
+		t.Errorf("got %q, quería %q", got, quiero)
+	}
+}
+
+// TestReadPasswordHandlesCRLF: si alguien la pega desde Windows, el \r no es parte de la
+// contraseña.
+func TestReadPasswordHandlesCRLF(t *testing.T) {
+	got, err := readPassword(strings.NewReader("contraseña-larga\r\n"))
+	if err != nil {
+		t.Fatalf("readPassword: %v", err)
+	}
+	if quiero := "contraseña-larga"; got != quiero {
+		t.Errorf("got %q, quería %q", got, quiero)
+	}
+}
+
+// setPasswordEnv prepara el entorno de una base temporal y devuelve su ruta.
+func setPasswordEnv(t *testing.T) string {
+	t.Helper()
+	master, err := generateMasterKey()
+	if err != nil {
+		t.Fatalf("generateMasterKey: %v", err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "pw.db")
+	t.Setenv("SPLITSTREAM_MASTER_KEY", master)
+	t.Setenv("SPLITSTREAM_DB_PATH", dbPath)
+	return dbPath
+}
+
+// settingsDe abre la base que dejó setPassword y devuelve sus settings.
+func settingsDe(t *testing.T, dbPath string) *store.Settings {
+	t.Helper()
+	db, err := store.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	s, err := db.Settings(context.Background())
+	if err != nil {
+		t.Fatalf("Settings: %v", err)
+	}
+	return s
+}
+
+// TestSetPasswordNeverEchoesTheSecret es la propiedad del spec §8 aplicada aquí: lo que el
+// comando imprime no puede contener la contraseña ni un trozo reconocible suyo.
+func TestSetPasswordNeverEchoesTheSecret(t *testing.T) {
+	const secreto = "una-contraseña-muy-secreta"
+	setPasswordEnv(t)
+
+	var out bytes.Buffer
+	if err := setPassword(context.Background(), strings.NewReader(secreto+"\n"), &out); err != nil {
+		t.Fatalf("setPassword: %v", err)
+	}
+
+	if strings.Contains(out.String(), secreto) {
+		t.Errorf("la salida lleva la contraseña: %q", out.String())
+	}
+	if strings.Contains(out.String(), secreto[:8]) {
+		t.Errorf("la salida lleva un prefijo de la contraseña: %q", out.String())
+	}
+}
+
+// TestSetPasswordPersistsAVerifiableHash: el objetivo del comando es que el login pueda
+// verificar después.
+func TestSetPasswordPersistsAVerifiableHash(t *testing.T) {
+	const secreto = "una-contraseña-muy-secreta"
+	dbPath := setPasswordEnv(t)
+
+	if err := setPassword(context.Background(), strings.NewReader(secreto+"\n"), io.Discard); err != nil {
+		t.Fatalf("setPassword: %v", err)
+	}
+
+	s := settingsDe(t, dbPath)
+	if s.PasswordHash == "" {
+		t.Fatal("no se guardó ningún hash")
+	}
+	if strings.Contains(s.PasswordHash, secreto) {
+		t.Fatal("el hash contiene la contraseña en claro")
+	}
+
+	ok, err := crypto.VerifyPassword(s.PasswordHash, secreto)
+	if err != nil {
+		t.Fatalf("VerifyPassword: %v", err)
+	}
+	if !ok {
+		t.Error("el hash guardado no verifica contra la contraseña")
+	}
+
+	ok, err = crypto.VerifyPassword(s.PasswordHash, secreto+"x")
+	if err != nil {
+		t.Fatalf("VerifyPassword: %v", err)
+	}
+	if ok {
+		t.Error("el hash verifica contra una contraseña equivocada")
+	}
+}
+
+// TestSetPasswordOverwritesTheOldOne: cambiar la contraseña es el mismo comando.
+func TestSetPasswordOverwritesTheOldOne(t *testing.T) {
+	dbPath := setPasswordEnv(t)
+	ctx := context.Background()
+
+	if err := setPassword(ctx, strings.NewReader("la-primera-contraseña\n"), io.Discard); err != nil {
+		t.Fatalf("primera: %v", err)
+	}
+	if err := setPassword(ctx, strings.NewReader("la-segunda-contraseña\n"), io.Discard); err != nil {
+		t.Fatalf("segunda: %v", err)
+	}
+
+	s := settingsDe(t, dbPath)
+	if ok, _ := crypto.VerifyPassword(s.PasswordHash, "la-primera-contraseña"); ok {
+		t.Error("la contraseña vieja sigue valiendo")
+	}
+	if ok, _ := crypto.VerifyPassword(s.PasswordHash, "la-segunda-contraseña"); !ok {
+		t.Error("la contraseña nueva no vale")
+	}
+}
+
+// TestSetPasswordDoesNotDisturbTheIngestKey: fijar la contraseña no puede rotar ni tocar
+// la clave de ingesta. Sería una sorpresa desagradable a mitad de una transmisión.
+func TestSetPasswordDoesNotDisturbTheIngestKey(t *testing.T) {
+	dbPath := setPasswordEnv(t)
+	ctx := context.Background()
+
+	if err := setPassword(ctx, strings.NewReader("la-primera-contraseña\n"), io.Discard); err != nil {
+		t.Fatalf("primera: %v", err)
+	}
+	antes := settingsDe(t, dbPath).IngestKeyMask
+
+	if err := setPassword(ctx, strings.NewReader("la-segunda-contraseña\n"), io.Discard); err != nil {
+		t.Fatalf("segunda: %v", err)
+	}
+	if got := settingsDe(t, dbPath).IngestKeyMask; got != antes {
+		t.Errorf("la clave de ingesta cambió: %q → %q", antes, got)
+	}
 }

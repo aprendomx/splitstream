@@ -17,7 +17,9 @@ import (
 const ingestKeyBytes = 24
 
 // ErrSettingsNotInitialized se devuelve cuando se opera sobre settings antes de Bootstrap.
-var ErrSettingsNotInitialized = errors.New("settings no inicializado: falta Bootstrap")
+// Es un conflicto de estado, no una entrada inválida: la petición es correcta, el
+// servicio todavía no está listo.
+var ErrSettingsNotInitialized = conflict("settings no inicializado: falta Bootstrap")
 
 // Settings es la configuración persistente. IngestKeyMask ya viene enmascarada: para
 // obtener la clave real hay que llamar a RevealIngestKey de forma explícita.
@@ -28,8 +30,10 @@ type Settings struct {
 	UpdatedAt     time.Time
 }
 
-// GenerateKey produce una credencial aleatoria segura para usar en una URL.
-func GenerateKey() (crypto.Secret, error) {
+// GenerateIngestKey produce la credencial aleatoria de la ingesta, segura para usar en
+// una URL. El nombre dice qué genera: el genérico invitaba a usarla para cualquier
+// secreto (spec §15.8).
+func GenerateIngestKey() (crypto.Secret, error) {
 	buf := make([]byte, ingestKeyBytes)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("generar clave: %w", err)
@@ -50,7 +54,7 @@ func (d *DB) Bootstrap(ctx context.Context, c *crypto.Cipher) error {
 		return fmt.Errorf("leer settings: %w", err)
 	}
 
-	key, err := GenerateKey()
+	key, err := GenerateIngestKey()
 	if err != nil {
 		return err
 	}
@@ -113,7 +117,7 @@ func (d *DB) RevealIngestKey(ctx context.Context, c *crypto.Cipher) (crypto.Secr
 
 // RotateIngestKey genera una clave nueva, la persiste y la devuelve en claro.
 func (d *DB) RotateIngestKey(ctx context.Context, c *crypto.Cipher) (crypto.Secret, error) {
-	key, err := GenerateKey()
+	key, err := GenerateIngestKey()
 	if err != nil {
 		return "", err
 	}

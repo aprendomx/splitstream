@@ -485,7 +485,7 @@ funcionando y el nuevo pueda preguntar por la clase. De paso paga §15.8.
   tres. `store.GenerateIngestKey() (crypto.Secret, error)` sustituye a `GenerateKey`. La
   Task 6 los mapea a códigos HTTP.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Crea `internal/store/errors_test.go`:
 
@@ -582,14 +582,25 @@ func TestCreateDestinationValidatesNameAndPlatform(t *testing.T) {
 un byte de relleno para la clave, de ahí el `1`. Las constantes de `Platform` están en
 `internal/store/destinations.go:48-53`.
 
-- [ ] **Step 2: Ejecutar el test y verificar que falla**
+- [x] **Step 2: Ejecutar el test y verificar que falla**
 
 Run: `go test ./internal/store/ -run 'Sentinel|Classes|Wrapped|ValidatesName' -v`
 Expected: FAIL por `undefined: ErrNotFound`, `ErrInvalidInput` y `ErrConflict`.
 
-- [ ] **Step 3: Crear los centinelas**
+- [x] **Step 3: Crear los centinelas**
 
 Crea `internal/store/errors.go`:
+
+> **Desviación aplicada al ejecutar.** El plan proponía envolver con
+> `fmt.Errorf("%w: destino", ErrNotFound)`, pero eso produce el mensaje
+> `"no encontrado: destino"`, y ese texto va **tal cual al cliente** en `writeStoreError`
+> (Task 6). Se usa en su lugar un tipo `classified` que separa el mensaje de la clase, de
+> modo que el usuario lee `"destino no encontrado"` y `errors.Is` sigue clasificando.
+>
+> Cuidado con `validateRTMPURL`: sus cuatro errores deben seguir envolviendo
+> `ErrInvalidDestinationURL` con `fmt.Errorf("%w: …")`, no construir uno nuevo. Al
+> cambiarlos a un error nuevo se rompió la cadena y cinco tests existentes se pusieron
+> rojos. Con el centinela ya legible, envolverlo da un texto correcto igualmente.
 
 ```go
 package store
@@ -601,7 +612,7 @@ import "errors"
 // Existen para que la capa HTTP pueda decidir el código de respuesta sin conocer cada
 // centinela concreto ni comparar cadenas (spec §15.3). Los centinelas específicos siguen
 // existiendo y siguen siendo lo que usa el código del motor: estas clases se añaden por
-// debajo, envolviéndolos, así que errors.Is sigue funcionando en ambos sentidos.
+// debajo, así que errors.Is sigue funcionando en ambos sentidos.
 var (
 	// ErrNotFound: la fila pedida no existe. La API responde 404.
 	ErrNotFound = errors.New("no encontrado")
@@ -614,25 +625,43 @@ var (
 	// 409.
 	ErrConflict = errors.New("conflicto con el estado actual")
 )
+
+// classified es un error con mensaje propio que además pertenece a una clase.
+//
+// Existe porque `fmt.Errorf("%w: destino", ErrNotFound)` produce "no encontrado: destino",
+// y ese texto va tal cual al cliente en las respuestas 400, 404 y 409. Separando el
+// mensaje de la clase, el usuario lee "destino no encontrado" y la API sigue pudiendo
+// clasificar con errors.Is.
+type classified struct {
+	msg   string
+	class error
+}
+
+func (e *classified) Error() string { return e.msg }
+func (e *classified) Unwrap() error { return e.class }
+
+func notFound(msg string) error     { return &classified{msg: msg, class: ErrNotFound} }
+func invalidInput(msg string) error { return &classified{msg: msg, class: ErrInvalidInput} }
+func conflict(msg string) error     { return &classified{msg: msg, class: ErrConflict} }
 ```
 
-- [ ] **Step 4: Envolver los centinelas existentes**
+- [x] **Step 4: Envolver los centinelas existentes**
 
 En `internal/store/destinations.go`, sustituye las declaraciones de las líneas 16 y 19:
 
 ```go
 // ErrDestinationNotFound se devuelve cuando el id no existe.
-var ErrDestinationNotFound = fmt.Errorf("%w: destino", ErrNotFound)
+var ErrDestinationNotFound = notFound("destino no encontrado")
 
 // ErrInvalidDestinationURL indica que la URL del destino no sirve para retransmitir.
-var ErrInvalidDestinationURL = fmt.Errorf("%w: URL de destino", ErrInvalidInput)
+var ErrInvalidDestinationURL = invalidInput("URL de destino inválida")
 ```
 
 En `internal/store/events.go`, línea 12:
 
 ```go
 // ErrSessionNotFound se devuelve cuando el id de sesión no existe.
-var ErrSessionNotFound = fmt.Errorf("%w: sesión", ErrNotFound)
+var ErrSessionNotFound = notFound("sesión no encontrada")
 ```
 
 En `internal/store/settings.go`, línea 20:
@@ -640,12 +669,12 @@ En `internal/store/settings.go`, línea 20:
 ```go
 // ErrSettingsNotInitialized indica que falta Bootstrap. Es un conflicto de estado, no una
 // entrada inválida: la petición es correcta, el servicio aún no está listo.
-var ErrSettingsNotInitialized = fmt.Errorf("%w: settings sin inicializar, falta Bootstrap", ErrConflict)
+var ErrSettingsNotInitialized = conflict("settings no inicializado: falta Bootstrap")
 ```
 
 Comprueba que `fmt` esté importado en los tres archivos; `destinations.go` ya lo importa.
 
-- [ ] **Step 5: Validar nombre, plataforma y clave**
+- [x] **Step 5: Validar nombre, plataforma y clave**
 
 En `internal/store/destinations.go`, añade junto a `validateRTMPURL`:
 
@@ -654,37 +683,38 @@ En `internal/store/destinations.go`, añade junto a `validateRTMPURL`:
 // esto el destino aparecería en la UI como una fila sin etiqueta.
 func validateName(name string) error {
 	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("%w: el nombre no puede estar vacío", ErrInvalidInput)
+		return invalidInput("el nombre no puede estar vacío")
 	}
 	return nil
 }
 
-// validatePlatform duplica a propósito el CHECK del esquema: así el error llega con un
-// mensaje legible en vez de como un fallo de constraint del driver, indistinguible de un
-// error de disco.
+// validatePlatform delega en Platform.Valid, que YA EXISTE y conoce el conjunto cerrado, y
+// le pone la clase de error encima: sin ella la API no podría distinguir esto de un fallo
+// de disco. No dupliques el switch: el método ya está en el archivo.
 func validatePlatform(p Platform) error {
-	switch p {
-	case PlatformYouTube, PlatformTwitch, PlatformFacebook, PlatformKick, PlatformX, PlatformCustom:
-		return nil
+	if !p.Valid() {
+		return invalidInput(fmt.Sprintf("plataforma %q no soportada", p))
 	}
-	return fmt.Errorf("%w: plataforma %q no soportada", ErrInvalidInput, p)
+	return nil
 }
 
 // validateKey rechaza la clave vacía. Un destino sin clave conecta y es rechazado por la
 // plataforma en la primera escritura, que es el modo de fallo más confuso que tenemos.
 func validateKey(k crypto.Secret) error {
 	if k.Reveal() == "" {
-		return fmt.Errorf("%w: la clave no puede estar vacía", ErrInvalidInput)
+		return invalidInput("la clave no puede estar vacía")
 	}
 	return nil
 }
 ```
 
-Usa los nombres reales de las constantes de `Platform` que haya en el archivo. Llama a las
-tres desde `CreateDestination`, junto a la llamada a `validateRTMPURL` que ya está ahí, y
-desde `UpdateDestination` **solo para los campos no nil** del patch.
+`CreateDestination` y `UpdateDestination` ya validan nombre, plataforma y URL, pero con
+errores pelados: sustituye esas comprobaciones por las llamadas a los helpers en vez de
+añadirlas. La validación de la clave sí es nueva. En `UpdateDestination`, **solo para los
+campos no nil** del patch: validar un campo que el llamante no mandó daría un error por
+algo que ni tocó.
 
-- [ ] **Step 6: Renombrar `GenerateKey` (spec §15.8)**
+- [x] **Step 6: Renombrar `GenerateKey` (spec §15.8)**
 
 En `internal/store/settings.go:32`, renombra la función a `GenerateIngestKey` y ajusta su
 comentario para que diga qué genera. Busca los usos y actualízalos:
@@ -693,14 +723,14 @@ comentario para que diga qué genera. Busca los usos y actualízalos:
 grep -rn "GenerateKey" --include="*.go" .
 ```
 
-- [ ] **Step 7: Ejecutar los tests y verificar que pasan**
+- [x] **Step 7: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./... -race -count=1`
 Expected: PASS entero. Los cambios de mensaje pueden romper tests que asertaban texto: si
 alguno falla por eso, **arregla el test, no el mensaje** — salvo que el mensaje nuevo sea
 peor que el viejo, en cuyo caso arregla el mensaje.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add internal/store/
@@ -736,7 +766,7 @@ existe camino que revele sin dejar rastro.
   - El evento auditado tiene `Kind == "key_revealed"`, `Level == LevelWarn` y
     `DestinationID` puesto.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Añade a `internal/store/destinations_test.go`:
 
@@ -851,13 +881,13 @@ func TestRevealDestinationKeyMissingIDDoesNotAudit(t *testing.T) {
 
 Añade `errors` y `strings` a los imports del archivo de test si no están.
 
-- [ ] **Step 2: Ejecutar los tests y verificar que fallan**
+- [x] **Step 2: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/store/ -run 'Reveal|ForRelay' -v`
 Expected: FAIL por `undefined: DestinationKeyForRelay`, y `TestRevealDestinationKeyAlwaysAudits`
 por 0 eventos donde quería 1.
 
-- [ ] **Step 3: Implementar la separación**
+- [x] **Step 3: Implementar la separación**
 
 Sustituye el bloque de `internal/store/destinations.go:290-307` por:
 
@@ -922,7 +952,7 @@ func (d *DB) RevealDestinationKey(ctx context.Context, c *crypto.Cipher, id int6
 de `RevealDestinationKey` esté ya dentro de un `InTx`; hoy solo lo llama `main.go`, que no
 lo está — y ese llamador pasa a la variante `ForRelay` en el Step 4.
 
-- [ ] **Step 4: Mover al motor a la variante sin auditoría**
+- [x] **Step 4: Mover al motor a la variante sin auditoría**
 
 En `cmd/splitstream/main.go`, dentro de `engine.SetSinkProvider`, cambia
 `db.RevealDestinationKey(ctx, cipher, d.ID)` por `db.DestinationKeyForRelay(ctx, cipher, d.ID)`.
@@ -935,12 +965,12 @@ grep -rn "RevealDestinationKey" --include="*.go" .
 Tras este paso, el único uso de `RevealDestinationKey` debe ser el de los tests, hasta que
 la Task 9 añada el endpoint.
 
-- [ ] **Step 5: Ejecutar los tests y verificar que pasan**
+- [x] **Step 5: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./... -race -count=1`
 Expected: PASS entero.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/store/ cmd/splitstream/main.go
@@ -976,7 +1006,7 @@ comando con la contraseña dentro.
   flag `-setpassword`. La Task 6 asume que `settings.PasswordHash` puede estar vacío y que
   eso significa «aún no configurada».
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Añade a `cmd/splitstream/main_test.go`:
 
@@ -1132,15 +1162,17 @@ func TestSetPasswordOverwritesTheOldOne(t *testing.T) {
 }
 ```
 
-`testKeyB64()` ya existe en `cmd/splitstream/main_test.go`. Añade a los imports lo que
-falte: `io`, `path/filepath`, y los paquetes `crypto` y `store` del proyecto.
+> **Corrección aplicada al ejecutar.** `testKeyB64()` **no existe** en este paquete —el
+> plan lo arrastró del de la fase 1—. El test que ya está usa `generateMasterKey()`
+> directamente; haz lo mismo. `path/filepath`, `crypto` y `store` ya están importados;
+> falta añadir `io`.
 
-- [ ] **Step 2: Ejecutar los tests y verificar que fallan**
+- [x] **Step 2: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./cmd/splitstream/ -run 'ReadPassword|SetPassword' -v`
 Expected: FAIL por `undefined: readPassword` y `undefined: setPassword`.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 En `cmd/splitstream/main.go`, añade:
 
@@ -1218,8 +1250,11 @@ func setPassword(ctx context.Context, in io.Reader, out io.Writer) error {
 Y en `main()`, junto a los flags que ya hay:
 
 ```go
+	// Sin comillas invertidas en el texto: el paquete flag las interpreta como el nombre
+	// del operando, y la ayuda sale como "-setpassword read -rs PW && printf ...".
 	setpw := flag.Bool("setpassword", false,
-		"lee una contraseña de stdin y la fija como la del panel; usa `read -rs PW && printf '%s' \"$PW\" | splitstream -setpassword`")
+		"lee una contraseña de stdin y la fija como la del panel; "+
+			"invócalo como: read -rs PW && printf '%s' \"$PW\" | splitstream -setpassword")
 ```
 
 con su rama, después de la de `-version` y antes de la de `-genkey`:
@@ -1236,12 +1271,12 @@ con su rama, después de la de `-version` y antes de la de `-genkey`:
 
 Añade `bufio` a los imports.
 
-- [ ] **Step 4: Ejecutar los tests y verificar que pasan**
+- [x] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./cmd/splitstream/ -race -count=1 -v`
 Expected: PASS, los seis nuevos incluidos.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/splitstream/
@@ -1276,7 +1311,7 @@ compartieran material, un fallo en cualquiera de los dos ayudaría a atacar el o
   - Errores: `errCookieMalformed`, `errCookieBadSignature`, `errCookieExpired`.
   La Task 6 usa `issue` al hacer login y `verify` en el middleware.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Crea `internal/httpapi/auth_test.go`:
 
@@ -1400,12 +1435,12 @@ func flipLast(s string) string {
 }
 ```
 
-- [ ] **Step 2: Ejecutar los tests y verificar que fallan**
+- [x] **Step 2: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/httpapi/ -v`
 Expected: FAIL a compilar — el paquete no existe todavía.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Crea `internal/httpapi/auth.go` con la parte de la cookie (el login y el middleware llegan
 en la Task 6):
@@ -1508,12 +1543,12 @@ func (s *sessionSigner) sign(payload string) string {
 }
 ```
 
-- [ ] **Step 4: Ejecutar los tests y verificar que pasan**
+- [x] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/httpapi/ -race -count=1 -v`
 Expected: PASS los seis.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/httpapi/
@@ -4827,7 +4862,8 @@ git commit -m "feat: el binario sirve la API HTTP junto al servidor RTMP"
 - [ ] `CGO_ENABLED=0 go build ./cmd/splitstream` produce el binario.
 - [ ] `go.mod` tiene exactamente **cinco** directas, las del spec §5, y `go 1.25.0`.
 - [ ] `go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'` sigue vacío.
-- [ ] `go list -deps ./internal/httpapi | grep go-rtmp` vacío.
+- [x] `go list -deps ./internal/httpapi | grep go-rtmp` vacío. *(Verificado por la CI
+      desde la Task 5.)*
 - [ ] `make sinks-up && make test-integration` sigue pasando los tres tests.
 - [ ] La CI (los dos jobs) está verde.
 - [ ] Los catorce endpoints del spec §9 existen, responden y están cubiertos por tests.

@@ -13,10 +13,10 @@ import (
 )
 
 // ErrDestinationNotFound se devuelve cuando el id no existe.
-var ErrDestinationNotFound = errors.New("destino no encontrado")
+var ErrDestinationNotFound = notFound("destino no encontrado")
 
 // ErrInvalidDestinationURL indica que la URL del destino no sirve para retransmitir.
-var ErrInvalidDestinationURL = errors.New("URL de destino inválida")
+var ErrInvalidDestinationURL = invalidInput("URL de destino inválida")
 
 // validateRTMPURL comprueba que la URL sea rtmp:// o rtmps:// y tenga host y app.
 //
@@ -36,6 +36,34 @@ func validateRTMPURL(raw string) error {
 	}
 	if strings.Trim(u.Path, "/") == "" {
 		return fmt.Errorf("%w: falta la app tras el host", ErrInvalidDestinationURL)
+	}
+	return nil
+}
+
+// validateName rechaza el nombre vacío o de solo espacios. El esquema no lo impide y sin
+// esto el destino aparecería en la interfaz como una fila sin etiqueta.
+func validateName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return invalidInput("el nombre no puede estar vacío")
+	}
+	return nil
+}
+
+// validatePlatform delega en Platform.Valid, que ya conoce el conjunto cerrado, y le pone
+// la clase de error encima: sin ella la API no podría distinguir esto de un fallo de disco.
+func validatePlatform(p Platform) error {
+	if !p.Valid() {
+		return invalidInput(fmt.Sprintf("plataforma %q no soportada", p))
+	}
+	return nil
+}
+
+// validateKey rechaza la clave vacía. Un destino sin clave conecta y la plataforma lo
+// rechaza en la primera escritura, que es el modo de fallo más confuso que tenemos: el
+// sink queda reintentando contra un destino que nunca lo va a aceptar.
+func validateKey(k crypto.Secret) error {
+	if k.Reveal() == "" {
+		return invalidInput("la clave no puede estar vacía")
 	}
 	return nil
 }
@@ -62,9 +90,9 @@ func (p Platform) Valid() bool {
 	return false
 }
 
-// Destination es un destino de retransmisión. No tiene campo para la clave: para
-// obtenerla hay que llamar a RevealDestinationKey, de modo que serializar este
-// struct nunca puede filtrarla.
+// Destination es un destino de retransmisión. No tiene campo para la clave: hay que
+// pedirla aparte, con DestinationKeyForRelay o con RevealDestinationKey, de modo que
+// serializar este struct nunca puede filtrarla.
 type Destination struct {
 	ID        int64
 	Name      string
@@ -121,13 +149,16 @@ func (d *DB) ListDestinations(ctx context.Context) ([]Destination, error) {
 
 // CreateDestination cifra la clave y añade el destino al final del orden.
 func (d *DB) CreateDestination(ctx context.Context, c *crypto.Cipher, in NewDestination) (*Destination, error) {
-	if !in.Platform.Valid() {
-		return nil, fmt.Errorf("plataforma desconocida %q", in.Platform)
+	if err := validateName(in.Name); err != nil {
+		return nil, err
 	}
-	if in.Name == "" {
-		return nil, errors.New("el nombre no puede estar vacío")
+	if err := validatePlatform(in.Platform); err != nil {
+		return nil, err
 	}
 	if err := validateRTMPURL(in.RTMPURL); err != nil {
+		return nil, err
+	}
+	if err := validateKey(in.Key); err != nil {
 		return nil, err
 	}
 
@@ -169,15 +200,15 @@ func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, 
 	args := []any{}
 
 	if patch.Name != nil {
-		if *patch.Name == "" {
-			return nil, errors.New("el nombre no puede estar vacío")
+		if err := validateName(*patch.Name); err != nil {
+			return nil, err
 		}
 		sets = append(sets, "name = ?")
 		args = append(args, *patch.Name)
 	}
 	if patch.Platform != nil {
-		if !patch.Platform.Valid() {
-			return nil, fmt.Errorf("plataforma desconocida %q", *patch.Platform)
+		if err := validatePlatform(*patch.Platform); err != nil {
+			return nil, err
 		}
 		sets = append(sets, "platform = ?")
 		args = append(args, string(*patch.Platform))
@@ -190,6 +221,9 @@ func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, 
 		args = append(args, *patch.RTMPURL)
 	}
 	if patch.Key != nil {
+		if err := validateKey(*patch.Key); err != nil {
+			return nil, err
+		}
 		encrypted, err := c.Encrypt([]byte(patch.Key.Reveal()))
 		if err != nil {
 			return nil, fmt.Errorf("cifrar la clave del destino: %w", err)
@@ -287,9 +321,13 @@ func (d *DB) destinationIDs(ctx context.Context) (map[int64]bool, error) {
 	return out, nil
 }
 
-// RevealDestinationKey descifra y devuelve la clave del destino en claro.
-// Es el único camino para obtenerla; quien lo llame debe registrar un evento.
-func (d *DB) RevealDestinationKey(ctx context.Context, c *crypto.Cipher, id int64) (crypto.Secret, error) {
+// DestinationKeyForRelay descifra la clave del destino para que el motor pueda construir
+// su sink. NO audita: el motor la lee en cada sesión y por cada destino, así que auditar
+// aquí llenaría el log de ruido y taparía justo lo que la auditoría hace visible.
+//
+// No es una divulgación a una persona; la clave no sale del proceso. El camino que sí lo
+// es —y que sí audita— es RevealDestinationKey.
+func (d *DB) DestinationKeyForRelay(ctx context.Context, c *crypto.Cipher, id int64) (crypto.Secret, error) {
 	var blob []byte
 	err := d.ex.QueryRowContext(ctx,
 		`SELECT stream_key_encrypted FROM destinations WHERE id = ?`, id).Scan(&blob)
@@ -304,6 +342,41 @@ func (d *DB) RevealDestinationKey(ctx context.Context, c *crypto.Cipher, id int6
 		return "", fmt.Errorf("descifrar la clave del destino: %w", err)
 	}
 	return crypto.Secret(plain), nil
+}
+
+// RevealDestinationKey descifra la clave y deja constancia de que alguien la pidió.
+//
+// El evento se escribe en la MISMA transacción que la lectura, así que no existe un camino
+// que revele sin auditar: o pasan las dos cosas o no pasa ninguna (spec §15.5). Antes esto
+// era un comentario pidiendo al llamante que registrara el evento, y un comentario no es
+// un invariante.
+//
+// InTx no se puede anidar (ErrNestedTransaction), así que esto NO se puede llamar desde
+// dentro de otra transacción. El motor no lo hace: usa DestinationKeyForRelay.
+func (d *DB) RevealDestinationKey(ctx context.Context, c *crypto.Cipher, id int64) (crypto.Secret, error) {
+	var key crypto.Secret
+	err := d.InTx(ctx, func(tx *DB) error {
+		k, err := tx.DestinationKeyForRelay(ctx, c, id)
+		if err != nil {
+			return err
+		}
+		// El mensaje NO lleva la clave, ni siquiera enmascarada (spec §8). El destino se
+		// identifica por su id, que es lo que hace falta para investigar.
+		if _, err := tx.LogEvent(ctx, Event{
+			DestinationID: &id,
+			Level:         LevelWarn,
+			Kind:          "key_revealed",
+			Message:       "se reveló la clave del destino",
+		}); err != nil {
+			return err
+		}
+		key = k
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return key, nil
 }
 
 func (d *DB) destination(ctx context.Context, id int64) (*Destination, error) {

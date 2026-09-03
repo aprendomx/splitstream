@@ -250,17 +250,17 @@ func TestSetPasswordHash(t *testing.T) {
 	}
 }
 
-func TestGenerateKeyIsRandomAndURLSafe(t *testing.T) {
-	a, err := store.GenerateKey()
+func TestGenerateIngestKeyIsRandomAndURLSafe(t *testing.T) {
+	a, err := store.GenerateIngestKey()
 	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
+		t.Fatalf("GenerateIngestKey: %v", err)
 	}
-	b, err := store.GenerateKey()
+	b, err := store.GenerateIngestKey()
 	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
+		t.Fatalf("GenerateIngestKey: %v", err)
 	}
 	if a.Reveal() == b.Reveal() {
-		t.Fatal("GenerateKey devolvió el mismo valor dos veces")
+		t.Fatal("GenerateIngestKey devolvió el mismo valor dos veces")
 	}
 	if strings.ContainsAny(a.Reveal(), "+/=") {
 		t.Errorf("la clave debe ser segura para URL, es %q", a.Reveal())

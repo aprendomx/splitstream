@@ -383,3 +383,116 @@ func TestUpdateDestinationRejectsBadURL(t *testing.T) {
 		t.Errorf("UpdateDestination con esquema malo = %v, quería ErrInvalidDestinationURL", err)
 	}
 }
+
+// TestRevealDestinationKeyAlwaysAudits fija el invariante del spec §15.5: no hay forma de
+// revelar una clave por la API sin dejar rastro, porque el evento se escribe en la misma
+// transacción que el descifrado. Antes esto era un comentario pidiendo al llamante que
+// registrara el evento, y un comentario no es un invariante.
+func TestRevealDestinationKeyAlwaysAudits(t *testing.T) {
+	ctx := context.Background()
+	db := openTemp(t)
+	c := testCipher(t, 1)
+
+	in := newDest("yt")
+	in.Key = crypto.Secret("clave-secreta")
+	dest, err := db.CreateDestination(ctx, c, in)
+	if err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+
+	got, err := db.RevealDestinationKey(ctx, c, dest.ID)
+	if err != nil {
+		t.Fatalf("RevealDestinationKey: %v", err)
+	}
+	if got.Reveal() != "clave-secreta" {
+		t.Errorf("la clave revelada no es la guardada: %q", got.Reveal())
+	}
+
+	revelados := eventosDeClase(t, db, "key_revealed")
+	if len(revelados) != 1 {
+		t.Fatalf("eventos key_revealed = %d, quería 1", len(revelados))
+	}
+	ev := revelados[0]
+	if ev.DestinationID == nil || *ev.DestinationID != dest.ID {
+		t.Errorf("el evento no apunta al destino: %+v", ev)
+	}
+	if ev.Level != store.LevelWarn {
+		t.Errorf("level = %q, quería warn: revelar una clave no es rutina", ev.Level)
+	}
+	if strings.Contains(ev.Message, "clave-secreta") {
+		t.Error("el evento de auditoría lleva la clave en claro dentro")
+	}
+}
+
+// TestDestinationKeyForRelayDoesNotAudit: el motor lee la clave en cada sesión y por cada
+// destino. Si eso auditara, el log se llenaría de ruido y taparía justo lo que la
+// auditoría existe para hacer visible.
+func TestDestinationKeyForRelayDoesNotAudit(t *testing.T) {
+	ctx := context.Background()
+	db := openTemp(t)
+	c := testCipher(t, 1)
+
+	in := newDest("yt")
+	in.Key = crypto.Secret("clave-secreta")
+	dest, err := db.CreateDestination(ctx, c, in)
+	if err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		got, err := db.DestinationKeyForRelay(ctx, c, dest.ID)
+		if err != nil {
+			t.Fatalf("DestinationKeyForRelay: %v", err)
+		}
+		if got.Reveal() != "clave-secreta" {
+			t.Fatalf("la clave leída no es la guardada: %q", got.Reveal())
+		}
+	}
+
+	if n := len(eventosDeClase(t, db, "key_revealed")); n != 0 {
+		t.Errorf("la lectura del motor generó %d eventos de auditoría", n)
+	}
+}
+
+// TestRevealDestinationKeyMissingIDDoesNotAudit: un id que no existe no debe dejar un
+// evento de revelado, porque no se reveló nada. La transacción entera se deshace.
+func TestRevealDestinationKeyMissingIDDoesNotAudit(t *testing.T) {
+	ctx := context.Background()
+	db := openTemp(t)
+	c := testCipher(t, 1)
+
+	if _, err := db.RevealDestinationKey(ctx, c, 9999); !errors.Is(err, store.ErrDestinationNotFound) {
+		t.Fatalf("err = %v, quería ErrDestinationNotFound", err)
+	}
+
+	if n := len(eventosDeClase(t, db, "key_revealed")); n != 0 {
+		t.Errorf("se auditaron %d revelados que no ocurrieron", n)
+	}
+}
+
+// TestDestinationKeyForRelayMissingID: el motor también tiene que enterarse de que el
+// destino desapareció, con el mismo error que antes.
+func TestDestinationKeyForRelayMissingID(t *testing.T) {
+	ctx := context.Background()
+	db := openTemp(t)
+
+	if _, err := db.DestinationKeyForRelay(ctx, testCipher(t, 1), 9999); !errors.Is(err, store.ErrDestinationNotFound) {
+		t.Errorf("err = %v, quería ErrDestinationNotFound", err)
+	}
+}
+
+// eventosDeClase filtra el log persistente por kind.
+func eventosDeClase(t *testing.T, db *store.DB, kind string) []store.Event {
+	t.Helper()
+	eventos, err := db.RecentEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	var out []store.Event
+	for _, e := range eventos {
+		if e.Kind == kind {
+			out = append(out, e)
+		}
+	}
+	return out
+}
