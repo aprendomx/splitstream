@@ -60,6 +60,33 @@ jobs:
             exit 1
           fi
 
+  # El panel se compila aparte del binario. Sin este job, un fallo del frontend no se
+  # notaría hasta que alguien ejecutara `make build` a mano: el job de Go compila igual,
+  # porque go:embed se conforma con el .gitkeep de un clon limpio.
+  web:
+    name: compilar el panel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: instalar dependencias
+        run: cd web && npm ci
+
+      - name: compilar
+        run: cd web && npm run build
+
+      - name: el dist tiene lo que el binario embebe
+        run: |
+          test -f web/dist/spa/index.html || { echo "::error::falta index.html"; exit 1; }
+          test -f web/dist/spa/.gitkeep || { echo "::error::el build se llevó el .gitkeep"; exit 1; }
+          ls -la web/dist/spa/assets | head
+
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:
     name: integración contra mediamtx

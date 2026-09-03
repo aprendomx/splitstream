@@ -6,7 +6,7 @@
   "description": "Panel web de splitstream. Se compila a dist/spa y el binario Go lo embebe.",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node -e \"require('fs').writeFileSync('dist/spa/.gitkeep','')\"",
     "preview": "vite preview"
   },
   "dependencies": {

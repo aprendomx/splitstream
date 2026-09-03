@@ -11,8 +11,12 @@
 
 # Frontend
 /web/node_modules/
-/web/dist/
 /web/.quasar/
+# Se excluye el CONTENIDO de dist/spa, no el directorio: git no permite reincluir un
+# archivo si su directorio padre está excluido, y el .gitkeep tiene que quedar versionado
+# para que el go:embed de web/embed.go resuelva en un clon que aún no ha compilado nada.
+/web/dist/spa/*
+!/web/dist/spa/.gitkeep
 
 # Entorno
 .env
@@ -20,7 +24,3 @@
 
 # macOS
 .DS_Store
-
-# Frontend: node_modules y el dist compilado. El .gitkeep de web/dist/spa sí se versiona,
-# porque es lo que hace que go:embed resuelva en un clon limpio.
-web/node_modules/
