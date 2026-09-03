@@ -47,9 +47,17 @@ make test-integration  # requiere sinks-up, ffmpeg y ffprobe
 | `SPLITSTREAM_RTMP_ADDR` | `:1935` | Dirección del servidor RTMP de ingesta |
 | `SPLITSTREAM_DB_PATH` | `splitstream.db` | Ruta del archivo SQLite |
 | `SPLITSTREAM_LOG_LEVEL` | `info` | `debug`, `info`, `warn` o `error` |
+| `SPLITSTREAM_SECURE_COOKIES` | `false` | `true` si sirves el panel por HTTPS detrás de un proxy |
 
-`splitstream -version` imprime la versión y sale; `splitstream -genkey` imprime una
-master key nueva. Ninguno de los dos toca la base de datos.
+`splitstream -version` imprime la versión y sale; `splitstream -genkey` imprime una master
+key nueva. Ninguno de los dos toca la base de datos.
+
+Antes de poder entrar al panel hay que fijar una contraseña. Se lee de stdin, así que deja
+que el shell la pida sin eco y sin dejarla en el historial:
+
+```bash
+read -rs PW && printf '%s' "$PW" | splitstream -setpassword && unset PW
+```
 
 > **Respalda `SPLITSTREAM_MASTER_KEY` aparte de la base de datos.** Cifra las claves
 > de tus destinos: si la pierdes, son irrecuperables y hay que volver a pegarlas todas.

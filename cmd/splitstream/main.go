@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/aprendomx/splitstream/internal/config"
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/httpapi"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
@@ -248,7 +250,40 @@ func run(ctx context.Context, out io.Writer) error {
 		Logger:  logger,
 	})
 
+	api, err := httpapi.New(httpapi.Config{
+		DB:            db,
+		Cipher:        cipher,
+		Engine:        engine,
+		Hub:           hub,
+		Ingest:        ingest,
+		Sinks:         factory,
+		MasterKey:     cfg.MasterKey,
+		RTMPAddr:      cfg.RTMPAddr,
+		Logger:        logger,
+		SecureCookies: cfg.SecureCookies,
+	})
+	if err != nil {
+		return err
+	}
+
+	httpSrv := &http.Server{
+		Addr:    cfg.HTTPAddr,
+		Handler: api.Handler(),
+		// Sin WriteTimeout: lo mataría el WebSocket, que por definición escribe durante
+		// horas. El plazo de escritura del WS va por mensaje, dentro de su handler.
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// ErrServerClosed es lo que devuelve SIEMPRE tras un Shutdown: no es un fallo.
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("el servidor HTTP dejó de atender", "err", err)
+		}
+	}()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -262,10 +297,19 @@ func run(ctx context.Context, out io.Writer) error {
 	// matices, y eso incluye la máscara con los últimos 4 caracteres, que es para la
 	// interfaz —otra superficie, con otro control de acceso—. `ingest_app` no es secreto
 	// y se queda.
-	logger.Info("splitstream arrancado", "config", cfg, "ingest_app", settings.IngestApp)
+	logger.Info("splitstream arrancado", "config", cfg,
+		"ingest_app", settings.IngestApp, "http_addr", cfg.HTTPAddr)
 
 	<-ctx.Done()
 	logger.Info("apagando")
+
+	// El HTTP se cierra PRIMERO: así no puede entrar una petición que toque la base
+	// mientras se está cerrando la sesión de ingesta.
+	httpShutdown, cancelHTTP := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := httpSrv.Shutdown(httpShutdown); err != nil {
+		logger.Warn("el servidor HTTP no cerró limpiamente", "err", err)
+	}
+	cancelHTTP()
 
 	if err := ingest.Close(); err != nil {
 		logger.Error("cerrar la ingesta", "err", err)

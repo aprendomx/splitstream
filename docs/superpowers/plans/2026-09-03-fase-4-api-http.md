@@ -4666,7 +4666,7 @@ los sinks.
   `Ingest.DisconnectPublisher` (Task 9).
 - Produces: el binario sirve la API en `cfg.HTTPAddr`.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Añade a `cmd/splitstream/main_test.go`:
 
@@ -4811,7 +4811,7 @@ arranque es exactamente cuando se vuelve a romper.
 
 Añade `io`, `net`, `net/http` y `time` a los imports del archivo de test si no están.
 
-- [ ] **Step 2: Implementar el cableado**
+- [x] **Step 2: Implementar el cableado**
 
 Dentro de `run`, después de construir el motor y antes de arrancar la ingesta:
 
@@ -4844,7 +4844,7 @@ Un `ListenAndServe` que devuelve `http.ErrServerClosed` **no es un fallo**: es l
 devuelve siempre tras un `Shutdown`. Trátalo como la ingesta trata su error de listener
 cerrado.
 
-- [ ] **Step 3: Añadir `SecureCookies` a la configuración**
+- [x] **Step 3: Añadir `SecureCookies` a la configuración**
 
 En `internal/config/config.go`, añade el campo con su variable de entorno
 `SPLITSTREAM_SECURE_COOKIES`, por defecto `false`. Va en la configuración y no se deduce de
@@ -4852,14 +4852,14 @@ la petición porque en el despliegue del spec §12 el TLS lo termina un proxy y 
 solo ve HTTP: intentar adivinarlo daría una cookie sin `Secure` justo en producción.
 Actualiza también la tabla del README y el test de defaults de `config`.
 
-- [ ] **Step 4: Ejecutar la suite entera**
+- [x] **Step 4: Ejecutar la suite entera**
 
 Run: `go test ./... -race -count=1` y después
 `make sinks-up && make test-integration`.
 Expected: PASS los dos. La integración importa aquí: es lo que prueba que añadir el
 servidor HTTP no rompió el apagado ordenado que la fase 3 costó tres rondas de arreglos.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/splitstream/ internal/config/ README.md
@@ -4901,5 +4901,10 @@ git commit -m "feat: el binario sirve la API HTTP junto al servidor RTMP"
 - La rotación de clave devuelve la clave nueva en claro **una sola vez**, en la respuesta.
   Si la UI no la enseña ahí, el usuario la pierde y tiene que rotar otra vez.
 - El WS no reintenta: la reconexión con backoff es del cliente (spec §10).
+- **Los timestamps del JSON NO son de ancho fijo.** En la base sí lo son desde la Task 1,
+  pero `time.Time` se serializa con `RFC3339Nano`, que recorta los ceros finales: un
+  `created_at` sale como `2026-09-03T17:21:22.104106Z`. El frontend debe parsearlos a
+  `Date` y ordenar por el valor, nunca comparando las cadenas — es la misma trampa del
+  spec §15.4, un piso más arriba.
 - Queda sin pagar de la deuda del spec §15: nada. Esta fase cierra §15.2, §15.3, §15.4,
   §15.5 y §15.8, que eran las cinco que quedaban.
