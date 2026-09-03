@@ -1311,7 +1311,7 @@ compartieran material, un fallo en cualquiera de los dos ayudaría a atacar el o
   - Errores: `errCookieMalformed`, `errCookieBadSignature`, `errCookieExpired`.
   La Task 6 usa `issue` al hacer login y `verify` en el middleware.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Crea `internal/httpapi/auth_test.go`:
 
@@ -1435,12 +1435,12 @@ func flipLast(s string) string {
 }
 ```
 
-- [ ] **Step 2: Ejecutar los tests y verificar que fallan**
+- [x] **Step 2: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./internal/httpapi/ -v`
 Expected: FAIL a compilar — el paquete no existe todavía.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Crea `internal/httpapi/auth.go` con la parte de la cookie (el login y el middleware llegan
 en la Task 6):
@@ -1543,12 +1543,12 @@ func (s *sessionSigner) sign(payload string) string {
 }
 ```
 
-- [ ] **Step 4: Ejecutar los tests y verificar que pasan**
+- [x] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/httpapi/ -race -count=1 -v`
 Expected: PASS los seis.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/httpapi/
@@ -4862,7 +4862,8 @@ git commit -m "feat: el binario sirve la API HTTP junto al servidor RTMP"
 - [ ] `CGO_ENABLED=0 go build ./cmd/splitstream` produce el binario.
 - [ ] `go.mod` tiene exactamente **cinco** directas, las del spec §5, y `go 1.25.0`.
 - [ ] `go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'` sigue vacío.
-- [ ] `go list -deps ./internal/httpapi | grep go-rtmp` vacío.
+- [x] `go list -deps ./internal/httpapi | grep go-rtmp` vacío. *(Verificado por la CI
+      desde la Task 5.)*
 - [ ] `make sinks-up && make test-integration` sigue pasando los tres tests.
 - [ ] La CI (los dos jobs) está verde.
 - [ ] Los catorce endpoints del spec §9 existen, responden y están cubiertos por tests.

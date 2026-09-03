@@ -45,6 +45,15 @@ jobs:
             exit 1
           fi
 
+      # La simétrica: la capa HTTP no debe conocer la librería RTMP. Habla con la ingesta
+      # a través de interfaces estrechas, no del tipo concreto.
+      - name: internal/httpapi no conoce go-rtmp
+        run: |
+          if go list -deps ./internal/httpapi | grep go-rtmp; then
+            echo "::error::internal/httpapi importa go-rtmp"
+            exit 1
+          fi
+
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:
     name: integración contra mediamtx
