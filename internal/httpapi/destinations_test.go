@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/relay"
@@ -20,15 +21,15 @@ import (
 
 // fakeEngine simula el motor. sessionID a 0 significa que no hay nadie transmitiendo.
 type fakeEngine struct {
-	mu        sync.Mutex
-	sessionID int64
-	metrics   map[int64]relay.Metrics
+	mu      sync.Mutex
+	sesion  relay.LiveSession
+	metrics map[int64]relay.Metrics
 }
 
-func (f *fakeEngine) SessionID() int64 {
+func (f *fakeEngine) Session() relay.LiveSession {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.sessionID
+	return f.sesion
 }
 
 func (f *fakeEngine) Snapshot() map[int64]relay.Metrics {
@@ -44,7 +45,14 @@ func (f *fakeEngine) Snapshot() map[int64]relay.Metrics {
 func (f *fakeEngine) setLive(id int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.sessionID = id
+	f.sesion = relay.LiveSession{ID: id, StartedAt: time.Now()}
+}
+
+// setSesion fija la sesión entera, para los tests que miran resolución o bitrate.
+func (f *fakeEngine) setSesion(s relay.LiveSession) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sesion = s
 }
 
 func (f *fakeEngine) setMetrics(m map[int64]relay.Metrics) {

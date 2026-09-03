@@ -361,3 +361,109 @@ func mustAVCSeqHeader() []byte {
 	out = append(out, byte(len(sps)>>8), byte(len(sps)))
 	return append(out, sps...)
 }
+
+// TestEngineSessionExposesTheLiveResolution: el motor conoce la resolución desde el primer
+// sequence header, pero hasta ahora solo la escribía al CERRAR la sesión, así que la API
+// devolvía null durante toda la emisión y el panel del spec §10 no podía pintarla.
+//
+// Detectado usando el producto contra YouTube: `GET /api/status` decía "resolución
+// pendiente" durante siete minutos de directo a 720p.
+func TestEngineSessionExposesTheLiveResolution(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	// Sin sesión, no hay nada que contar.
+	if got := e.Session(); got.ID != 0 {
+		t.Errorf("sin publisher, Session().ID = %d, quería 0", got.ID)
+	}
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+
+	// Nada más arrancar: hay sesión, pero la resolución todavía no se conoce.
+	got := e.Session()
+	if got.ID == 0 {
+		t.Fatal("con publisher aceptado, Session().ID = 0")
+	}
+	if got.Width != 0 || got.Height != 0 {
+		t.Errorf("antes del sequence header, resolución = %dx%d, quería 0x0", got.Width, got.Height)
+	}
+	if got.StartedAt.IsZero() {
+		t.Error("falta StartedAt")
+	}
+
+	// Y en cuanto llega el sequence header, EN VIVO, sin esperar a cerrar.
+	e.OnMessage(&Message{Kind: KindVideo, Payload: mustAVCSeqHeader(), IsSeqHeader: true, IsKeyframe: true})
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 0, Payload: make([]byte, 100000), IsKeyframe: true})
+
+	got = e.Session()
+	if got.Width != 640 || got.Height != 360 {
+		t.Errorf("resolución en vivo = %dx%d, quería 640x360", got.Width, got.Height)
+	}
+	if got.BitrateBPS == 0 {
+		t.Error("bitrate en vivo = 0, quería un valor medido")
+	}
+}
+
+// TestEngineSessionMatchesWhatItPersists: el valor que se enseña en vivo y el que se
+// guarda al cerrar tienen que salir del mismo cálculo, o el panel diría una cosa y el
+// historial otra.
+func TestEngineSessionMatchesWhatItPersists(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	st := &fakeStore{}
+	e := NewEngine(EngineConfig{Hub: h, Store: st, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	e.OnMessage(&Message{Kind: KindVideo, Payload: mustAVCSeqHeader(), IsSeqHeader: true, IsKeyframe: true})
+	e.OnMessage(&Message{Kind: KindVideo, Timestamp: 0, Payload: make([]byte, 100000), IsKeyframe: true})
+
+	vivo := e.Session()
+	e.OnPublishEnd()
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if vivo.Width != st.lastWidth || vivo.Height != st.lastHeight {
+		t.Errorf("en vivo %dx%d, persistido %dx%d",
+			vivo.Width, vivo.Height, st.lastWidth, st.lastHeight)
+	}
+}
+
+// TestEngineSessionResetsBetweenSessions: un Stop→Start en OBS es la acción más común, y
+// la resolución de la transmisión anterior no puede quedarse pegada.
+func TestEngineSessionResetsBetweenSessions(t *testing.T) {
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("primer OnPublishStart: %v", err)
+	}
+	e.OnMessage(&Message{Kind: KindVideo, Payload: mustAVCSeqHeader(), IsSeqHeader: true, IsKeyframe: true})
+	if e.Session().Width != 640 {
+		t.Fatal("la primera sesión no detectó la resolución")
+	}
+	e.OnPublishEnd()
+
+	if got := e.Session(); got.ID != 0 {
+		t.Errorf("tras cerrar, Session().ID = %d, quería 0", got.ID)
+	}
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("segundo OnPublishStart: %v", err)
+	}
+	got := e.Session()
+	if got.Width != 0 || got.Height != 0 {
+		t.Errorf("la segunda sesión arrancó con %dx%d pegado de la primera", got.Width, got.Height)
+	}
+	if got.BitrateBPS != 0 {
+		t.Errorf("la segunda sesión arrancó con bitrate %d pegado de la primera", got.BitrateBPS)
+	}
+}

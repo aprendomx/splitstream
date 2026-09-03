@@ -174,17 +174,26 @@ emisión, aunque el motor detecta la resolución al primer segundo —lo loguea 
 cerrar la sesión.
 
 El spec §10 pide que el panel enseñe «señal entrante, resolución, bitrate, tiempo
-transmitiendo» como estado global **en vivo**, así que la fase 5 no podría pintarlo con lo
-que hay. El arreglo natural es que el motor lo exponga en su snapshot, junto a las métricas
-por destino, en vez de solo escribirlo al cerrar. Es trabajo para la fase 5 o para un
-arreglo puntual antes.
+transmitiendo» como estado global **en vivo**, así que la fase 5 no podría pintarlo.
+
+**Arreglado en el acto** (`relay.Engine.Session()`), y verificado contra el mismo directo
+que lo destapó: `GET /api/status` pasó de `"width": null` a `"width": 1280, "height": 720,
+"bitrate_bps": 2566136` mientras la fila de esa sesión en la base sigue con `NULL`, porque
+solo se escribe al cerrar. La API ya no depende de esa fila.
+
+Dos decisiones del arreglo:
+- El bitrate en vivo se calcula con la **misma fórmula** que `OnPublishEnd` persiste, con un
+  test que lo fija: si divergieran, el panel diría una cosa y el historial otra.
+- La resolución sale como `null`, no como `0x0`, entre que el publisher conecta y llega el
+  primer sequence header. La interfaz debe distinguir «todavía no se sabe» de un valor real.
+- `started_at` se normaliza a UTC: el motor lo tiene en hora local y el resto de timestamps
+  del JSON van en `Z`. Lo vi en el volcado del directo, no en un test.
 
 ## Lo que queda abierto
 
 - **YouTube por RTMP: probado y funcionando** (ver arriba). Faltan `rtmps://`, Twitch y
   Facebook, que pueden ser más estrictos con el orden del handshake.
-- **La resolución de la sesión viva no se expone por la API** (ver arriba). Bloquea una
-  parte del panel de la fase 5.
+
 - **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez durante una
   corrida de `go test ./...` y no reproducido en 19 intentos posteriores (16 del paquete
   aislado, 3 de la suite entera, cinco con los núcleos saturados). El log mostraba un

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/store"
@@ -335,11 +336,63 @@ func TestStatusReportsTheLiveSession(t *testing.T) {
 	}
 }
 
+// TestStatusReportsResolutionWhileLive es el arreglo del hueco que apareció usando el
+// producto: durante siete minutos de directo real a 720p, GET /api/status devolvía la
+// resolución en null, porque solo se persistía al cerrar la sesión.
+//
+// El spec §10 pide que el panel enseñe «señal entrante, resolución, bitrate, tiempo
+// transmitiendo» EN VIVO, así que sin esto la fase 5 no podría pintarlo.
+func TestStatusReportsResolutionWhileLive(t *testing.T) {
+	srv, _, eng, _, cookies := newDestServer(t)
+	arranque := time.Now().Add(-90 * time.Second)
+	eng.setSesion(relay.LiveSession{
+		ID: 7, StartedAt: arranque, Width: 1280, Height: 720, BitrateBPS: 3_100_000,
+	})
+
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if !st.Session.Live {
+		t.Fatal("no dice que hay sesión")
+	}
+	if st.Session.Width == nil || *st.Session.Width != 1280 {
+		t.Errorf("width = %v, quería 1280", st.Session.Width)
+	}
+	if st.Session.Height == nil || *st.Session.Height != 720 {
+		t.Errorf("height = %v, quería 720", st.Session.Height)
+	}
+	if st.Session.BitrateBPS == nil || *st.Session.BitrateBPS != 3_100_000 {
+		t.Errorf("bitrate_bps = %v, quería 3100000", st.Session.BitrateBPS)
+	}
+	if st.Session.StartedAt == nil || !st.Session.StartedAt.Equal(arranque.UTC()) {
+		t.Errorf("started_at = %v, quería %v", st.Session.StartedAt, arranque)
+	}
+	// Y en UTC, como el resto de timestamps del contrato.
+	if _, offset := st.Session.StartedAt.Zone(); offset != 0 {
+		t.Errorf("started_at viene con desfase %d; el resto del JSON va en UTC", offset)
+	}
+}
+
+// TestStatusResolutionIsNullUntilTheSequenceHeader: entre que el publisher conecta y llega
+// el primer sequence header pasa un instante. En ese hueco la resolución debe ser null, no
+// "0x0", para que la interfaz sepa que todavía no se sabe.
+func TestStatusResolutionIsNullUntilTheSequenceHeader(t *testing.T) {
+	srv, _, eng, _, cookies := newDestServer(t)
+	eng.setSesion(relay.LiveSession{ID: 7, StartedAt: time.Now()})
+
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if !st.Session.Live {
+		t.Fatal("no dice que hay sesión")
+	}
+	if st.Session.Width != nil || st.Session.Height != nil {
+		t.Errorf("resolución = %v x %v, quería null antes del sequence header",
+			st.Session.Width, st.Session.Height)
+	}
+}
+
 // TestStatusSurvivesASessionRowThatIsNotThereYet: SessionID puede adelantarse a la fila.
 // No es un error: se devuelve lo que se sabe.
 func TestStatusSurvivesASessionRowThatIsNotThereYet(t *testing.T) {
 	srv, _, eng, _, cookies := newDestServer(t)
-	eng.setLive(9999)
+	eng.setLive(9999) // un id que no tiene fila en sessions
 
 	rec := do(t, srv, cookies, http.MethodGet, "/api/status", "")
 	if rec.Code != http.StatusOK {

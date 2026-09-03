@@ -34,7 +34,11 @@ type SinkBuilder interface {
 // sesión viva sin montar un motor entero con su ingesta: montarlo costaría un servidor
 // RTMP y un publisher real en cada test de un handler.
 type EngineView interface {
-	SessionID() int64
+	// Session describe la sesión en curso: id, arranque, resolución y bitrate medido. Se
+	// pide al motor y no a la base porque la fila de sessions solo se completa al CERRAR,
+	// así que durante la emisión tendría la resolución en null — que es justo lo que el
+	// panel del spec §10 necesita enseñar en vivo.
+	Session() relay.LiveSession
 	Snapshot() map[int64]relay.Metrics
 }
 

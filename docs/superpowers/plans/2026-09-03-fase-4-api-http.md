@@ -4904,6 +4904,9 @@ git commit -m "feat: el binario sirve la API HTTP junto al servidor RTMP"
 - La rotación de clave devuelve la clave nueva en claro **una sola vez**, en la respuesta.
   Si la UI no la enseña ahí, el usuario la pierde y tiene que rotar otra vez.
 - El WS no reintenta: la reconexión con backoff es del cliente (spec §10).
+- `session.width`, `height` y `bitrate_bps` vienen del motor, no de la fila de `sessions`,
+  y son `null` hasta que llega el primer sequence header — un instante después de conectar.
+  Trátalo como «todavía no se sabe», no como un error ni como `0x0`.
 - **Los timestamps del JSON NO son de ancho fijo.** En la base sí lo son desde la Task 1,
   pero `time.Time` se serializa con `RFC3339Nano`, que recorta los ceros finales: un
   `created_at` sale como `2026-09-03T17:21:22.104106Z`. El frontend debe parsearlos a

@@ -210,6 +210,47 @@ func (e *Engine) observe(msg *Message) {
 	e.log.Info("resolución detectada", "ancho", w, "alto", h)
 }
 
+// LiveSession describe la sesión de ingesta en curso. ID a 0 significa que no hay ninguna,
+// y entonces el resto de los campos no significan nada.
+//
+// Width y Height valen 0 hasta que llega el primer AVC sequence header, que en la práctica
+// es el primer segundo: la interfaz debe tratar el cero como "todavía no se sabe", no como
+// un error.
+type LiveSession struct {
+	ID         int64
+	StartedAt  time.Time
+	Width      int
+	Height     int
+	BitrateBPS int
+}
+
+// Session devuelve lo que se sabe de la sesión en curso, sin esperar a que termine.
+//
+// Existe porque el spec §10 pide que el panel enseñe resolución y bitrate EN VIVO, y hasta
+// ahora esos datos solo se escribían en FinishSession: la API devolvía null durante toda la
+// emisión. Se detectó usando el producto contra YouTube, no por un test.
+//
+// El bitrate se calcula igual que en OnPublishEnd —bytes de media entre tiempo transcurrido—
+// para que lo que se enseña en vivo y lo que queda en el historial no se contradigan.
+func (e *Engine) Session() LiveSession {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.sessionID == 0 {
+		return LiveSession{}
+	}
+	out := LiveSession{
+		ID:        e.sessionID,
+		StartedAt: e.sessionStarted,
+		Width:     e.sessionWidth,
+		Height:    e.sessionHeight,
+	}
+	if elapsed := time.Since(e.sessionStarted); elapsed > 0 {
+		out.BitrateBPS = int(float64(e.sessionBytes*8) / elapsed.Seconds())
+	}
+	return out
+}
+
 // OnPublishEnd cierra la sesión y olvida el preámbulo: los sequence headers de esta
 // transmisión no valen para la siguiente.
 //
