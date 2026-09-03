@@ -1006,7 +1006,7 @@ comando con la contraseña dentro.
   flag `-setpassword`. La Task 6 asume que `settings.PasswordHash` puede estar vacío y que
   eso significa «aún no configurada».
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Añade a `cmd/splitstream/main_test.go`:
 
@@ -1162,15 +1162,17 @@ func TestSetPasswordOverwritesTheOldOne(t *testing.T) {
 }
 ```
 
-`testKeyB64()` ya existe en `cmd/splitstream/main_test.go`. Añade a los imports lo que
-falte: `io`, `path/filepath`, y los paquetes `crypto` y `store` del proyecto.
+> **Corrección aplicada al ejecutar.** `testKeyB64()` **no existe** en este paquete —el
+> plan lo arrastró del de la fase 1—. El test que ya está usa `generateMasterKey()`
+> directamente; haz lo mismo. `path/filepath`, `crypto` y `store` ya están importados;
+> falta añadir `io`.
 
-- [ ] **Step 2: Ejecutar los tests y verificar que fallan**
+- [x] **Step 2: Ejecutar los tests y verificar que fallan**
 
 Run: `go test ./cmd/splitstream/ -run 'ReadPassword|SetPassword' -v`
 Expected: FAIL por `undefined: readPassword` y `undefined: setPassword`.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 En `cmd/splitstream/main.go`, añade:
 
@@ -1248,8 +1250,11 @@ func setPassword(ctx context.Context, in io.Reader, out io.Writer) error {
 Y en `main()`, junto a los flags que ya hay:
 
 ```go
+	// Sin comillas invertidas en el texto: el paquete flag las interpreta como el nombre
+	// del operando, y la ayuda sale como "-setpassword read -rs PW && printf ...".
 	setpw := flag.Bool("setpassword", false,
-		"lee una contraseña de stdin y la fija como la del panel; usa `read -rs PW && printf '%s' \"$PW\" | splitstream -setpassword`")
+		"lee una contraseña de stdin y la fija como la del panel; "+
+			"invócalo como: read -rs PW && printf '%s' \"$PW\" | splitstream -setpassword")
 ```
 
 con su rama, después de la de `-version` y antes de la de `-genkey`:
@@ -1266,12 +1271,12 @@ con su rama, después de la de `-version` y antes de la de `-genkey`:
 
 Añade `bufio` a los imports.
 
-- [ ] **Step 4: Ejecutar los tests y verificar que pasan**
+- [x] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./cmd/splitstream/ -race -count=1 -v`
 Expected: PASS, los seis nuevos incluidos.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/splitstream/

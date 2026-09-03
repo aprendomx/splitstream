@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -16,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -35,10 +37,23 @@ var version = "dev"
 func main() {
 	genkey := flag.Bool("genkey", false, "imprime una SPLITSTREAM_MASTER_KEY nueva y sale")
 	showVersion := flag.Bool("version", false, "imprime la versión del binario y sale")
+	// Sin comillas invertidas en el texto: el paquete flag las interpreta como el nombre
+	// del operando y la ayuda sale rota.
+	setpw := flag.Bool("setpassword", false,
+		"lee una contraseña de stdin y la fija como la del panel; "+
+			"invócalo como: read -rs PW && printf '%s' \"$PW\" | splitstream -setpassword")
 	flag.Parse()
 
 	if *showVersion {
 		printVersion(os.Stdout)
+		return
+	}
+
+	if *setpw {
+		if err := setPassword(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -67,6 +82,81 @@ func main() {
 // base de datos: debe funcionar en un contenedor recién arrancado, sin master key.
 func printVersion(out io.Writer) {
 	fmt.Fprintf(out, "splitstream %s\n", version)
+}
+
+// minPasswordLen es el mínimo aceptable. No es una política de seguridad seria, es un
+// filtro contra el descuido: el panel queda expuesto a internet y una contraseña de tres
+// letras no es una contraseña.
+const minPasswordLen = 8
+
+// readPassword lee una contraseña de una línea de r.
+//
+// Quita solo el salto de línea final —y el retorno de carro, por si viene pegada desde
+// Windows—: los espacios interiores son parte de la contraseña, porque una frase de paso
+// los lleva.
+//
+// No se suprime el eco del terminal: eso necesitaría golang.org/x/term, que no está entre
+// las cinco dependencias que el spec §5 permite. La invocación recomendada deja que lo
+// haga el shell, que ya sabe:
+//
+//	read -rs PW && printf '%s' "$PW" | splitstream -setpassword && unset PW
+func readPassword(r io.Reader) (string, error) {
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("leer la contraseña: %w", err)
+	}
+	pw := strings.TrimRight(line, "\r\n")
+
+	if strings.TrimSpace(pw) == "" {
+		return "", errors.New("la contraseña no puede estar vacía")
+	}
+	if len(pw) < minPasswordLen {
+		return "", fmt.Errorf("la contraseña necesita al menos %d caracteres", minPasswordLen)
+	}
+	return pw, nil
+}
+
+// setPassword fija la contraseña del panel. No imprime nada que dependa de ella: ni la
+// contraseña, ni su longitud, ni un prefijo (spec §8).
+func setPassword(ctx context.Context, in io.Reader, out io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	pw, err := readPassword(in)
+	if err != nil {
+		return err
+	}
+
+	hash, err := crypto.HashPassword(pw)
+	if err != nil {
+		return fmt.Errorf("hashear la contraseña: %w", err)
+	}
+
+	db, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	cipher, err := crypto.NewCipher(cfg.MasterKey)
+	if err != nil {
+		return fmt.Errorf("inicializar el cifrado: %w", err)
+	}
+	// Bootstrap deja la fila de settings creada; sin él, SetPasswordHash no tiene dónde
+	// escribir en una base recién hecha. Es idempotente: sobre una base existente no
+	// rota nada, solo comprueba la master key.
+	if err := db.Bootstrap(ctx, cipher); err != nil {
+		return err
+	}
+
+	if err := db.SetPasswordHash(ctx, hash); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(out, "contraseña del panel actualizada")
+	return nil
 }
 
 // generateMasterKey produce una master key de 32 bytes en base64 estándar.
