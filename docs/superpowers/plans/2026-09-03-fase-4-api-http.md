@@ -2399,7 +2399,7 @@ copia se desincronice en silencio.
   funciones `newMetricsDTO`, `newDestinationDTO`, `newEventDTO`. Las tasks 8, 9 y 10 las
   usan; el WebSocket empuja exactamente el mismo `statusDTO` que `GET /api/status`.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [x] **Step 1: Escribir el test que falla**
 
 Crea `internal/httpapi/dto_test.go`:
 
@@ -2539,12 +2539,12 @@ func TestDTOFieldNamesAreSnakeCase(t *testing.T) {
 
 Añade `strings` a los imports.
 
-- [ ] **Step 2: Ejecutar el test y verificar que falla**
+- [x] **Step 2: Ejecutar el test y verificar que falla**
 
 Run: `go test ./internal/httpapi/ -run DTO -v`
 Expected: FAIL por `undefined: metricsDTO`, `newMetricsDTO`, etc.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Crea `internal/httpapi/dto.go`:
 
@@ -2671,12 +2671,12 @@ type statusDTO struct {
 }
 ```
 
-- [ ] **Step 4: Ejecutar los tests y verificar que pasan**
+- [x] **Step 4: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./internal/httpapi/ -race -count=1`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/httpapi/
