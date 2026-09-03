@@ -1,0 +1,5 @@
+node_modules/
+# El dist se compila; solo se versiona el .gitkeep, que es lo que hace que go:embed
+# resuelva en un clon limpio antes de haber construido el frontend.
+dist/spa/*
+!dist/spa/.gitkeep

@@ -1,11 +1,21 @@
-.PHONY: build test test-integration sinks-up sinks-down vet tidy run clean
+.PHONY: build build-web build-go test test-integration sinks-up sinks-down vet tidy run clean
 
 # La versión sale del tag más cercano. Sin tags (o sin git) queda en "dev", que es
 # exactamente lo que vale un binario que no viene de una release.
 VERSION ?= $(shell git describe --tags --dirty 2>/dev/null || echo dev)
 
+# El panel se compila ANTES que el binario: go:embed mete dist/spa dentro del ejecutable,
+# así que un binario construido sin esto llevaría el panel de la vez anterior.
+build-web:
+	cd web && npm ci --silent && npm run build
+
 # CGO_ENABLED=0 solo aquí: el binario de producción debe ser estático.
-build:
+build: build-web
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o splitstream ./cmd/splitstream
+
+# Solo el binario, con el panel que ya hubiera compilado. Para iterar en Go sin esperar a
+# npm en cada vuelta.
+build-go:
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o splitstream ./cmd/splitstream
 
 # El detector de carreras necesita cgo, así que este target no lo desactiva.
@@ -23,6 +33,7 @@ run: build
 
 clean:
 	rm -f splitstream
+	rm -rf web/dist/spa/assets web/dist/spa/index.html
 
 # Levanta los mediamtx que usan los tests de integración.
 sinks-up:

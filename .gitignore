@@ -20,3 +20,7 @@
 
 # macOS
 .DS_Store
+
+# Frontend: node_modules y el dist compilado. El .gitkeep de web/dist/spa sí se versiona,
+# porque es lo que hace que go:embed resuelva en un clon limpio.
+web/node_modules/

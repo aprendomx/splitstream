@@ -41,7 +41,10 @@ func hashDePrueba(t *testing.T) string {
 }
 
 // newTestServer levanta un Server contra una base temporal, con la contraseña ya fijada.
-func newTestServer(t *testing.T) (*Server, *store.DB) {
+//
+// Los ajustes opcionales se aplican a la Config ANTES de construir: el mux se registra en
+// New y volver a registrarlo sobre el mismo servidor hace panic por patrón duplicado.
+func newTestServer(t *testing.T, ajustes ...func(*Config)) (*Server, *store.DB) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -63,7 +66,12 @@ func newTestServer(t *testing.T) (*Server, *store.DB) {
 		t.Fatalf("SetPasswordHash: %v", err)
 	}
 
-	srv, err := New(Config{DB: db, Cipher: cipher, MasterKey: master, Logger: discardLogger()})
+	cfg := Config{DB: db, Cipher: cipher, MasterKey: master, Logger: discardLogger()}
+	for _, ajustar := range ajustes {
+		ajustar(&cfg)
+	}
+
+	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -1,0 +1,17 @@
+// Paleta del panel. Oscura por defecto (spec §10) y con los tres colores de estado que
+// el producto necesita: emitiendo, degradado y caído.
+//
+// Se eligen tonos desaturados en vez de los saturados por defecto de Quasar: esta pantalla
+// se mira a mitad de una transmisión, a veces de noche, y el verde chillón de "todo va
+// bien" cansa cuando está permanentemente encendido.
+$primary   : #4f46e5;
+$secondary : #6366f1;
+$accent    : #22c55e;
+
+$dark      : #16161f;
+$dark-page : #0f0f16;
+
+$positive  : #22c55e;  // live
+$negative  : #ef4444;  // caído
+$info      : #38bdf8;  // conectando
+$warning   : #f59e0b;  // degradado / reconectando
