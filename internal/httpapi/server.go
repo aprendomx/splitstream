@@ -61,6 +61,10 @@ type Config struct {
 	// MasterKey solo se usa para derivar la clave de firma de la cookie; no se guarda.
 	MasterKey [32]byte
 	Logger    *slog.Logger
+	// RTMPAddr es la dirección donde escucha la ingesta. Solo se usa el puerto: el host de
+	// la URL que se le enseña al usuario sale de la petición, porque el panel se alcanza
+	// por algún nombre concreto y la ingesta está en esa misma máquina.
+	RTMPAddr string
 	// SecureCookies marca la cookie como Secure. Va en la configuración y no se deduce de
 	// la petición porque en el despliegue del spec §12 el TLS lo termina un proxy y el
 	// binario solo ve HTTP: adivinarlo daría una cookie sin Secure justo en producción.
@@ -69,17 +73,18 @@ type Config struct {
 
 // Server sirve la API del spec §9.
 type Server struct {
-	db      *store.DB
-	cipher  *crypto.Cipher
-	engine  EngineView
-	hub     HubView
-	ingest  Disconnecter
-	sinks   SinkBuilder
-	signer  *sessionSigner
-	limiter *loginLimiter
-	logger  *slog.Logger
-	secure  bool
-	mux     *http.ServeMux
+	db       *store.DB
+	cipher   *crypto.Cipher
+	engine   EngineView
+	hub      HubView
+	ingest   Disconnecter
+	sinks    SinkBuilder
+	signer   *sessionSigner
+	limiter  *loginLimiter
+	logger   *slog.Logger
+	secure   bool
+	rtmpPort string
+	mux      *http.ServeMux
 }
 
 func New(cfg Config) (*Server, error) {
@@ -104,6 +109,9 @@ func New(cfg Config) (*Server, error) {
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
 	}
+	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
+		s.rtmpPort = puerto
+	}
 	s.routes()
 	return s, nil
 }
@@ -125,8 +133,8 @@ func (s *Server) routes() {
 		s.mux.Handle(pattern, s.requireSession(h))
 	}
 
-	protegida("GET /api/ingest", s.notImplemented)
-	protegida("POST /api/ingest/rotate-key", s.notImplemented)
+	protegida("GET /api/ingest", s.handleGetIngest)
+	protegida("POST /api/ingest/rotate-key", s.handleRotateIngestKey)
 	protegida("GET /api/destinations", s.handleListDestinations)
 	protegida("POST /api/destinations", s.handleCreateDestination)
 	protegida("PATCH /api/destinations/{id}", s.handlePatchDestination)
@@ -134,8 +142,8 @@ func (s *Server) routes() {
 	protegida("POST /api/destinations/{id}/toggle", s.handleToggleDestination)
 	protegida("POST /api/destinations/reorder", s.handleReorderDestinations)
 	protegida("GET /api/destinations/{id}/key", s.handleRevealDestinationKey)
-	protegida("GET /api/status", s.notImplemented)
-	protegida("GET /api/events", s.notImplemented)
+	protegida("GET /api/status", s.handleStatus)
+	protegida("GET /api/events", s.handleEvents)
 	protegida("GET /ws", s.notImplemented)
 }
 

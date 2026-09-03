@@ -3665,8 +3665,17 @@ que no sirve.
   `store.SessionByID`, `relay.Engine.SessionID`, `relay.Engine.Snapshot`, los DTO (Task 7).
 - Produces: `func (i *Ingest) DisconnectPublisher() int` — cierra las conexiones activas y
   devuelve cuántas cerró; el listener sigue escuchando. Satisface `httpapi.Disconnecter`.
+  `Config` gana `RTMPAddr`, del que solo se usa el puerto.
 
-- [ ] **Step 1: Escribir el test de `DisconnectPublisher`**
+> **Aviso al escribir el test de concurrencia.** No uses `Publisher` completos para
+> martillear `DisconnectPublisher`: el test se cuelga. Es la carrera del CLIENTE de go-rtmp
+> que el ledger de la fase 2 dejó avisada —entre `(*streams).Delete` y su goroutine de
+> lectura—, que aflora al llamar a `Publisher.Close()` sobre una conexión ya muerta. Usa
+> `net.Dial` en crudo: `track()` registra la conexión en cuanto se acepta, así que el
+> handshake RTMP no aporta nada a lo que ese test comprueba. Y pon una pausa en el bucle de
+> dial, o agotarás los puertos efímeros en TIME_WAIT y el test fallará por su propia culpa.
+
+- [x] **Step 1: Escribir el test de `DisconnectPublisher`**
 
 Añade a `internal/rtmpio/ingest_test.go` (paquete interno `rtmpio`; el `recorder` y el
 patrón de montaje ya están en ese archivo, reutilízalos):
@@ -3853,14 +3862,14 @@ func TestCloseStillWorksAfterDisconnectPublisher(t *testing.T) {
 
 `sync` ya está entre los imports del archivo; comprueba que `net` y `context` también.
 
-- [ ] **Step 2: Implementar `DisconnectPublisher`**
+- [x] **Step 2: Implementar `DisconnectPublisher`**
 
 `Ingest` ya lleva un mapa de conexiones activas desde la fase 2 —se añadió porque
 `rtmp.Server.Close()` de go-rtmp v0.0.7 solo cierra el listener y no rastrea las conexiones
 aceptadas—. `DisconnectPublisher` cierra esas conexiones y vacía el mapa, **sin** tocar el
 listener ni el `rtmp.Server`. Reutiliza el mismo mutex; no añadas otro.
 
-- [ ] **Step 3: Los endpoints de ingesta**
+- [x] **Step 3: Los endpoints de ingesta**
 
 `GET /api/ingest` devuelve `ingestDTO` con la URL de ingesta, la app y la máscara de la
 clave. La URL se compone de la dirección RTMP configurada y la app; **la clave no va en la
@@ -4098,7 +4107,7 @@ func TestRotateKeyWithoutAnIngestConfigured(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: `GET /api/status` y `GET /api/events`**
+- [x] **Step 4: `GET /api/status` y `GET /api/events`**
 
 `status` compone: `ingestDTO` desde settings; `sessionDTO` desde
 `engine.SessionID()` y, si no es 0, `db.SessionByID`; y la lista de `destinationDTO`
@@ -4332,11 +4341,11 @@ func TestEventsRejectsANonNumericLimit(t *testing.T) {
 
 Añade `net/http/httptest` a los imports.
 
-- [ ] **Step 5: Ejecutar los tests y verificar que pasan**
+- [x] **Step 5: Ejecutar los tests y verificar que pasan**
 
 Run: `go test ./... -race -count=1`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/rtmpio/ internal/httpapi/

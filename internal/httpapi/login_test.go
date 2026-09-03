@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
@@ -16,6 +17,28 @@ import (
 // discardLogger está en errors_test.go, del mismo paquete.
 
 const testPassword = "la-contraseña-de-prueba"
+
+// testHash se calcula una sola vez para todo el paquete.
+//
+// argon2id está deliberadamente afinado para ser lento, y hashearlo en cada test hacía que
+// el paquete tardara más de un minuto. El coste no prueba nada aquí: lo que se verifica es
+// el flujo de la API, y crypto ya tiene sus propios tests del hash.
+var (
+	testHashOnce sync.Once
+	testHashVal  string
+)
+
+func hashDePrueba(t *testing.T) string {
+	t.Helper()
+	testHashOnce.Do(func() {
+		h, err := crypto.HashPassword(testPassword)
+		if err != nil {
+			panic("HashPassword: " + err.Error())
+		}
+		testHashVal = h
+	})
+	return testHashVal
+}
 
 // newTestServer levanta un Server contra una base temporal, con la contraseña ya fijada.
 func newTestServer(t *testing.T) (*Server, *store.DB) {
@@ -36,11 +59,7 @@ func newTestServer(t *testing.T) (*Server, *store.DB) {
 	if err := db.Bootstrap(ctx, cipher); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	hash, err := crypto.HashPassword(testPassword)
-	if err != nil {
-		t.Fatalf("HashPassword: %v", err)
-	}
-	if err := db.SetPasswordHash(ctx, hash); err != nil {
+	if err := db.SetPasswordHash(ctx, hashDePrueba(t)); err != nil {
 		t.Fatalf("SetPasswordHash: %v", err)
 	}
 
