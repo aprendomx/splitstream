@@ -1,10 +1,16 @@
 name: CI
 
+# En push a CUALQUIER rama, no solo a main.
+#
+# Con el trigger anterior —push solo en main, más pull_request— una rama de trabajo sin PR
+# abierto no ejecutaba nada. Eso mordió dos veces en la fase 4: al fusionar el PR enseguida,
+# los commits siguientes se quedaron sin verificar y la CI parecía verde porque `gh pr
+# checks` seguía enseñando el run del PR ya cerrado.
+#
+# No hace falta el trigger de pull_request: los PR de este mismo repo ya quedan cubiertos
+# por el push de su rama, y añadirlo solo duplicaría las corridas.
 on:
   push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
 
 # Una corrida por rama: un push encima del anterior cancela el que ya no interesa.
 concurrency:
