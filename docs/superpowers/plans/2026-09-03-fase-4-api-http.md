@@ -4870,27 +4870,30 @@ git commit -m "feat: el binario sirve la API HTTP junto al servidor RTMP"
 
 ## Definición de terminado, fase 4
 
-- [ ] `go test ./... -race -count=1` pasa entero.
-- [ ] `go vet ./...` limpio.
-- [ ] `CGO_ENABLED=0 go build ./cmd/splitstream` produce el binario.
-- [ ] `go.mod` tiene exactamente **cinco** directas, las del spec §5, y `go 1.25.0`.
-- [ ] `go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'` sigue vacío.
+> Verificada entera el 2026-09-03 sobre la rama `feat/fase-4-api-http`. Las evidencias,
+> punto por punto, están en el ledger: `docs/superpowers/plans/2026-09-03-fase-4-ledger.md`.
+
+- [x] `go test ./... -race -count=1` pasa entero.
+- [x] `go vet ./...` limpio.
+- [x] `CGO_ENABLED=0 go build ./cmd/splitstream` produce el binario.
+- [x] `go.mod` tiene exactamente **cinco** directas, las del spec §5, y `go 1.25.0`.
+- [x] `go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'` sigue vacío.
 - [x] `go list -deps ./internal/httpapi | grep go-rtmp` vacío. *(Verificado por la CI
       desde la Task 5.)*
-- [ ] `make sinks-up && make test-integration` sigue pasando los tres tests.
-- [ ] La CI (los dos jobs) está verde.
-- [ ] Los catorce endpoints del spec §9 existen, responden y están cubiertos por tests.
-- [ ] Ninguno de los catorce, salvo `GET /api/destinations/:id/key` y la respuesta de
+- [x] `make sinks-up && make test-integration` sigue pasando los tres tests.
+- [x] La CI (los dos jobs) está verde.
+- [x] Los catorce endpoints del spec §9 existen, responden y están cubiertos por tests.
+- [x] Ninguno de los catorce, salvo `GET /api/destinations/:id/key` y la respuesta de
       `POST /api/ingest/rotate-key`, devuelve una clave en claro. Verificado por un test que
       recorre los cuerpos, no por lectura.
-- [ ] Sin cookie de sesión válida, los doce endpoints protegidos responden 401.
-- [ ] El WebSocket empuja `statusDTO` cada segundo y su JSON tiene las mismas claves que
+- [x] Sin cookie de sesión válida, los doce endpoints protegidos responden 401.
+- [x] El WebSocket empuja `statusDTO` cada segundo y su JSON tiene las mismas claves que
       `GET /api/status`.
-- [ ] Cerrar el cliente del WebSocket no deja goroutines vivas.
-- [ ] `splitstream -setpassword` fija una contraseña verificable y no la imprime.
-- [ ] Revelar una clave por la API deja siempre un evento `key_revealed`.
-- [ ] El orden de `GET /api/events` es el cronológico, con eventos del mismo segundo.
-- [ ] El apagado con SIGTERM sigue cerrando la sesión de ingesta con `ended_at` no nulo.
+- [x] Cerrar el cliente del WebSocket no deja goroutines vivas.
+- [x] `splitstream -setpassword` fija una contraseña verificable y no la imprime.
+- [x] Revelar una clave por la API deja siempre un evento `key_revealed`.
+- [x] El orden de `GET /api/events` es el cronológico, con eventos del mismo segundo.
+- [x] El apagado con SIGTERM sigue cerrando la sesión de ingesta con `ended_at` no nulo.
 
 ## Notas para la fase 5
 

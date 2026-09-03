@@ -10,17 +10,19 @@ CPU es despreciable y el de subida es `bitrate × número de destinos`.
 
 ## Estado
 
-**Fase 3 de 6 completa.** El motor funciona de punta a punta: OBS publica en `:1935`,
-el hub reparte a todos los destinos habilitados a la vez, cada uno con su cola acotada,
-su reancle de timestamps y su reconexión con backoff. Falta la API HTTP, el WebSocket de
-métricas y el panel web; hoy los destinos solo se pueden dar de alta por la base de datos.
+**Fase 4 de 6 completa.** El motor funciona de punta a punta —OBS publica en `:1935` y el
+hub reparte a todos los destinos habilitados a la vez, cada uno con su cola acotada, su
+reancle de timestamps y su reconexión con backoff— y ya se maneja por HTTP: alta y edición
+de destinos, rotación de la clave de ingesta, estado en vivo y un WebSocket que lo empuja
+cada segundo. Falta el panel web; de momento la API se usa con `curl` o con cualquier
+cliente REST.
 
 | Fase | Contenido | Estado |
 | --- | --- | --- |
 | 1 | Config, cifrado, SQLite con migraciones, modelo de datos | ✅ |
 | 2 | Ingesta RTMP, hub y un destino de punta a punta (RTMP y RTMPS) | ✅ |
 | 3 | N destinos, cola con descarte por GOP, reconexión, métricas | ✅ |
-| 4 | API HTTP completa + WebSocket | pendiente |
+| 4 | API HTTP completa + WebSocket | ✅ |
 | 5 | Frontend Quasar | pendiente |
 | 6 | Docker, systemd, documentación de operación | pendiente |
 

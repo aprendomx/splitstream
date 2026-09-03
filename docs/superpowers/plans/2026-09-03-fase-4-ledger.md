@@ -1,0 +1,156 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-09-03-fase-4-api-http.md
+
+Spec: docs/superpowers/specs/2026-09-01-rtmp-relay-design.md (autoridad vinculante)
+Rama: feat/fase-4-api-http (desde main, en `a4b8007`)
+Ejecución: 2026-09-03, inline (sin subagentes, por instrucción del usuario)
+
+Este ledger sí se escribe durante la ejecución, no a posteriori como el de la fase 3.
+
+## Decisiones previas
+
+Tres las decidió el usuario antes de escribir el plan; las otras dos salieron de leer el
+código.
+
+1. **La primera contraseña se fija con `-setpassword` por stdin.** Frente a un setup en el
+   primer arranque desde la interfaz, que dejaría una ventana en la que quien llegue
+   primero al panel se lo queda; y frente a una variable de entorno, que acabaría en el
+   unit de systemd y en el historial del shell.
+2. **Sesión en cookie HMAC sin estado.** Sobrevive a los reinicios: reiniciar el servicio
+   no debe echarte del panel a mitad de transmisión. El precio es que no se puede revocar
+   una sesión suelta — revocar es rotar la master key.
+3. **DTOs en la capa HTTP, sin tags `json` en el motor** (§15.2).
+4. **Los cambios de destino se aplican en caliente si hay sesión viva.** Si no, el toggle
+   de la interfaz mentiría durante todo el directo.
+5. **Revelar y auditar dejan de ser dos cosas.** `DestinationKeyForRelay` para el motor,
+   `RevealDestinationKey` —auditado en su propia transacción— para la API.
+
+## Progreso
+
+**Task 1** (`f95f3a5`): complete. Rojo comprobado antes de arreglar: con el formato viejo,
+tres eventos escritos en orden salían `[evento-2, evento-3, evento-1]`. El test de la
+migración la ejerce por el camino de producción —retrasa `user_version` y reabre la base—
+sin tocar nada privado. Desviación: el plan ponía los tests en `package store_test`, pero
+`formatTime` es privada y probarlo desde fuera solo daría una comprobación probabilística;
+se añadió un test interno, justificado en su comentario.
+
+**Task 2** (`58faa8d`): complete, con **dos desviaciones**.
+- El plan proponía `fmt.Errorf("%w: destino", ErrNotFound)`, que produce `"no encontrado:
+  destino"` — y ese texto va tal cual al cliente en `writeStoreError`. Se usa un tipo
+  `classified` que separa mensaje y clase.
+- Al reescribir los errores de `validateRTMPURL` como errores nuevos se rompió la cadena
+  hacia `ErrInvalidDestinationURL` y **cinco tests de la fase 1 se pusieron rojos**. El
+  arreglo es seguir envolviendo el centinela concreto. Lo cazaron los tests, no yo.
+- Hallazgo menor: las validaciones de nombre y plataforma YA existían con errores pelados,
+  y `Platform.Valid()` ya estaba escrito. El plan proponía duplicar ese switch; se reutilizó
+  y se corrigió el plan.
+
+**Task 3** (`af2a7fb`): complete. El obstáculo real era que auditar siempre habría escrito
+un evento por destino en cada arranque de transmisión, ahogando la auditoría en ruido justo
+cuando importa. Se separan los dos usos por el nombre.
+
+**Task 4** (`da910be`): complete. **La prueba a mano destapó lo que los tests no veían**: el
+paquete `flag` interpreta las comillas invertidas del texto de ayuda como el nombre del
+operando, y `-h` salía como `-setpassword read -rs PW && printf ...`. Desviación: el plan
+citaba un helper `testKeyB64()` que no existe en ese paquete; se usó `generateMasterKey()`,
+que es lo que usa el test que ya estaba.
+
+**Task 5** (`96019d3`): complete. `crypto/hkdf` está en la stdlib desde Go 1.24, así que la
+derivación no añade dependencias — verificado con `go doc` antes de escribir el código. Se
+añadió a la CI la aserción simétrica: `internal/httpapi` no conoce `go-rtmp`.
+
+**Task 6** (`081c248`): complete. Hallazgo al ejecutar: `go get golang.org/x/time` la añade
+como **indirecta**, porque en ese momento nadie la importa; como `go mod tidy` está
+prohibido en este repo, hay que moverla al bloque de directas a mano.
+
+**Task 7** (`306f718`): complete. El test por reflexión es lo que sostiene la decisión
+§15.2, así que **se comprobó en rojo y en verde**: añadir un campo a `relay.Metrics` lo pone
+rojo con el mensaje que explica qué decidir; restaurado, verde. Sin esa comprobación el
+guardián podría estar de adorno.
+
+**Task 8** (`7289388` refactor + `2574eb1` endpoints): complete, en dos commits a propósito
+para que `git bisect` pueda distinguirlos. El refactor se verificó con la suite entera Y con
+los tres tests de integración, porque toca el camino de producción. **Un test del plan
+estaba mal y el código tenía razón**: esperaba 400 de `GET /api/destinations/abc`, pero el
+spec §9 no define un GET de un destino individual, así que 405 es correcto.
+
+**Task 9** (`43ab14f`): complete, con un incidente que merece registro.
+- El test de concurrencia de `DisconnectPublisher` **se colgaba** al usar `Publisher`
+  completos. Es la carrera del CLIENTE de go-rtmp que el ledger de la fase 2 dejó
+  avisada —entre `(*streams).Delete` y su goroutine de lectura—, que aflora al llamar a
+  `Publisher.Close()` sobre una conexión ya muerta. Es un bug de la librería, no nuestro, y
+  provocarlo solo lograría que la CI se cuelgue diez minutos sin decir nada útil. Se
+  reescribió con `net.Dial` en crudo, que es lo que de verdad ejercita nuestro registro de
+  conexiones, más un plazo duro para que un bloqueo FALLE en vez de colgar.
+- Segundo tropiezo propio: el bucle de dial sin pausa agotó los puertos efímeros en
+  TIME_WAIT y el test falló por su propia culpa. Con pausa, 4/4 estable.
+- De paso, el hash argon2id de los tests se calcula una vez para todo el paquete: por test
+  subía la corrida a 70 s sin probar nada que `internal/crypto` no pruebe ya.
+
+**Task 10** (`87e22b4`): complete. Los dos tests de goroutines se repitieron 3 veces
+seguidas antes de dar por buena la estabilidad. Con esta task `go.mod` queda con las cinco
+directas exactas del spec §5 y desaparece el último `notImplemented`.
+
+**Task 11** (`7aaac81`): complete. El apagado cierra el HTTP **primero** y la ingesta
+después: al revés, podría entrar una petición que toque la base justo mientras se cierra la
+sesión.
+
+## Incidente de proceso: la CI que no cubría nada
+
+Dos veces durante esta fase el PR se fusionó a los pocos minutos de abrirse, antes de que
+llegaran los commits siguientes. Con el trigger original —`push` solo en `main`, más
+`pull_request`— una rama sin PR abierto **no ejecutaba nada**, y `gh pr checks` seguía
+mostrando el run del PR ya cerrado. El resultado es que llegué a informar «CI verde» sobre
+las tasks 2 a 5 cuando lo verde era un run anterior a ellas.
+
+Arreglado en `a77fabf`: la CI corre en push a cualquier rama, y el trigger de
+`pull_request` se quita porque los PR de este repo ya quedan cubiertos por el push de su
+rama. Lección para las fases siguientes: **verificar el `headSha` del run**, no fiarse de
+`gh pr checks`.
+
+## Verificación de la definición de terminado
+
+Ejecutada el 2026-09-03 sobre la rama. Los diecisiete puntos:
+
+1–3. `go test ./... -race -count=1` en verde los nueve paquetes; `go vet` limpio;
+`CGO_ENABLED=0 go build` exit 0.
+4. `go.mod`: cinco directas —`coder/websocket v1.8.15`, `go-rtmp v0.0.7`, `x/crypto
+v0.55.0`, `x/time v0.15.0`, `modernc.org/sqlite v1.57.0`— y `go 1.25.0`.
+5–6. `go list -deps` de `internal/relay` y de `internal/httpapi`: vacíos. La CI los vigila.
+7. `make test-integration`: los tres tests contra `mediamtx` en verde (12,36 s / 8,74 s /
+8,55 s).
+8. CI verde en los dos jobs, verificada contra el `headSha` de cada commit.
+9. Los catorce endpoints registrados, contados sobre `routes()` y comparados con el spec §9.
+10–11. Cubierto por tests que recorren el cuerpo crudo y por
+`TestProtectedEndpointsNeedASession`, que exige 401 en los doce protegidos.
+12–13. `TestWebSocketPayloadMatchesTheRESTSnapshot` compara las claves de los dos JSON;
+`TestWebSocketStopsWhenTheClientGoesAway` y `TestWebSocketSurvivesASlowClient` cuentan
+goroutines.
+14–16. Cubiertos por los tests de `cmd/splitstream` y de `internal/httpapi`.
+17. **Probado a mano contra el binario**, que es lo único que prueba de verdad el apagado:
+login → rotación para obtener la clave real → `ffmpeg` publicando → `GET /api/status`
+devuelve `live=true, id=1` → `SIGTERM` → exit 0, `ended_at` no nulo
+(`17:25:15.826319000Z`) y el evento `publisher_disconnected` persistido. De paso confirma la
+Task 1 en producción: nueve dígitos fijos de fracción.
+
+## Veredicto
+
+**Fase 4 terminada** según su definición de terminado, verificada por ejecución. Con ella
+queda **saldada entera la deuda del spec §15**: §15.1 y §15.6 en la fase 2, §15.7 en la 3, y
+§15.2, §15.3, §15.4, §15.5 y §15.8 en esta.
+
+## Lo que queda abierto
+
+- **Nada se ha probado todavía contra una plataforma real** (YouTube, Twitch, Facebook).
+  Sigue siendo el riesgo del spec §14 que la fase 3 dejó abierto, y no se cierra con tests
+  locales: hace falta una clave real.
+- **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez durante una
+  corrida de `go test ./...` y no reproducido en 19 intentos posteriores (16 del paquete
+  aislado, 3 de la suite entera, cinco con los núcleos saturados). El log mostraba un
+  reintento de sink de ~1 s y los `waitFor` de ese paquete tienen un plazo de 3 s, así que
+  la hipótesis es un test sensible al tiempo bajo carga. No se ha tocado: cambiar un plazo
+  sin reproducir el fallo es taparlo.
+- **`gofmt` preexistente**: `internal/flv/sps.go` e `internal/crypto/password_test.go` no
+  están formateados desde `d4bdf6c` (fase 3), y la CI no lo comprueba. Añadir `gofmt -l` al
+  job rápido sería una línea.
+- **Los timestamps del JSON no son de ancho fijo**, aunque los de la base sí. `time.Time`
+  se serializa con `RFC3339Nano`. El frontend debe parsear a `Date`, no comparar cadenas.
