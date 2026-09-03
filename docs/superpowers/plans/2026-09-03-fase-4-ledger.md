@@ -246,11 +246,60 @@ solo cubría el caso de "nunca llega a transmitir".
 Medido: 13 conexiones en 12 s con el fallo, 4 o 5 con el arreglo. Treinta veces menos
 streams creados por minuto contra la plataforma.
 
+## La causa raíz: `releaseStream`/`FCPublish` (2026-09-03)
+
+Twitch fallaba igual que Facebook: aceptaba `connect`, `createStream` y `publish`, y cortaba
+en cuanto empezábamos a escribir. El log señalaba `sendPreamble` → `WriteAudio` → *broken
+pipe*, que es el síntoma que el ledger de la fase 2 predijo para un rechazo de plataforma:
+`Publish` es fire-and-forget, así que el rechazo no llega como error sino como escritura
+rota una o dos operaciones después.
+
+**El experimento que lo decidió:** publicar con `ffmpeg` DIRECTAMENTE a Twitch con la misma
+clave. ffmpeg aguantó 45 s. Luego la clave y el canal estaban bien, y el problema era
+nuestro. Sin ese experimento habríamos seguido culpando a la plataforma.
+
+**La causa.** FMLE —el cliente que las plataformas esperan— manda `releaseStream` y
+`FCPublish` sobre el stream 0 y ANTES de `createStream`. Nosotros solo podíamos mandarlos
+sobre el stream ya creado y con `TransactionID: 0`, porque go-rtmp v0.0.7 no expone su
+stream de control: es interno (`cc.conn.streams.At(ControlStreamID)`) y el único `Stream`
+que su API pública devuelve es el de `CreateStream`. Es exactamente el riesgo que el spec
+§14 anotó al empezar la fase 2.
+
+**El arreglo:** no mandarlos. Medido contra las plataformas reales — Twitch pasa de cortar
+siempre a transmitir sin un solo descarte, y YouTube funciona igual de las dos formas.
+`FCUnpublish` se mantiene porque va al cerrar, cuando la conexión se tira igualmente.
+
+### Todo encadenaba a esta causa
+
+El desastre de Facebook fue una consecuencia, no un problema aparte:
+
+1. `releaseStream`/`FCPublish` en el stream equivocado → la plataforma rechaza el publish.
+2. El rechazo aflora como *broken pipe* una o dos escrituras después, no como error.
+3. El sink había escrito algo, así que daba la conexión por buena y **reiniciaba el
+   backoff** → una reconexión por segundo.
+4. Facebook contaba cada una como stream activo → cupo agotado y cuenta bloqueada.
+
+Los cuatro eslabones eran defectos reales y cada uno se arregló por separado, pero solo el
+primero era la causa.
+
+### Resultado final
+
+Con los tres arreglos y el binario definitivo, **las tres plataformas a la vez**:
+
+| Destino | Estado | Bitrate | Descartes | Reconexiones |
+| --- | --- | --- | --- | --- |
+| YouTube (RTMP) | live | 3696 kbps | 0 | 0 |
+| Facebook (RTMPS) | live | 3696 kbps | 0 | 0 |
+| Twitch (RTMP) | live | 3696 kbps | 0 | 0 |
+
+78,6 MB por destino, tres minutos, **cero errores y cero avisos** en el log desde el
+arranque de la sesión. El riesgo del spec §14 queda cerrado: no era una falsa alarma, era
+real, y está resuelto.
+
 ## Lo que queda abierto
 
-- **YouTube (RTMP) y Facebook (RTMPS): el handshake funciona en ambos.** Falta Twitch, y
-  falta volver a probar Facebook de punta a punta cuando su cupo de streams se libere: el
-  bucle de reintentos lo agotó antes de poder confirmar una emisión sostenida.
+- **Las tres plataformas probadas y funcionando** (ver arriba). Queda por probar la ruta
+  RTMPS de YouTube y Twitch, aunque Facebook ya valida esa ruta.
 
 - **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez durante una
   corrida de `go test ./...` y no reproducido en 19 intentos posteriores (16 del paquete

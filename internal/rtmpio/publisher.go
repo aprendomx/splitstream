@@ -277,11 +277,25 @@ func (p *Publisher) Connect(ctx context.Context) error {
 	// Algunas plataformas exigen releaseStream y FCPublish antes de publish. go-rtmp no
 	// tiene helper para ellos, pero Stream.Write acepta un CommandMessage (spec §16).
 	// Un rechazo aquí no es fatal: los destinos que no los esperan simplemente los ignoran.
-	for _, cmd := range []string{"releaseStream", "FCPublish"} {
-		if err := p.writeCommand(stream, cmd); err != nil {
-			p.log.Debug("el destino no aceptó el comando previo", "comando", cmd, "err", err)
-		}
-	}
+	// NO se mandan releaseStream ni FCPublish. Esto contradice lo que el spike del spec
+	// §16 supuso, y la razón es una prueba contra plataformas reales.
+	//
+	// FMLE —el cliente que las plataformas esperan— los manda sobre el stream 0 y ANTES de
+	// createStream. Nosotros solo podíamos mandarlos sobre el stream ya creado y con
+	// TransactionID 0, porque go-rtmp v0.0.7 no expone su stream de control: es interno
+	// (cc.conn.streams.At(ControlStreamID)) y el único Stream que su API pública devuelve
+	// es el de CreateStream. El spec §14 anotó ese riesgo desde el principio.
+	//
+	// Medido el 2026-09-03 contra las plataformas de verdad:
+	//   - Twitch aceptaba connect, createStream y publish, y CORTABA en cuanto empezábamos
+	//     a escribir. Con estos dos comandos fuera, transmite sin un solo descarte ni una
+	//     reconexión. Se aisló publicando con ffmpeg directamente a Twitch con la misma
+	//     clave: ffmpeg aguantaba, nosotros no, así que el problema era nuestro.
+	//   - YouTube funciona igual con ellos que sin ellos.
+	//
+	// Si algún día aparece una plataforma que SÍ los exija, mandarlos bien requiere que
+	// go-rtmp exponga el stream de control, o escribirlos a más bajo nivel. Mandarlos mal
+	// no es una aproximación: rompe Twitch.
 
 	if err := stream.Publish(&message.NetStreamPublish{
 		PublishingName: p.key.Reveal(),
@@ -384,6 +398,11 @@ func (p *Publisher) Close() error {
 		// FCUnpublish antes de deleteStream: es lo que espera el cierre ordenado del
 		// spec §6.5, y varias plataformas lo usan para liberar el slot de emisión sin
 		// esperar al timeout. Que falle no es motivo para no seguir cerrando.
+		// FCUnpublish SÍ se sigue mandando, a diferencia de releaseStream y FCPublish,
+		// que se quitaron por romper Twitch. La diferencia es cuándo: este va al CERRAR,
+		// cuando la conexión se va a tirar de todas formas, así que si la plataforma no
+		// le gusta lo que ve, lo peor que puede hacer es cortar — que es justo lo que
+		// estamos pidiendo.
 		if err := p.writeCommand(stream, "FCUnpublish"); err != nil {
 			p.log.Debug("FCUnpublish falló al cerrar", "err", err)
 		}
