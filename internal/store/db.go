@@ -124,6 +124,22 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if m.version <= current {
 			continue
 		}
+		// Las claves ajenas se apagan MIENTRAS se migra, y solo mientras.
+		//
+		// El procedimiento que SQLite prescribe para cambiar una tabla —crear la nueva,
+		// copiar, DROP de la vieja, renombrar— es incompatible con ellas activas: un
+		// DROP TABLE ejecuta un borrado implícito que dispara las acciones referenciales,
+		// así que el ON DELETE SET NULL de events convertiría en NULL el destination_id de
+		// todo el historial. Le pasó a la migración 0003, que reconstruye destinations
+		// creyendo que este binario nunca activa las claves. Sí las activa: vienen en el
+		// DSN de Open.
+		//
+		// El PRAGMA va FUERA de la transacción a propósito: dentro de una, SQLite lo
+		// ignora en silencio. Y va dentro del bucle, no antes, para que cada migración lo
+		// fije sobre la conexión que va a usar.
+		if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			return fmt.Errorf("migración %d: apagar las claves ajenas: %w", m.version, err)
+		}
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("migración %d: begin: %w", m.version, err)
@@ -141,6 +157,13 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("migración %d: commit: %w", m.version, err)
 		}
+	}
+
+	// Volver a encenderlas no es opcional: todo lo que el programa hace después cuenta con
+	// ellas. Si una migración falla y se sale antes, la conexión se cierra con la base y la
+	// siguiente apertura las trae puestas desde el DSN.
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		return fmt.Errorf("volver a activar las claves ajenas: %w", err)
 	}
 	return nil
 }
