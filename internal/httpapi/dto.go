@@ -47,13 +47,21 @@ func newMetricsDTO(m relay.Metrics) metricsDTO {
 }
 
 type destinationDTO struct {
-	ID        int64       `json:"id"`
-	Name      string      `json:"name"`
-	Platform  string      `json:"platform"`
-	RTMPURL   string      `json:"rtmp_url"`
-	KeyMask   string      `json:"key_mask"`
-	Enabled   bool        `json:"enabled"`
-	SortOrder int         `json:"sort_order"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Platform  string `json:"platform"`
+	RTMPURL   string `json:"rtmp_url"`
+	KeyMask   string `json:"key_mask"`
+	Enabled   bool   `json:"enabled"`
+	SortOrder int    `json:"sort_order"`
+	// LogoETag identifica la versión del logo del canal; vacío significa que no tiene.
+	// Con él, el panel decide si pinta un avatar y construye una URL que cambia cuando la
+	// imagen cambia, para que la caché del navegador no sirva la anterior.
+	//
+	// Va en este DTO —y por tanto también en el push del WebSocket, que empuja este mismo
+	// tipo cada segundo— porque el spec §10 exige que el snapshot REST y el push tengan la
+	// misma forma. Por eso el etag son 16 caracteres y no 64.
+	LogoETag  string      `json:"logo_etag"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
 	Metrics   *metricsDTO `json:"metrics"`
@@ -65,11 +73,12 @@ type destinationDTO struct {
 //
 // La clave NO aparece, ni cifrada ni en claro: solo la máscara que el store ya guarda
 // desnormalizada (spec §8).
-func newDestinationDTO(d store.Destination, m *relay.Metrics) destinationDTO {
+func newDestinationDTO(d store.Destination, m *relay.Metrics, logoETag string) destinationDTO {
 	dto := destinationDTO{
 		ID: d.ID, Name: d.Name, Platform: string(d.Platform),
 		RTMPURL: d.RTMPURL, KeyMask: d.KeyMask, Enabled: d.Enabled,
 		SortOrder: d.SortOrder, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+		LogoETag: logoETag,
 	}
 	if m != nil {
 		x := newMetricsDTO(*m)

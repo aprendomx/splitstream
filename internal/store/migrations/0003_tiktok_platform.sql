@@ -4,9 +4,17 @@
 -- la nueva, copiar, tirar la vieja y renombrar. Es el procedimiento que la propia
 -- documentación de SQLite prescribe para este caso.
 --
--- Es seguro hacerlo sin desactivar las claves ajenas porque este binario nunca las activa
--- (PRAGMA foreign_keys queda en 0), así que el DROP no dispara ninguna comprobación. Si
--- algún día se activan, esta migración habría que revisarla.
+-- ATENCIÓN, esta premisa era FALSA (corregido el 2026-09-04): decía que era seguro no
+-- desactivar las claves ajenas porque el binario nunca las activa. Sí las activa,
+-- foreign_keys(1) está en el DSN de Open desde la fase 1. Con ellas puestas, el DROP TABLE
+-- de abajo ejecuta un borrado implícito que dispara el ON DELETE SET NULL de events, y a
+-- quien actualizara desde una base anterior le dejó todo el historial de eventos sin
+-- destino. Ese daño ya está hecho y no se puede deshacer.
+--
+-- Ahora migrate() apaga las claves ajenas mientras aplica cada migración y las vuelve a
+-- encender al terminar, que es el procedimiento que prescribe SQLite. Si copias este
+-- archivo como plantilla para reconstruir otra tabla, la protección viene de ahí, no de
+-- este archivo.
 --
 -- El INSERT nombra las columnas en vez de usar SELECT *: si alguien añade una columna en
 -- una migración futura y copia este archivo como plantilla, un SELECT * la desalinearía en

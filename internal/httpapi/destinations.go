@@ -73,17 +73,27 @@ type destinationPatch struct {
 }
 
 func (s *Server) handleListDestinations(w http.ResponseWriter, r *http.Request) {
+	s.escribirListaDestinos(w, r)
+}
+
+// escribirListaDestinos responde con el listado completo. Lo comparten el GET del listado y
+// el interruptor maestro, que devuelve el estado resultante para que el panel no tenga que
+// pedirlo en una segunda petición.
+func (s *Server) escribirListaDestinos(w http.ResponseWriter, r *http.Request) {
 	dests, err := s.db.ListDestinations(r.Context())
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
 
+	// Los etags de los logos se piden una vez para toda la lista, no uno por destino.
+	etags := s.logoETags(r.Context())
+
 	// Slice no nil para que el JSON sea [] y no null: un null obligaría al frontend a
 	// comprobarlo antes de iterar.
 	out := make([]destinationDTO, 0, len(dests))
 	for _, d := range dests {
-		out = append(out, newDestinationDTO(d, s.metricsFor(d.ID)))
+		out = append(out, newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -109,7 +119,7 @@ func (s *Server) handleCreateDestination(w http.ResponseWriter, r *http.Request)
 	s.applyHot(r, *d)
 
 	w.Header().Set("Location", "/api/destinations/"+strconv.FormatInt(d.ID, 10))
-	writeJSON(w, http.StatusCreated, newDestinationDTO(*d, s.metricsFor(d.ID)))
+	writeJSON(w, http.StatusCreated, newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID)))
 }
 
 func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +150,7 @@ func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.applyHot(r, *d)
-	writeJSON(w, http.StatusOK, newDestinationDTO(*d, s.metricsFor(d.ID)))
+	writeJSON(w, http.StatusOK, newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID)))
 }
 
 func (s *Server) handleDeleteDestination(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +204,7 @@ func (s *Server) handleToggleDestination(w http.ResponseWriter, r *http.Request)
 	}
 
 	s.applyHot(r, *d)
-	writeJSON(w, http.StatusOK, newDestinationDTO(*d, s.metricsFor(d.ID)))
+	writeJSON(w, http.StatusOK, newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID)))
 }
 
 type reorderRequest struct {

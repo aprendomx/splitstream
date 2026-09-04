@@ -91,7 +91,7 @@ func TestDestinationDTONeverCarriesThePlainKey(t *testing.T) {
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 
-	blob, err := json.Marshal(newDestinationDTO(d, nil))
+	blob, err := json.Marshal(newDestinationDTO(d, nil, ""))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestDestinationDTONeverCarriesThePlainKey(t *testing.T) {
 func TestDestinationDTOMetricsAreNilWhenNotStreaming(t *testing.T) {
 	d := store.Destination{ID: 1, Name: "yt", Platform: store.PlatformCustom}
 
-	blob, err := json.Marshal(newDestinationDTO(d, nil))
+	blob, err := json.Marshal(newDestinationDTO(d, nil, ""))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestDestinationDTOMetricsAreNilWhenNotStreaming(t *testing.T) {
 
 	// Y con métricas, no es null.
 	m := relay.Metrics{State: "live", BytesSent: 10}
-	blob, err = json.Marshal(newDestinationDTO(d, &m))
+	blob, err = json.Marshal(newDestinationDTO(d, &m, ""))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

@@ -204,13 +204,33 @@ func TestHubSlowSinkDoesNotBlockOthers(t *testing.T) {
 		t.Fatal("Publish se bloqueó por culpa del destino lento")
 	}
 
-	// Plazo largo a propósito. Lo que se afirma es que el destino rápido SIGUE recibiendo
-	// pese al lento, no que lo haga en un tiempo concreto: eso depende de cómo el
-	// planificador reparta las goroutines, y con la máquina cargada —una corrida completa
-	// de la suite, o un runner compartido de CI— tres segundos no bastan. Medido: fallaba
-	// 1 de cada 6 veces con todos los núcleos saturados.
-	waitForDur(t, 20*time.Second, func() bool { return len(fast.snapshot()) > 10 },
-		"el destino rápido siguió recibiendo")
+	// El destino lento sigue atascado: sin esto, el resto del test no probaría nada.
+	if n := len(slow.snapshot()); n != 0 {
+		t.Fatalf("el destino lento escribió %d mensajes; debería estar bloqueado", n)
+	}
+
+	// Aquí NO se cuenta cuántos mensajes de la ráfaga le llegaron al rápido.
+	//
+	// La cola descarta por GOP cuando se acumula retraso, y eso es lo que debe hacer: con
+	// el consumidor sin CPU —dos núcleos, o un runner de CI cargado— la ráfaga entera se
+	// descarta y el sink se reengancha en el siguiente keyframe. Medido: con GOMAXPROCS=2
+	// y -race, `escritos=0 descartes=300` con la cola vacía y el sink en live.
+	//
+	// La versión anterior afirmaba `len(fast.snapshot()) > 10` y se intentó arreglar
+	// subiendo el plazo de 3 a 20 segundos. No era cuestión de tiempo: esperar más no
+	// deshace un descarte. Por eso volvió a fallar en CI a los 20,02 s.
+	//
+	// Lo que sí hay que probar es que el rápido SIGUE VIVO mientras el lento está
+	// atascado. Se espera a que drene y se le manda un keyframe nuevo, que debe llegar.
+	waitForDur(t, 20*time.Second, func() bool { return sFast.Metrics().QueuedMessages == 0 },
+		"el destino rápido drenó su cola")
+
+	antes := len(fast.snapshot())
+	h.Publish(&Message{Kind: KindVideo, Timestamp: 10_000,
+		Payload: []byte{0x17, 0x01}, IsKeyframe: true})
+
+	waitForDur(t, 20*time.Second, func() bool { return len(fast.snapshot()) > antes },
+		"el destino rápido recibió un mensaje nuevo con el lento atascado")
 }
 
 // stuckPublisher se queda dentro de la primera escritura hasta que se le libera: es lo

@@ -43,7 +43,7 @@ func TestOpenCreatesSchema(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	want := []string{"destinations", "events", "sessions", "settings"}
+	want := []string{"destination_logos", "destinations", "events", "sessions", "settings"}
 	if len(got) != len(want) {
 		t.Fatalf("tablas = %v, quería %v", got, want)
 	}

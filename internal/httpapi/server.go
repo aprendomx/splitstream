@@ -158,7 +158,13 @@ func (s *Server) routes() {
 	protegida("DELETE /api/destinations/{id}", s.handleDeleteDestination)
 	protegida("POST /api/destinations/{id}/toggle", s.handleToggleDestination)
 	protegida("POST /api/destinations/reorder", s.handleReorderDestinations)
+	// toggle-all va con nombre fijo, no con {id}: el mux de Go da preferencia al patrón
+	// más específico, así que no compite con PATCH/DELETE /api/destinations/{id}.
+	protegida("POST /api/destinations/toggle-all", s.handleToggleAllDestinations)
 	protegida("GET /api/destinations/{id}/key", s.handleRevealDestinationKey)
+	protegida("PUT /api/destinations/{id}/logo", s.handlePutDestinationLogo)
+	protegida("GET /api/destinations/{id}/logo", s.handleGetDestinationLogo)
+	protegida("DELETE /api/destinations/{id}/logo", s.handleDeleteDestinationLogo)
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
 	protegida("GET /ws", s.handleWS)

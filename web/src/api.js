@@ -53,6 +53,35 @@ async function pedir(metodo, ruta, cuerpo) {
   return datos
 }
 
+// subirArchivo va aparte de pedir() porque un multipart no lleva Content-Type propio: lo
+// pone el navegador con el boundary que él mismo genera. Fijarlo a mano rompe la petición.
+async function subirArchivo(ruta, archivo) {
+  const cuerpo = new FormData()
+  cuerpo.append('file', archivo)
+
+  let res
+  try {
+    res = await fetch(ruta, { method: 'PUT', credentials: 'same-origin', body: cuerpo })
+  } catch {
+    throw new ApiError(0, 'network', 'No se pudo contactar con el servidor')
+  }
+
+  const texto = await res.text()
+  let datos = null
+  if (texto) {
+    try {
+      datos = JSON.parse(texto)
+    } catch {
+      throw new ApiError(res.status, 'internal', 'El servidor devolvió una respuesta ilegible')
+    }
+  }
+  if (!res.ok) {
+    const e = datos?.error
+    throw new ApiError(res.status, e?.code ?? 'internal', e?.message ?? `Error ${res.status}`)
+  }
+  return datos
+}
+
 export const api = {
   // Configuración inicial. Es pública por definición: existe justo cuando todavía no hay
   // contraseña con la que autenticarse.
@@ -76,4 +105,15 @@ export const api = {
   alternarDestino: (id) => pedir('POST', `/api/destinations/${id}/toggle`),
   reordenarDestinos: (ids) => pedir('POST', '/api/destinations/reorder', { ids }),
   revelarClave: (id) => pedir('GET', `/api/destinations/${id}/key`),
+
+  // El interruptor maestro manda el estado deseado, no una orden de invertir: si unos
+  // canales están encendidos y otros no, invertir dejaría la mitad al revés de lo que el
+  // usuario acaba de pulsar.
+  alternarTodos: (enabled) => pedir('POST', '/api/destinations/toggle-all', { enabled }),
+
+  subirLogo: (id, archivo) => subirArchivo(`/api/destinations/${id}/logo`, archivo),
+  quitarLogo: (id) => pedir('DELETE', `/api/destinations/${id}/logo`),
+  // La URL lleva la versión del logo para que al cambiarlo el navegador no siga
+  // enseñando el anterior desde su caché.
+  urlLogo: (d) => `/api/destinations/${d.id}/logo?v=${d.logo_etag}`,
 }
