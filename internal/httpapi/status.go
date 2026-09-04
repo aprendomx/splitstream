@@ -56,9 +56,12 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 	if err != nil {
 		return out, err
 	}
+	// Los etags de los logos se piden UNA vez para toda la lista, no uno por destino: este
+	// estado lo empuja el WebSocket cada segundo.
+	etags := s.logoETags(ctx)
 	out.Destinations = make([]destinationDTO, 0, len(dests))
 	for _, d := range dests {
-		out.Destinations = append(out.Destinations, newDestinationDTO(d, s.metricsFor(d.ID)))
+		out.Destinations = append(out.Destinations, newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID]))
 	}
 	return out, nil
 }
