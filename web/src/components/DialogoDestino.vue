@@ -1,6 +1,6 @@
 <script setup>
-import { iCerrar, iError, iInfo, iOcultar, iVer } from '@/iconos'
-import { ref, computed, watch } from 'vue'
+import { iBorrar, iCerrar, iError, iInfo, iOcultar, iVer } from '@/iconos'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { PLATAFORMAS, porId, pideServidor } from '@/plataformas'
 import { api, ApiError } from '@/api'
 
@@ -20,6 +20,14 @@ const clave = ref('')
 const verClave = ref(false)
 const habilitado = ref(true)
 const guardando = ref(false)
+
+// El logo elegido en el diálogo. Mientras no se guarda vive aquí, porque en el alta el
+// destino todavía no tiene id al que subirlo.
+const logoArchivo = ref(null)
+// URL local para la vista previa. Es un blob: hay que revocarlo o se queda en memoria.
+const logoPrevia = ref(null)
+// Marca de "quitar el que ya tenía", distinta de "no he elegido ninguno nuevo".
+const logoQuitado = ref(false)
 // El error viene del backend, no de una validación duplicada aquí: la API ya devuelve
 // mensajes escritos para personas y es la única fuente de verdad.
 const error = ref(null)
@@ -34,6 +42,9 @@ watch(
     error.value = null
     guardando.value = false
     verClave.value = false
+    soltarPrevia()
+    logoArchivo.value = null
+    logoQuitado.value = false
     if (props.destino) {
       plataforma.value = props.destino.platform
       nombre.value = props.destino.name
@@ -52,6 +63,36 @@ watch(
   },
 )
 
+function soltarPrevia() {
+  if (logoPrevia.value) {
+    URL.revokeObjectURL(logoPrevia.value)
+    logoPrevia.value = null
+  }
+}
+
+onUnmounted(soltarPrevia)
+
+function elegirLogo(archivo) {
+  soltarPrevia()
+  logoArchivo.value = archivo ?? null
+  logoQuitado.value = false
+  if (archivo) logoPrevia.value = URL.createObjectURL(archivo)
+}
+
+function quitarLogo() {
+  soltarPrevia()
+  logoArchivo.value = null
+  logoQuitado.value = true
+}
+
+// Lo que se enseña: la previa de lo recién elegido, o el logo que ya tenía el destino.
+const logoVisible = computed(() => {
+  if (logoPrevia.value) return logoPrevia.value
+  if (logoQuitado.value) return null
+  if (props.destino?.logo_etag) return api.urlLogo(props.destino)
+  return null
+})
+
 function elegir(p) {
   plataforma.value = p.id
   // El nombre se propone, no se impone: es lo que el usuario verá en la lista.
@@ -68,6 +109,7 @@ async function guardar() {
   guardando.value = true
   error.value = null
   try {
+    let id
     if (editando.value) {
       const patch = {
         name: nombre.value,
@@ -79,16 +121,30 @@ async function guardar() {
       // rechazaría con un error sobre un campo que el usuario ni tocó.
       if (clave.value) patch.key = clave.value
       await api.editarDestino(props.destino.id, patch)
+      id = props.destino.id
     } else {
-      await api.crearDestino({
+      const creado = await api.crearDestino({
         name: nombre.value,
         platform: plataforma.value,
         rtmp_url: servidor.value,
         key: clave.value,
         enabled: habilitado.value,
       })
+      id = creado.id
     }
-    emit('guardado')
+
+    // El logo va en una petición aparte porque en el alta el destino no tenía id hasta
+    // ahora mismo. Si falla, el canal QUEDA CREADO y se avisa: deshacer la creación a
+    // espaldas del usuario sería peor que un logo que falta.
+    let avisoLogo = null
+    try {
+      if (logoArchivo.value) await api.subirLogo(id, logoArchivo.value)
+      else if (logoQuitado.value) await api.quitarLogo(id)
+    } catch (e) {
+      avisoLogo = e instanceof ApiError ? e.message : 'No se pudo guardar el logo'
+    }
+
+    emit('guardado', avisoLogo)
     cerrar()
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : 'No se pudo guardar'
@@ -165,6 +221,35 @@ async function guardar() {
           dense
           maxlength="60"
         />
+
+        <div class="row items-center q-gutter-md bloque-logo">
+          <div class="previa-logo">
+            <img v-if="logoVisible" :src="logoVisible" alt="Vista previa del logo" />
+            <q-icon v-else :name="plat?.icono" size="24px" :style="{ color: plat?.color }" />
+          </div>
+          <div class="col column q-gutter-xs">
+            <q-file
+              :model-value="logoArchivo"
+              @update:model-value="elegirLogo"
+              label="Logo"
+              hint="PNG o JPEG. Opcional."
+              accept="image/png,image/jpeg"
+              outlined
+              dense
+              clearable
+              @clear="elegirLogo(null)"
+            />
+          </div>
+          <q-btn
+            v-if="logoVisible"
+            flat
+            dense
+            round
+            :icon="iBorrar"
+            aria-label="Quitar el logo"
+            @click="quitarLogo"
+          />
+        </div>
 
         <q-input
           v-if="necesitaServidor"
@@ -274,6 +359,28 @@ async function guardar() {
   outline: 2px solid var(--q-primary);
   outline-offset: 2px;
 }
+.previa-logo {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.previa-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.bloque-logo {
+  flex-wrap: nowrap;
+}
+
 .tarjeta-plataforma .nombre {
   font-size: 13px;
   text-align: center;

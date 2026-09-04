@@ -2,6 +2,7 @@
 import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar } from '@/iconos'
 import { computed } from 'vue'
 import { porId } from '@/plataformas'
+import { api } from '@/api'
 import { diagnosticar, TONOS, bitrateLegible, bytesLegibles } from '@/diagnostico'
 
 const props = defineProps({
@@ -15,6 +16,7 @@ const diag = computed(() => diagnosticar(props.destino, props.haySesion))
 const tono = computed(() => TONOS[diag.value.tono])
 const m = computed(() => props.destino.metrics)
 const conCifras = computed(() => m.value && props.haySesion && props.destino.enabled)
+const logo = computed(() => (props.destino.logo_etag ? api.urlLogo(props.destino) : null))
 </script>
 
 <template>
@@ -27,7 +29,13 @@ const conCifras = computed(() => m.value && props.haySesion && props.destino.ena
         class="arrastre text-grey-7"
         :aria-label="`Reordenar ${destino.name}`"
       />
-      <q-icon :name="plat.icono" size="22px" :style="{ color: plat.color }" class="q-mr-sm" />
+      <!-- Con logo, la imagen identifica el canal y la plataforma baja a sello: se gana
+           identidad sin perder de vista a qué servicio va. Sin logo, queda el icono. -->
+      <div v-if="logo" class="avatar q-mr-sm">
+        <img :src="logo" :alt="`Logo de ${destino.name}`" />
+        <q-icon :name="plat.icono" size="12px" :style="{ color: plat.color }" class="sello" />
+      </div>
+      <q-icon v-else :name="plat.icono" size="22px" :style="{ color: plat.color }" class="q-mr-sm" />
       <div class="col nombre ellipsis">{{ destino.name }}</div>
       <q-toggle
         :model-value="destino.enabled"
@@ -105,6 +113,32 @@ const conCifras = computed(() => m.value && props.haySesion && props.destino.ena
 .tarjeta-destino.tono-atencion  { border-left-color: var(--q-warning); }
 .tarjeta-destino.tono-fallo     { border-left-color: var(--q-negative); }
 .tarjeta-destino.tono-trabajando{ border-left-color: var(--q-info); }
+
+.avatar {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.avatar img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  display: block;
+  /* El logo lo elige el usuario y puede ser casi blanco o casi negro: el borde tenue lo
+     separa del fondo de la tarjeta en los dos casos. */
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.avatar .sello {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  background: var(--q-dark-page, #1d1d1d);
+  border-radius: 50%;
+  padding: 1px;
+}
 
 .cabecera {
   padding: 8px 8px 4px 4px;

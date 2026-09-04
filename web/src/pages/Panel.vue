@@ -36,6 +36,15 @@ watch(
   { immediate: true, deep: false },
 )
 
+// Estado del interruptor maestro. Tres situaciones, no dos: todos encendidos, ninguno, y
+// mezcla. La mezcla se pinta indeterminada para no mentir sobre lo que hay.
+const todosEncendidos = computed(
+  () => lista.value.length > 0 && lista.value.every((d) => d.enabled),
+)
+const algunoEncendido = computed(() => lista.value.some((d) => d.enabled))
+const maestroMixto = computed(() => algunoEncendido.value && !todosEncendidos.value)
+const alternandoTodos = ref(false)
+
 const tiempoEmitiendo = computed(() => {
   const t = panel.sesion.started_at
   if (!panel.haySesion || !t) return null
@@ -50,9 +59,52 @@ const ahora = ref(Date.now())
 function abrirAlta() { editando.value = null; dialogo.value = true }
 function abrirEdicion(d) { editando.value = d; dialogo.value = true }
 
-async function trasGuardar() {
+async function trasGuardar(avisoLogo) {
   await panel.cargar()
+  // El destino sí se guardó; lo que pudo fallar es el logo, que va en otra petición.
+  if (avisoLogo) {
+    $q.notify({ type: 'warning', message: `Destino guardado, pero el logo no: ${avisoLogo}` })
+    return
+  }
   $q.notify({ type: 'positive', message: 'Destino guardado' })
+}
+
+/**
+ * Interruptor maestro.
+ *
+ * Manda el estado deseado y no una orden de invertir: con unos canales encendidos y otros
+ * no, invertir dejaría la mitad al revés de lo que el usuario acaba de pulsar.
+ *
+ * Apagar mientras se emite corta transmisiones en vivo, así que se confirma diciendo
+ * cuántas. Encender no pide nada: no destruye nada y es lo que se pulsa con prisa.
+ */
+function alternarTodos(encender) {
+  if (!encender && panel.haySesion && algunoEncendido.value) {
+    const cuantos = lista.value.filter((d) => d.enabled).length
+    $q.dialog({
+      title: 'Apagar todos los canales',
+      message:
+        `Estás emitiendo. Se cortarán ${cuantos} ` +
+        (cuantos === 1 ? 'transmisión en curso.' : 'transmisiones en curso.'),
+      cancel: { flat: true, noCaps: true, label: 'Cancelar' },
+      ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Apagar todos' },
+      persistent: true,
+    }).onOk(() => aplicarTodos(false))
+    return
+  }
+  aplicarTodos(encender)
+}
+
+async function aplicarTodos(encender) {
+  alternandoTodos.value = true
+  try {
+    await api.alternarTodos(encender)
+    await panel.cargar()
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  } finally {
+    alternandoTodos.value = false
+  }
 }
 
 async function alternar(d) {
@@ -240,9 +292,25 @@ async function rotarClave() {
       </q-card-section>
     </q-card>
 
-    <div class="row items-center q-mb-sm">
+    <div class="row items-center q-mb-sm q-gutter-sm">
       <div class="text-h6">Canales</div>
       <q-space />
+      <q-toggle
+        v-if="lista.length > 1"
+        :model-value="maestroMixto ? null : todosEncendidos"
+        toggle-indeterminate
+        :indeterminate-value="null"
+        :disable="alternandoTodos"
+        label="Todos"
+        dense
+        class="q-mr-sm"
+        :aria-label="todosEncendidos ? 'Apagar todos los canales' : 'Encender todos los canales'"
+        @update:model-value="alternarTodos(!todosEncendidos)"
+      >
+        <q-tooltip>
+          {{ todosEncendidos ? 'Apagar todos los canales' : 'Pasar la transmisión a todos los canales' }}
+        </q-tooltip>
+      </q-toggle>
       <q-btn unelevated no-caps color="primary" :icon="iMas" label="Vincular canal"
              @click="abrirAlta" />
     </div>
