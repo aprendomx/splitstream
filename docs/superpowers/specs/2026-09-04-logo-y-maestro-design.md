@@ -49,12 +49,18 @@ CREATE TABLE destination_logos (
 );
 ```
 
-`ON DELETE CASCADE` se escribe porque documenta la intención, **pero no se puede confiar en
-él**: este proyecto no activa `PRAGMA foreign_keys`, así que SQLite no lo aplica. Es la
-limitación ya anotada como abierta en el ledger de las fases 5 y 6. Por eso
-`DeleteDestination` borra la fila del logo **explícitamente, dentro de la misma
-transacción** que borra el destino. Un test comprueba justo eso: que tras borrar un canal
-no queda su logo huérfano.
+`ON DELETE CASCADE` **sí se aplica**, y borrar el destino se lleva su logo sin código extra.
+
+Esto corrige una nota equivocada del ledger de las fases 5 y 6, que daba por abierto que
+`PRAGMA foreign_keys` no estaba activo. Sí lo está: viene en el DSN de `Open`
+(`db.go:79`). Comprobado por ejecución sobre el código actual — `PRAGMA foreign_keys`
+devuelve 1, un `ON DELETE CASCADE` sobre `destinations` borra la fila dependiente, y el
+`ON DELETE SET NULL` de `events` pone el `destination_id` a NULL en lugar de dejar un
+huérfano. La observación original venía casi seguro de mirar el archivo con el shell
+`sqlite3`, que trae `foreign_keys` apagado por defecto y no refleja cómo abre el programa.
+
+El test de que borrar un canal se lleva su logo se escribe igual: lo que garantiza es la
+propiedad, no la implementación, y protege de que alguien toque el DSN.
 
 `etag` son los primeros 64 bits del SHA-256 de los bytes ya normalizados, en hexadecimal:
 16 caracteres. Sirve para dos cosas: responder 304 en el `GET`, y romper la caché del
@@ -161,8 +167,8 @@ regla que ya se aplica al borrar un destino.
 **Store**
 
 - Guardar un logo, leerlo y volver a leerlo tras reemplazarlo.
-- Borrar un destino borra su logo: no queda fila huérfana. Es el test que cubre que
-  `PRAGMA foreign_keys` está apagado y por eso el borrado es explícito.
+- Borrar un destino borra su logo: no queda fila huérfana. Cubre el `ON DELETE CASCADE`, y
+  con él que nadie apague `foreign_keys` en el DSN sin enterarse.
 - `ListDestinations` no trae bytes de imagen.
 
 **API**
@@ -186,8 +192,7 @@ regla que ya se aplica al borrar un destino.
 ## 7. Lo que este diseño no resuelve
 
 - **La vista previa** queda para su propio spec, por lo dicho en §1.
-- **`PRAGMA foreign_keys` sigue apagado.** Este diseño convive con ello borrando el logo a
-  mano; no lo arregla. Activarlo es una línea, pero cambia el comportamiento de borrado de
-  todo el esquema y merece su propio cambio con sus propios tests.
+- **Nada sobre `PRAGMA foreign_keys`**: resultó estar activo ya, así que no hay nada que
+  arreglar. Lo que sí queda es corregir la nota del ledger que decía lo contrario.
 - **No hay recorte ni encuadre.** Se sube una imagen y se reduce; si viene muy apaisada,
   se verá apaisada dentro del avatar. Recortar es una interfaz entera y nadie la ha pedido.

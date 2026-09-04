@@ -166,9 +166,14 @@ en `relay`. Dos problemas distintos que se parecían por ser intermitentes.
 
 ## Lo que queda abierto
 
-- **`ON DELETE SET NULL` no se aplica**, porque nadie activa `PRAGMA foreign_keys`.
-  Comprobado por ejecución: tras borrar un destino, sus eventos quedan apuntando a una fila
-  que ya no existe. Una línea de arreglo.
+- ~~**`ON DELETE SET NULL` no se aplica**, porque nadie activa `PRAGMA foreign_keys`.~~
+  **Falso, corregido el 2026-09-04.** `foreign_keys(1)` está en el DSN de `Open`
+  (`internal/store/db.go:79`) desde la fase 1. Vuelto a comprobar por ejecución sobre el
+  código actual: el pragma devuelve 1, el `SET NULL` de `events` se aplica y un
+  `ON DELETE CASCADE` también. La observación original venía casi seguro de inspeccionar el
+  archivo con el shell `sqlite3`, que trae `foreign_keys` apagado por defecto y por tanto no
+  reproduce cómo abre la base el programa. Lección: comprobar por la ruta del programa, no
+  por una herramienta externa que tiene sus propios valores por defecto.
 - **TikTok está soportado en el modelo pero sin probar** contra la plataforma.
 - **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez y no
   reproducido en 19 intentos.
