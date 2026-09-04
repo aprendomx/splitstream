@@ -53,6 +53,18 @@ no uno fijo. Por eso el panel te pide dos cosas —servidor y clave— y hay que
 cada vez que vuelvas a emitir. También necesitas 1.000 seguidores para que TikTok te
 habilite las emisiones en directo.
 
+### Ponle nombre y logo
+
+Cada canal tiene un **nombre** que solo ves tú. Se rellena con el de la plataforma
+—«YouTube», «Twitch»—, pero puedes cambiarlo por lo que te sirva para reconocerlo:
+«Canal principal», «Solo domingos», el nombre de tu grupo. Si emites a dos cuentas del
+mismo servicio, esto es lo que las distingue.
+
+También puedes subirle un **logo** en PNG o JPEG. Aparece en su tarjeta con el icono de la
+plataforma en una esquina, así que de un vistazo sabes qué canal es y a dónde va. Da igual
+el tamaño que subas: se reduce solo. Es opcional; sin logo se ve el icono de la plataforma,
+como siempre.
+
 ### Después de vincular
 
 No te fíes de que diga «guardado». Mira la tarjeta del canal: cuando empieces a transmitir
@@ -70,6 +82,18 @@ Puedes **añadir, apagar o editar canales mientras estás en directo**. Los camb
 aplican al momento, sin cortar la transmisión ni afectar a los demás canales.
 
 Arrastra las tarjetas para cambiar su orden.
+
+### El interruptor «Todos»
+
+Arriba de la lista, junto a «Vincular canal», hay un interruptor que enciende o apaga
+**todos los canales a la vez**. Aparece cuando tienes más de uno.
+
+Sirve para el momento de salir al aire: enciendes todo de un golpe en vez de ir tarjeta por
+tarjeta. Cuando unos están encendidos y otros no, el interruptor se ve a medias, para no
+decirte que están todos igual cuando no lo están.
+
+Apagarlo mientras emites **corta las transmisiones en curso**, así que te pregunta antes y
+te dice cuántas. Encenderlo no pregunta nada.
 
 ---
 
