@@ -164,6 +164,55 @@ saturados: fallaba 1 de cada 6 veces. Con un plazo de veinte segundos, 0 de 8.
 También quedó claro que **no** era la carrera de go-rtmp: aquella estaba en `rtmpio` y esta
 en `relay`. Dos problemas distintos que se parecían por ser intermitentes.
 
+## La carrera de go-rtmp, predicha en la fase 2 y resuelta aquí
+
+El ledger de la fase 2 dejó anotado esto como riesgo abierto:
+
+> go-rtmp v0.0.7 tiene una carrera propia en su CLIENTE, entre `(*streams).Delete` y su
+> goroutine de lectura, que aflora al llamar a `Publisher.Close()`. Si aparece, hay que
+> decidir qué hacer, no parchearla a ciegas.
+
+Apareció bajo `-race` al ejecutar la suite completa. El informe la señala con precisión:
+`streams.Delete()` toma el mutex del mapa de streams, pero `streams.At()` —que usa la
+goroutine de lectura de la conexión— **lo lee sin tomarlo** (`streams.go:86`). Uno protege
+y el otro no.
+
+**No es un problema de tests.** En producción `Close()` se llama en cada reconexión —con
+Facebook aleteando fueron 55 seguidas— y una escritura concurrente sobre un mapa de Go
+puede abortar el proceso con `concurrent map writes`, llevándose por delante la emisión a
+todos los destinos a la vez.
+
+La decisión: **no mandar `deleteStream` al cerrar**. Es lo único nuestro que llega a
+`streams.Delete`. Cerrar el socket termina el stream igual, `FCUnpublish` ya le dijo a la
+plataforma que suelte el slot, y `ClientConn.Close` solo cierra la conexión sin tocar ese
+mapa. Verificado con 20 corridas del test que la destapó y tres pasadas completas de la
+suite: cero carreras.
+
+Es también la explicación más probable del «fallo intermitente sin identificar» que quedó
+abierto en el ledger de la fase 4: se vio una vez, no se reprodujo en 19 intentos, y esta
+carrera tiene exactamente ese perfil.
+
+## La clave maestra se crea sola
+
+Petición del usuario: «cuando ejecuto desde Finder, debería crear y autoasignar la llave».
+Tenía razón — al abrir el binario con doble clic no hay variables de entorno, así que el
+programa moría con «falta SPLITSTREAM_MASTER_KEY» y no había forma de arrancarlo sin
+terminal.
+
+**La decisión con coste:** guardar la clave junto a la base cambia el modelo de seguridad.
+Antes la base cifrada sola era inútil; ahora quien tenga la carpeta lo tiene todo. Para un
+escritorio es lo razonable —quien accede a tus archivos ya accede a tus archivos— y para un
+servidor no, así que `SPLITSTREAM_MASTER_KEY` **manda siempre** cuando está puesta y el
+camino del servidor no cambia.
+
+El archivo se crea con permisos `0600` y con `O_EXCL`, para que dos procesos arrancando a la
+vez no se pisen: pisarlo dejaría las claves de los destinos ilegibles para siempre. Un
+archivo de clave vacío es un error y no una invitación a generar otra, por la misma razón.
+
+Un test que afirmaba que faltar la variable es un error se reescribió: ese comportamiento
+cambió a propósito. Lo que sigue siendo error es una variable puesta con un valor
+inservible, porque ahí hubo intención.
+
 ## Lo que queda abierto
 
 - ~~**`ON DELETE SET NULL` no se aplica**, porque nadie activa `PRAGMA foreign_keys`.~~
@@ -175,8 +224,6 @@ en `relay`. Dos problemas distintos que se parecían por ser intermitentes.
   reproduce cómo abre la base el programa. Lección: comprobar por la ruta del programa, no
   por una herramienta externa que tiene sus propios valores por defecto.
 - **TikTok está soportado en el modelo pero sin probar** contra la plataforma.
-- **Un fallo intermitente sin identificar en `internal/relay`**, visto una vez y no
-  reproducido en 19 intentos.
 - **Los binarios no están firmados ni notarizados**, así que macOS y Windows avisan.
 - **Sin imagen publicada en un registro.** El `docker-compose.yml` construye desde el
   código; publicar en GHCR es una decisión del dueño del repositorio, no mía.

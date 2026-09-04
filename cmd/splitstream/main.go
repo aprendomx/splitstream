@@ -255,6 +255,13 @@ func run(ctx context.Context, out io.Writer) error {
 		Logger:  logger,
 	})
 
+	// Si esta ejecución acaba de crear la clave maestra, hay que decirlo AHORA y una sola
+	// vez: es el único momento en que el usuario puede enterarse de que ese archivo
+	// existe y de que respaldar solo la base no le sirve de nada.
+	if cfg.MasterKeyAutogenerada {
+		fmt.Fprint(out, avisoClaveCreada(cfg.MasterKeyPath))
+	}
+
 	// Primer arranque: si no hay contraseña, se genera un código de un solo uso y se
 	// imprime bien visible. Solo hace falta para configurar desde OTRA máquina; desde el
 	// propio equipo el asistente no lo pide, porque quien está en el teclado ya lo
@@ -366,6 +373,25 @@ func run(ctx context.Context, out io.Writer) error {
 		logger.Warn("la ingesta no cerró en 3s; se sigue adelante")
 	}
 	return nil
+}
+
+// avisoClaveCreada explica el archivo de clave que se acaba de crear.
+//
+// Va a la salida estándar y no al logger por lo mismo que el aviso del primer arranque:
+// esto hay que verlo ahora, no encontrarlo después en un journal.
+func avisoClaveCreada(ruta string) string {
+	return "\n" +
+		"  Se ha creado tu clave maestra:\n" +
+		"\n" +
+		"      " + ruta + "\n" +
+		"\n" +
+		"  Cifra las claves de tus canales. RESPÁLDALA junto a la base de datos:\n" +
+		"  si la pierdes, tendrás que volver a pegar la clave de cada plataforma.\n" +
+		"\n" +
+		"  Está al lado de la base a propósito, para que se copien juntas. Eso\n" +
+		"  también significa que quien tenga acceso a esa carpeta lo tiene todo:\n" +
+		"  en un servidor compartido, usa SPLITSTREAM_MASTER_KEY y guárdala aparte.\n" +
+		"\n"
 }
 
 // avisoPrimerArranque es lo primero que ve alguien que acaba de instalar esto.

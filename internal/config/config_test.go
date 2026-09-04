@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -76,13 +79,47 @@ func TestLoadFromOverridesDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadFromRequiresMasterKey(t *testing.T) {
-	_, err := config.LoadFrom(lookup(map[string]string{}))
-	if err == nil {
-		t.Fatal("quería error cuando falta SPLITSTREAM_MASTER_KEY")
+// Faltar SPLITSTREAM_MASTER_KEY ya NO es un error: se crea un archivo de clave junto a la
+// base. Ese cambio existe para que el programa se pueda abrir con doble clic desde el
+// Finder o el Explorador, donde no hay variables de entorno.
+//
+// Lo que sí sigue siendo un error es una variable puesta con un valor que no sirve: ahí
+// hubo intención, y adivinar por el usuario sería peor que decírselo.
+func TestLoadFromWithoutMasterKeyCreatesOne(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_DB_PATH": filepath.Join(dir, "datos.db"),
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom sin la variable debería funcionar: %v", err)
 	}
-	if !strings.Contains(err.Error(), "SPLITSTREAM_MASTER_KEY") {
-		t.Errorf("el error debería nombrar la variable: %v", err)
+	if !cfg.MasterKeyAutogenerada {
+		t.Error("debería haber generado la clave")
+	}
+}
+
+func TestLoadFromRejectsAnUnusableMasterKey(t *testing.T) {
+	casos := map[string]string{
+		"no es base64":      "esto no es base64 válido !!!",
+		"base64 pero corta": "YWJj",
+		"base64 pero larga": strings.Repeat("QUJD", 40),
+	}
+	for nombre, valor := range casos {
+		t.Run(nombre, func(t *testing.T) {
+			_, err := config.LoadFrom(lookup(map[string]string{
+				"SPLITSTREAM_MASTER_KEY": valor,
+				"SPLITSTREAM_DB_PATH":    filepath.Join(t.TempDir(), "datos.db"),
+			}))
+			if err == nil {
+				t.Fatal("quería error con una clave inservible")
+			}
+			if !strings.Contains(err.Error(), "SPLITSTREAM_MASTER_KEY") {
+				t.Errorf("el error debería nombrar la variable: %v", err)
+			}
+			if strings.Contains(err.Error(), valor) {
+				t.Error("el error incluye el valor de la clave")
+			}
+		})
 	}
 }
 
@@ -222,5 +259,125 @@ func TestConfigMarshalJSONMasksMasterKey(t *testing.T) {
 				t.Errorf("el JSON perdió el resto de la configuración: %s", out)
 			}
 		})
+	}
+}
+
+// TestMasterKeyIsCreatedWhenThereIsNoEnv: el caso de abrir el programa con doble clic
+// desde el Finder o el Explorador, donde no hay variables de entorno. Antes moría con
+// "falta SPLITSTREAM_MASTER_KEY" y no había forma de arrancarlo sin usar la terminal.
+func TestMasterKeyIsCreatedWhenThereIsNoEnv(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "datos.db")
+
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_DB_PATH": dbPath,
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if !cfg.MasterKeyAutogenerada {
+		t.Error("debería avisar de que acaba de generar la clave")
+	}
+
+	rutaClave := config.KeyPathFor(dbPath)
+	if cfg.MasterKeyPath != rutaClave {
+		t.Errorf("MasterKeyPath = %q, quería %q", cfg.MasterKeyPath, rutaClave)
+	}
+
+	info, err := os.Stat(rutaClave)
+	if err != nil {
+		t.Fatalf("no se creó el archivo de clave: %v", err)
+	}
+	// Solo el dueño. Si otro usuario del equipo puede leerla, el cifrado de la base no
+	// protege de nada.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("permisos = %o, quería 600", info.Mode().Perm())
+	}
+}
+
+// TestMasterKeyIsStableAcrossRuns: si cambiara en cada arranque, la base quedaría ilegible
+// y el usuario perdería las claves de todos sus destinos.
+func TestMasterKeyIsStableAcrossRuns(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "datos.db")
+	entorno := lookup(map[string]string{"SPLITSTREAM_DB_PATH": dbPath})
+
+	primera, err := config.LoadFrom(entorno)
+	if err != nil {
+		t.Fatalf("primera: %v", err)
+	}
+	segunda, err := config.LoadFrom(entorno)
+	if err != nil {
+		t.Fatalf("segunda: %v", err)
+	}
+
+	if primera.MasterKey != segunda.MasterKey {
+		t.Fatal("la clave cambió entre arranques: la base quedaría ilegible")
+	}
+	if segunda.MasterKeyAutogenerada {
+		t.Error("el segundo arranque no debería decir que la generó")
+	}
+}
+
+// TestEnvMasterKeyWinsOverTheFile: el camino del servidor no cambia. Si alguien pone la
+// variable, es la que manda, aunque haya un archivo al lado.
+func TestEnvMasterKeyWinsOverTheFile(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "datos.db")
+
+	// Primero se crea un archivo de clave.
+	delArchivo, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_DB_PATH": dbPath}))
+	if err != nil {
+		t.Fatalf("crear el archivo: %v", err)
+	}
+
+	// Y ahora se arranca con una variable distinta.
+	otra := testKeyB64()
+	conEntorno, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_DB_PATH":    dbPath,
+		"SPLITSTREAM_MASTER_KEY": otra,
+	}))
+	if err != nil {
+		t.Fatalf("con entorno: %v", err)
+	}
+
+	if conEntorno.MasterKey == delArchivo.MasterKey {
+		t.Error("el archivo ganó a la variable de entorno")
+	}
+	if conEntorno.MasterKeyPath != "" {
+		t.Errorf("MasterKeyPath = %q; con la variable puesta no se usa archivo", conEntorno.MasterKeyPath)
+	}
+	if conEntorno.MasterKeyAutogenerada {
+		t.Error("con la variable puesta no se genera nada")
+	}
+}
+
+// TestEmptyKeyFileIsAnErrorNotANewKey: un archivo vacío suele ser una escritura a medias o
+// un respaldo mal hecho. Generar una clave nueva encima dejaría la base ilegible en
+// silencio, que es la peor forma de perder datos.
+func TestEmptyKeyFileIsAnErrorNotANewKey(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "datos.db")
+	if err := os.WriteFile(config.KeyPathFor(dbPath), []byte("  \n"), 0o600); err != nil {
+		t.Fatalf("preparar: %v", err)
+	}
+
+	if _, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_DB_PATH": dbPath})); err == nil {
+		t.Error("un archivo de clave vacío debería ser un error")
+	}
+}
+
+// TestKeyPathSitsNextToTheDatabase: los dos archivos se respaldan y se mueven juntos.
+func TestKeyPathSitsNextToTheDatabase(t *testing.T) {
+	casos := map[string]string{
+		"splitstream.db":            "splitstream.key",
+		"/var/lib/ss/datos.db":      "/var/lib/ss/datos.key",
+		"/data/splitstream.sqlite3": "/data/splitstream.key",
+		"sin-extension":             "sin-extension.key",
+	}
+	for db, quiero := range casos {
+		if got := config.KeyPathFor(db); got != quiero {
+			t.Errorf("KeyPathFor(%q) = %q, quería %q", db, got, quiero)
+		}
 	}
 }
