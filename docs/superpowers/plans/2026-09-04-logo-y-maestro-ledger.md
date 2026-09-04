@@ -63,6 +63,27 @@ implementación creía estar rechazando. Ahora el formato se despacha a mano por
 la firma, así que la lista de formatos aceptados es una función y nada más. La importación
 de `image/gif` se queda en el test a propósito, con un comentario que dice que no se borre.
 
+### El test intermitente de `relay` no estaba arreglado
+
+CI tumbó el PR con `TestHubSlowSinkDoesNotBlockOthers`, el mismo test que el ledger de las
+fases 5 y 6 daba por resuelto subiendo su plazo de 3 a 20 segundos. Falló a los 20,02 s.
+
+Aquel diagnóstico era falso, y la medición que lo respaldaba se hizo en local, sin `-race`
+y con ocho núcleos. Reproducido con `GOMAXPROCS=2` y `-race`, que es lo que se parece a un
+runner de CI, se ve lo que pasa de verdad: `escritos=0`, `descartes=300`, la cola vacía y el
+sink en `live`. **El destino rápido no iba lento: estaba tirando la ráfaga a propósito.**
+Cuando el consumidor se queda sin CPU, la cola descarta el retraso por GOP y el sink se
+reengancha en el siguiente keyframe, que es justo lo que el diseño manda.
+
+Esperar más nunca lo iba a arreglar, porque el plazo no deshace un descarte. El test ahora
+prueba la propiedad que le da nombre —que el rápido sigue vivo mientras el lento está
+atascado—: comprueba que el lento no escribió nada, espera a que el rápido drene y le manda
+un keyframe nuevo, que debe llegar.
+
+La lección se parece a las otras dos de este trabajo: una premisa que nadie volvió a
+comprobar. Aquí la premisa era mía, y la medición que la sostenía no reproducía las
+condiciones en las que el fallo ocurría.
+
 ## Decisiones
 
 **Los bytes van en la base, en tabla aparte.** En la base para que copiar `splitstream.db`
@@ -118,3 +139,7 @@ desechable, porque los fallos de las fases 5 y 6 solo aparecieron al ejecutar:
   extensión espera a `document_idle` y el panel empuja estado cada segundo. La interfaz del
   logo y del interruptor la tiene que mirar el usuario.
 - **Los eventos que perdieron su destino** con la migración 0003 no se pueden recuperar.
+- **La suite local no corre con `-race` ni con los núcleos limitados.** Los dos fallos
+  intermitentes de este proyecto se han visto primero en CI. Correr al menos el paquete
+  `relay` con `GOMAXPROCS=2 -race` antes de empujar cuesta un minuto y habría ahorrado las
+  dos rondas.
