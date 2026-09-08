@@ -48,6 +48,12 @@ type EngineView interface {
 	// destino en idle descartando mensajes.
 	AddSink(s *relay.Sink)
 	RemoveSink(id int64)
+
+	// Tap y VideoConfig alimentan la vista previa (spec vista previa §3 y §5): un grifo
+	// de solo lectura sobre el hub y el sequence header con el avcC. En el fake de los
+	// tests son un canal y un slice que el test controla.
+	Tap() (<-chan *relay.Message, func())
+	VideoConfig() []byte
 }
 
 // Config son las dependencias del servidor. DB y Cipher son obligatorias; el resto puede
