@@ -174,6 +174,7 @@ func (s *Server) routes() {
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
 	protegida("GET /ws", s.handleWS)
+	protegida("GET /api/preview/ws", s.handlePreviewWS)
 
 	// El panel va en la raíz y se registra el ÚLTIMO: en el mux de Go 1.22 los patrones
 	// más específicos ganan, así que /api/... y /ws siguen entrando por sus handlers.
