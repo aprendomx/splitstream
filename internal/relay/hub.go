@@ -114,7 +114,8 @@ func (h *Hub) Snapshot() map[int64]Metrics {
 	return out
 }
 
-// Close detiene todos los sinks y olvida el preámbulo. El hub queda reutilizable.
+// Close detiene todos los sinks, olvida el preámbulo y cierra los taps de la vista
+// previa. El hub queda reutilizable.
 //
 // Señala la parada a TODOS los sinks primero y espera después con un único plazo global.
 // Pararlos en serie multiplicaba el plazo por el número de destinos: Stop no vuelve

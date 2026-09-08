@@ -18,6 +18,10 @@ let decoder = null
 // delta sin su pasado es un error de decodificación seguro.
 let esperandoKeyframe = true
 let cerrado = false
+// Generación de la config en curso: crece en cada llamada a configurar() y permite que un
+// await que resuelve tarde (o fuera de orden frente a una config más nueva) se descarte
+// sin tocar el decodificador actual.
+let generacion = 0
 
 function cerrar(motivo = null) {
   if (cerrado) return
@@ -42,6 +46,19 @@ function pintar(frame) {
 }
 
 async function configurar(avcc) {
+  // Renegociación (spec §7): el decodificador viejo se cierra AQUÍ, antes de cualquier
+  // await, no después de isConfigSupported. Si se cerrara después, el keyframe de la
+  // época nueva —que el servidor manda pegado a la config— podría llegarle al
+  // decodificador viejo mientras el await sigue en vuelo y reventarlo con un error de
+  // decodificación en vez de recuperarse. Los frames que lleguen mientras tanto se
+  // descartan solos en decodificar() (decoder es null). La generación, además, evita que
+  // dos configs seguidas resuelvan al revés: si esta ya no es la más reciente cuando
+  // vuelve el await, no toca el decodificador actual.
+  const mia = ++generacion
+  if (decoder && decoder.state !== 'closed') decoder.close()
+  decoder = null
+  esperandoKeyframe = true
+
   // El string de códec sale del propio avcC: perfil, flags de compatibilidad y nivel
   // son sus bytes 1 a 3. El servidor no parsea nada a propósito.
   const codec = 'avc1.' + [...avcc.subarray(1, 4)]
@@ -53,15 +70,12 @@ async function configurar(avcc) {
     return
   }
   const soporte = await VideoDecoder.isConfigSupported(config).catch(() => null)
+  if (cerrado || mia !== generacion) return
   if (!soporte?.supported) {
     cerrar('Tu navegador no soporta la vista previa')
     return
   }
-  if (cerrado) return
 
-  // Una config a mitad significa que el publisher renegoció: el decodificador anterior
-  // ya no vale y el que viene arranca en el siguiente keyframe.
-  if (decoder && decoder.state !== 'closed') decoder.close()
   decoder = new VideoDecoder({
     output: pintar,
     error: () => cerrar('La vista previa falló al decodificar'),

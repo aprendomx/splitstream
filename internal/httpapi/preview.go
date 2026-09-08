@@ -67,6 +67,14 @@ func (s *Server) handlePreviewWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 
+	// El tap se abre ANTES de leer VideoConfig(): si se leyera antes, un sequence header
+	// publicado justo en ese hueco se perdería (el tap aún no existe para recibirlo) y el
+	// cliente se quedaría con la config vieja. Abierto primero, lo peor que puede pasar es
+	// una config duplicada —VideoConfig() y luego el mismo seq header por el tap—, que el
+	// cliente ya tolera. Si no hay señal, release() (vía defer) cierra el tap enseguida.
+	ch, release := s.engine.Tap()
+	defer release()
+
 	// Sin emisión (o sin sequence header todavía) no hay nada que enseñar. Se cierra con
 	// un código de aplicación en vez de esperar: el botón del panel solo se habilita con
 	// ingesta viva, así que llegar aquí sin señal es la carrera de pulsar justo cuando se
@@ -76,9 +84,6 @@ func (s *Server) handlePreviewWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close(previewCloseNoSignal, "sin señal")
 		return
 	}
-
-	ch, release := s.engine.Tap()
-	defer release()
 
 	// El cliente nunca manda mensajes: es un protocolo de solo push. CloseRead deja el
 	// socket leyendo en segundo plano —así responde a los ping/pong y a la trama de
