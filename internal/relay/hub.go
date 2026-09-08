@@ -19,6 +19,7 @@ type Hub struct {
 	pre   Preamble
 	mu    sync.RWMutex
 	sinks map[int64]*Sink
+	taps  map[*tap]struct{}
 }
 
 // NewHub construye un hub vacío. logger nil usa slog.Default().
@@ -26,7 +27,7 @@ func NewHub(logger *slog.Logger) *Hub {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Hub{log: logger, sinks: map[int64]*Sink{}}
+	return &Hub{log: logger, sinks: map[int64]*Sink{}, taps: map[*tap]struct{}{}}
 }
 
 // Preamble devuelve el preámbulo de la sesión, que los sinks leen al arrancar.
@@ -81,6 +82,9 @@ func (h *Hub) Publish(msg *Message) {
 	defer h.mu.RUnlock()
 	for _, s := range h.sinks {
 		s.Enqueue(msg)
+	}
+	for t := range h.taps {
+		t.deliver(msg)
 	}
 }
 
@@ -148,6 +152,19 @@ func (h *Hub) Close() {
 	if len(pendientes) > 0 {
 		h.log.Warn("destinos que no cerraron dentro de la gracia del apagado",
 			"destinos", pendientes, "gracia", ShutdownGrace)
+	}
+
+	// Los taps de la vista previa mueren con la sesión: el lado HTTP ve el canal
+	// cerrado y cierra su WebSocket con «la emisión terminó».
+	h.mu.Lock()
+	taps := make([]*tap, 0, len(h.taps))
+	for t := range h.taps {
+		taps = append(taps, t)
+	}
+	h.taps = map[*tap]struct{}{}
+	h.mu.Unlock()
+	for _, t := range taps {
+		t.close()
 	}
 
 	h.pre.Reset()
