@@ -8,6 +8,7 @@ import { api, ApiError } from '@/api'
 import { bitrateLegible, duracionLegible } from '@/diagnostico'
 import DialogoDestino from '@/components/DialogoDestino.vue'
 import TarjetaDestino from '@/components/TarjetaDestino.vue'
+import VistaPrevia from '@/components/VistaPrevia.vue'
 
 const $q = useQuasar()
 const panel = usePanel()
@@ -26,6 +27,13 @@ const rotando = ref(false)
 // cada segundo, y mientras se arrastra hay que ignorarlo.
 const lista = ref([])
 const arrastrando = ref(false)
+// La vista previa gasta subida del servidor mientras está abierta: existe solo tras un
+// gesto explícito, y cerrarla (o que el servidor la cierre) la desmonta del todo.
+const verPrevia = ref(false)
+function cerrarPrevia(motivo) {
+  verPrevia.value = false
+  if (motivo) $q.notify({ type: 'warning', message: motivo })
+}
 
 watch(
   () => panel.destinos,
@@ -271,6 +279,8 @@ async function rotarClave() {
             <template v-else>Arranca la transmisión en OBS para empezar</template>
           </div>
         </div>
+        <q-btn v-if="panel.haySesion && !verPrevia" flat dense no-caps size="sm"
+               label="Vista previa" @click="verPrevia = true" />
       </q-card-section>
 
       <q-separator />
@@ -291,6 +301,8 @@ async function rotarClave() {
         </div>
       </q-card-section>
     </q-card>
+
+    <VistaPrevia v-if="verPrevia" @cerrar="cerrarPrevia" />
 
     <div class="row items-center q-mb-sm q-gutter-sm">
       <div class="text-h6">Canales</div>
