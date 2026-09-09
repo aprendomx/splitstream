@@ -328,3 +328,19 @@ func (e *Engine) logEvent(ctx context.Context, sessionID, destID *int64, level, 
 
 // Snapshot devuelve las métricas de todos los destinos. La fase 4 la sirve por WebSocket.
 func (e *Engine) Snapshot() map[int64]Metrics { return e.hub.Snapshot() }
+
+// Tap abre un grifo de solo lectura sobre el hub para la vista previa del panel. Va en
+// el motor y no en el hub directamente por la misma razón que AddSink: la API habla con
+// EngineView y no debe conocer al hub.
+func (e *Engine) Tap() (<-chan *Message, func()) { return e.hub.Tap() }
+
+// VideoConfig devuelve el payload FLV del AVC sequence header de la sesión en curso, o
+// nil si todavía no llegó. Es lo primero que la vista previa manda al navegador: dentro
+// va el avcC sin el que WebCodecs no puede decodificar nada.
+func (e *Engine) VideoConfig() []byte {
+	_, videoSeq, _ := e.hub.Preamble().Snapshot()
+	if videoSeq == nil {
+		return nil
+	}
+	return videoSeq.Payload
+}

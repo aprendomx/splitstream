@@ -21,11 +21,14 @@ import (
 
 // fakeEngine simula el motor. sessionID a 0 significa que no hay nadie transmitiendo.
 type fakeEngine struct {
-	mu      sync.Mutex
-	sesion  relay.LiveSession
-	metrics map[int64]relay.Metrics
-	added   []int64
-	removed []int64
+	mu           sync.Mutex
+	sesion       relay.LiveSession
+	metrics      map[int64]relay.Metrics
+	added        []int64
+	removed      []int64
+	tapCh        chan *relay.Message
+	tapLiberados int
+	videoCfg     []byte
 }
 
 func (f *fakeEngine) Session() relay.LiveSession {
@@ -83,6 +86,54 @@ func (f *fakeEngine) setMetrics(m map[int64]relay.Metrics) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.metrics = m
+}
+
+// --- vista previa ---
+
+func (f *fakeEngine) canalTap() chan *relay.Message {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tapCh == nil {
+		f.tapCh = make(chan *relay.Message, 64)
+	}
+	return f.tapCh
+}
+
+func (f *fakeEngine) Tap() (<-chan *relay.Message, func()) {
+	return f.canalTap(), func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.tapLiberados++
+	}
+}
+
+func (f *fakeEngine) VideoConfig() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.videoCfg
+}
+
+func (f *fakeEngine) setVideoConfig(p []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.videoCfg = p
+}
+
+// emitir mete un mensaje en el tap sin bloquear, como hace el hub de verdad: si el
+// handler está atascado escribiendo, el mensaje se pierde, que es el comportamiento real.
+func (f *fakeEngine) emitir(m *relay.Message) {
+	select {
+	case f.canalTap() <- m:
+	default:
+	}
+}
+
+func (f *fakeEngine) cerrarTap() { close(f.canalTap()) }
+
+func (f *fakeEngine) liberados() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tapLiberados
 }
 
 // fakeSinks construye sinks que no conectan a ninguna parte: basta con que tengan el id

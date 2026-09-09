@@ -95,6 +95,22 @@ decirte que están todos igual cuando no lo están.
 Apagarlo mientras emites **corta las transmisiones en curso**, así que te pregunta antes y
 te dice cuántas. Encenderlo no pregunta nada.
 
+### Vista previa
+
+Mientras estás emitiendo, el botón «Vista previa» de la tarjeta de señal abre un monitor
+del vídeo que está saliendo hacia tus canales. Va sin sonido a propósito: es para
+comprobar que se ve bien, no para verte el directo.
+
+Dos cosas que conviene saber:
+
+- **Mientras la vista está abierta, el servidor gasta en subida más o menos lo mismo que
+  un canal más.** Al cerrarla, ese gasto desaparece. Por eso se abre con un botón y no
+  sola.
+- Necesita un navegador razonablemente moderno (Chrome o Edge, Safari 16.4 o más nuevo,
+  Firefox 130 o más nuevo). Si el tuyo no puede, el panel te lo dirá y no pasa nada más.
+
+Si la emisión se corta, la vista se cierra sola avisando. No se reabre por su cuenta.
+
 ---
 
 ## 4. Qué significa cada estado
