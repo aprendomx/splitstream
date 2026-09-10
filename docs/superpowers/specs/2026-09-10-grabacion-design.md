@@ -130,8 +130,8 @@ func FreeSpace(dir string) (free, total int64, err error) // Statfs en unix, Get
 Job `grabaciones` del `maintenance.Scheduler` (v0.8): (1) borra las grabaciones con
 `ended_at` anterior a `keep_days`; (2) mientras la suma de bytes supere `max_gb`, borra
 la más antigua. Archivo primero, fila después; un archivo que ya no existe se da por
-borrado. Nunca con sesión viva (regla del planificador). Evento `recording_pruned`
-(info) con el resumen.
+borrado. Nunca con sesión viva (regla del planificador). El resumen va en el evento
+`maintenance_ran` del planificador, como el de los demás jobs.
 
 ## 5. Modelo de datos
 

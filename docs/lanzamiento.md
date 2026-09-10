@@ -76,15 +76,20 @@ Prometheus para vigilarlo desde fuera, avisos por webhook cuando algo falla, y u
 no puede repetirse: un destino que nunca consigue transmitir se suspende tras diez intentos
 seguidos y lo dice, en vez de reintentar para siempre.
 
+La v0.9 añade grabación, y con la misma cautela: si el disco no aguanta el ritmo de
+escritura, la regla es que se degrada la grabación, nunca el directo, exactamente como un
+destino con la subida corta pierde vídeo sin arrastrar a los demás.
+
 > Los tres fallos producían exactamente el mismo mensaje en el registro. Por eso el panel no
 > te enseña el error técnico: te dice «conecta y se corta» y te sugiere revisar si alcanzaste
 > el límite de emisiones de la plataforma.
 
 #### Qué no hace
 
-No transcodifica, así que no puedes emitir a distinta calidad en cada plataforma. No graba.
-No unifica el chat. Y no es multiusuario. Si necesitas cualquiera de esas cosas, esto no es
-la herramienta — y preferimos decirlo antes de que la descargues.
+No transcodifica, así que no puedes emitir a distinta calidad en cada plataforma. Graba en
+FLV, sin transcodificar, con segmentos y tope de disco. No unifica el chat. Y no es
+multiusuario. Si necesitas cualquiera de esas cosas, esto no es la herramienta — y
+preferimos decirlo antes de que la descargues.
 
 #### Pruébalo
 
