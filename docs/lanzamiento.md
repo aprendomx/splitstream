@@ -1,7 +1,7 @@
 # Entrada de lanzamiento
 
 Borrador listo para publicar y el trabajo de posicionamiento que lo acompaña.
-Escrito para la v0.8.0, la primera con `/metrics`, avisos y «probar destino»; si cambian las plataformas soportadas o lo que la herramienta no hace, hay que revisarlo. Son las dos cosas que el texto promete.
+Escrito para la v0.10.0, la primera que se instala con `brew`, `winget` o un script, con TLS integrado y aviso de versión nueva; si cambian las plataformas soportadas o lo que la herramienta no hace, hay que revisarlo. Son las dos cosas que el texto promete.
 
 ---
 

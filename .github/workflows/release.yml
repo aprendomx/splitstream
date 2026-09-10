@@ -5,8 +5,10 @@ on:
   push:
     tags: ['v*']
 
+# Mínimo en el workflow; cada job pide lo suyo. Sin esto, un paso comprometido de
+# cualquier job podría empujar al repo con el token del runner.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   binarios:
@@ -76,7 +78,9 @@ jobs:
             cp splitstream.exe "$NOMBRE"/
             zip -r "$NOMBRE.zip" "$NOMBRE"
           else
-            cp splitstream "$NOMBRE"/
+            # La unidad de systemd viaja dentro del tar.gz: install.sh la usa si la persona
+            # decide instalar el servicio, sin tener que descargarla aparte del repo.
+            cp splitstream deploy/splitstream.service "$NOMBRE"/
             tar czf "$NOMBRE.tar.gz" "$NOMBRE"
           fi
           ls -la splitstream-*
@@ -92,6 +96,9 @@ jobs:
     name: publicar la release
     needs: binarios
     runs-on: ubuntu-latest
+    # Crea la release y sube los artefactos.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -115,3 +122,126 @@ jobs:
           gh release upload "${GITHUB_REF_NAME}" artefactos/* --clobber \
             || gh release create "${GITHUB_REF_NAME}" artefactos/* \
                  --title "${GITHUB_REF_NAME}" --generate-notes
+
+  # D7: la imagen se publica en GHCR con GITHUB_TOKEN; no hace falta ningún secreto. Va en
+  # paralelo con los binarios: construye desde el Dockerfile, no desde los artefactos.
+  ghcr:
+    name: imagen en GHCR
+    # needs: :latest no se puede deshacer. Que no se publique la imagen de una release
+    # cuyos binarios ni siquiera compilaron.
+    needs: binarios
+    # Una pre-release (vX.Y.Z-rc1) no debe quedarse con :latest. El `!` del principio
+    # obliga a la forma ${{ }}: sin ella, YAML no acepta que el escalar empiece por `!`.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/aprendomx/splitstream:${{ github.ref_name }}
+            ghcr.io/aprendomx/splitstream:latest
+
+  # La fórmula se instala de verdad en un Mac antes de empujarla al tap. Sin TAP_TOKEN
+  # se valida y se adjunta a la release, y el tap se actualiza a mano.
+  tap:
+    name: fórmula de Homebrew
+    needs: publicar
+    # Una pre-release no va al tap: brew install splitstream daría un candidato.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: macos-latest
+    # Adjunta la fórmula a la release.
+    permissions:
+      contents: write
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: renderizar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${GITHUB_REF_NAME}" --pattern SHA256SUMS.txt
+          deploy/homebrew/render.sh "${GITHUB_REF_NAME}" SHA256SUMS.txt > splitstream.rb
+          cat splitstream.rb
+      - name: instalar la fórmula de verdad
+        run: |
+          brew install --formula ./splitstream.rb
+          splitstream -version | grep -F "${GITHUB_REF_NAME}"
+      - name: adjuntar a la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" splitstream.rb --clobber
+      - name: empujar al tap
+        if: env.TAP_TOKEN != ''
+        run: |
+          git clone --quiet "https://x-access-token:${TAP_TOKEN}@github.com/aprendomx/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp splitstream.rb tap/Formula/splitstream.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/splitstream.rb
+          git commit --quiet -m "splitstream ${GITHUB_REF_NAME}" || echo "la fórmula no cambió"
+          git push --quiet
+
+  # Los manifiestos se validan si el runner trae winget, se adjuntan a la release y, con
+  # WINGET_TOKEN, se envían a microsoft/winget-pkgs (la primera vez la revisa una persona).
+  winget:
+    name: manifiestos de winget
+    needs: publicar
+    # Una pre-release no se envía a winget-pkgs: la revisa una persona y no se retira.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: windows-latest
+    # Adjunta los manifiestos a la release.
+    permissions:
+      contents: write
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: renderizar
+        id: render
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS.txt
+          DIR="manifests/a/aprendomx/Splitstream/${GITHUB_REF_NAME#v}"
+          deploy/winget/render.sh "$GITHUB_REF_NAME" SHA256SUMS.txt "$DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          7z a winget-manifests.zip manifests > /dev/null
+      - name: validar
+        shell: pwsh
+        run: |
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget validate --manifest "${{ steps.render.outputs.dir }}"
+          } else {
+            Write-Warning "winget no está en este runner; se omite la validación"
+          }
+      - name: adjuntar a la release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" winget-manifests.zip --clobber
+      - name: enviar a winget-pkgs
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          .\wingetcreate.exe submit --token $env:WINGET_TOKEN "${{ steps.render.outputs.dir }}"

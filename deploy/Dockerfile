@@ -17,7 +17,10 @@ COPY web/ ./
 RUN npm run build
 
 # ── 2. El binario ─────────────────────────────────────────────────────────────
-FROM golang:1.25-alpine AS binario
+# --platform=$BUILDPLATFORM: la etapa corre en la arquitectura del runner y Go cruza a la
+# de destino. Sin esto, buildx emularía arm64 con QEMU y el build tardaría diez veces más.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS binario
+ARG TARGETOS TARGETARCH
 WORKDIR /src
 
 # tzdata: la imagen de alpine no trae /usr/share/zoneinfo, y la final lo necesita para que
@@ -32,7 +35,7 @@ COPY . .
 COPY --from=panel /web/dist/spa ./web/dist/spa
 
 ARG VERSION=docker
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION}" \
       -o /splitstream ./cmd/splitstream
 
@@ -63,8 +66,11 @@ USER 65532:65532
 # /data es donde vive la base. Debe ser un volumen, o la configuración y las claves se
 # pierden al recrear el contenedor.
 VOLUME ["/data"]
+# SPLITSTREAM_HTTP_ADDR NO se fija a propósito. Su valor por defecto ya es :8080, así que
+# fijarlo no aportaba nada, pero sí anulaba el otro defecto: con SPLITSTREAM_TLS_DOMAIN el
+# binario debe caer solo a :443. Con la variable puesta en la imagen, quien pedía TLS
+# integrado se quedaba con el panel HTTPS en :8080 y los puertos 80/443 publicados y mudos.
 ENV SPLITSTREAM_DB_PATH=/data/splitstream.db \
-    SPLITSTREAM_HTTP_ADDR=:8080 \
     SPLITSTREAM_RTMP_ADDR=:1935
 
 EXPOSE 1935 8080

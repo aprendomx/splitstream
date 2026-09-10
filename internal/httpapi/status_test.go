@@ -548,3 +548,36 @@ func TestStatusCarriesRecentEventsNewestFirst(t *testing.T) {
 		t.Error("recent_events no va del más reciente al más antiguo")
 	}
 }
+
+// TestStatusReportsHowThePanelIsServed: el panel necesita saber si el propio binario
+// termina TLS y con qué URL pública para el chat de Kick (v0.12), que da esa dirección a
+// un webhook.
+//
+// Desviación del brief: los helpers supuestos servidorAutenticado/getJSON no existen en
+// este paquete. Se usan los reales — newTestServer (con el ajuste de Config), login y do
+// más decodeStatus — que es como el resto de tests de /api/status arma un servidor con
+// sesión y lee el JSON.
+func TestStatusReportsHowThePanelIsServed(t *testing.T) {
+	srv, _ := newTestServer(t, func(c *Config) { c.TLS = true; c.PublicURL = "https://relay.ejemplo.com" })
+	cookies := login(t, srv)
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if !st.Panel.TLS || st.Panel.PublicURL != "https://relay.ejemplo.com" {
+		t.Errorf("panel = %+v", st.Panel)
+	}
+}
+
+// TestStatusCarriesTheUpdateNotice: el estado lleva el aviso de versión nueva del checker
+// (Task 5) para que el panel enseñe el banner.
+//
+// Desviación del brief: los helpers supuestos servidorAutenticado/getJSON no existen en
+// este paquete; se usan los reales, igual que en TestStatusReportsHowThePanelIsServed.
+func TestStatusCarriesTheUpdateNotice(t *testing.T) {
+	srv, _ := newTestServer(t, func(c *Config) {
+		c.UpdateInfo = func() UpdateStatus { return UpdateStatus{Latest: "v0.11.0", URL: "https://r", Available: true} }
+	})
+	cookies := login(t, srv)
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if !st.Update.Available || st.Update.Latest != "v0.11.0" || st.Update.URL != "https://r" {
+		t.Errorf("update = %+v", st.Update)
+	}
+}

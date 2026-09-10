@@ -137,3 +137,30 @@ func flipLast(s string) string {
 	}
 	return s[:len(s)-1] + string(nuevo)
 }
+
+// El mapa del limitador no puede crecer para siempre: con IPs efímeras, cada intento
+// fallido dejaría una entrada eterna. Las que llevan 10 minutos calladas se van.
+func TestLoginLimiterForgetsIdleAddresses(t *testing.T) {
+	l := newLoginLimiter()
+	ahora := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return ahora }
+
+	l.allow("203.0.113.1")
+	l.allow("203.0.113.2")
+	if len(l.por) != 2 {
+		t.Fatalf("entradas = %d, quería 2", len(l.por))
+	}
+	ahora = ahora.Add(11 * time.Minute)
+	l.allow("203.0.113.3")
+	if len(l.por) != 1 {
+		t.Errorf("entradas = %d tras 11 min, quería solo la nueva", len(l.por))
+	}
+	// Una IP que sigue intentándolo no se olvida (y con ello tampoco su cuenta).
+	for i := 0; i < 6; i++ {
+		l.allow("203.0.113.3")
+	}
+	ahora = ahora.Add(9 * time.Minute)
+	if l.allow("203.0.113.3") {
+		t.Error("a los 9 minutos la IP que agotó la ráfaga sigue limitada")
+	}
+}

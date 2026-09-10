@@ -18,6 +18,7 @@ const recentEventsInStatus = 20
 func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error) {
 	var out statusDTO
 	out.Version = s.version
+	out.Panel = panelDTO{TLS: s.tls, PublicURL: s.publicURL}
 
 	settings, err := s.db.Settings(ctx)
 	if err != nil {
@@ -81,6 +82,13 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 
 	if out.Recording, err = s.recordingStatus(ctx); err != nil {
 		return out, err
+	}
+
+	// El aviso de versión nueva (Task 5): nil significa que el checker está apagado
+	// (SPLITSTREAM_UPDATE_CHECK=false) y el panel no enseña nada.
+	if s.updateInfo != nil {
+		u := s.updateInfo()
+		out.Update = updateDTO{Available: u.Available, Latest: u.Latest, URL: u.URL}
 	}
 	return out, nil
 }

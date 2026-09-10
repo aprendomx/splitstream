@@ -322,6 +322,14 @@ de cualquiera que adivine la URL.
 
 Discord y Slack no llevan firma: su propia URL ya funciona como el secreto.
 
+### Cuando hay una versión nueva
+
+Una vez al día Splitstream mira si hay una release más reciente y, si la hay, enseña una
+franja arriba del panel con la versión y un enlace. Puedes cerrarla; vuelve a salir solo
+con la siguiente versión. No se actualiza solo: cómo hacerlo depende de cómo lo
+instalaste, y está en el README («Actualizar»). Es la única conexión que el programa hace
+por su cuenta, y solo manda su propia versión.
+
 ---
 
 ## 11. Respaldo

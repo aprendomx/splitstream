@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -34,6 +35,8 @@ import (
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
 	"github.com/aprendomx/splitstream/internal/store"
+	"github.com/aprendomx/splitstream/internal/update"
+	"github.com/aprendomx/splitstream/internal/webtls"
 	"github.com/aprendomx/splitstream/web"
 )
 
@@ -61,13 +64,14 @@ func main() {
 	}
 
 	if *hc {
-		// Solo el puerto: config.Load crearía un archivo de clave si no lo hubiera, y un
-		// healthcheck no debe tener efectos secundarios.
+		// Solo el puerto y si hay TLS: config.Load crearía un archivo de clave si no lo
+		// hubiera, y un healthcheck no debe tener efectos secundarios.
 		addr := os.Getenv("SPLITSTREAM_HTTP_ADDR")
-		if addr == "" {
-			addr = ":8080"
-		}
-		if err := healthcheck(addr); err != nil {
+		// TrimSpace porque config.go también recorta el dominio: si aquí no se hiciera, un
+		// espacio de más en el .env daría un SNI distinto al del certificado servido.
+		dominio := strings.TrimSpace(os.Getenv("SPLITSTREAM_TLS_DOMAIN"))
+		conTLS := dominio != "" || os.Getenv("SPLITSTREAM_TLS_CERT_FILE") != ""
+		if err := healthcheck(addr, conTLS, dominio); err != nil {
 			fmt.Fprintln(os.Stderr, "healthcheck:", err)
 			os.Exit(1)
 		}
@@ -367,6 +371,27 @@ func run(ctx context.Context, out io.Writer) error {
 		mant.Run(sinkCtx)
 	}()
 
+	// Aviso de versión: una consulta a GitHub 30 s después de arrancar y luego cada 24 h.
+	// Va en `fondo` para que el apagado la espere como a los webhooks; Run vuelve en
+	// cuanto el contexto termina.
+	var updateInfo func() httpapi.UpdateStatus
+	if cfg.UpdateCheck {
+		chk := &update.Checker{Current: version, Logger: logger}
+		fondo.Add(1)
+		go func() {
+			defer fondo.Done()
+			chk.Run(ctx, 30*time.Second, 24*time.Hour, func(i update.Info) {
+				if _, err := db.LogEvent(context.Background(), store.Event{
+					Level: store.LevelInfo, Kind: "update_available",
+					Message: "Hay una versión nueva: " + i.Latest,
+				}); err != nil {
+					logger.Error("no se pudo registrar el aviso de versión", "err", err)
+				}
+			})
+		}()
+		updateInfo = func() httpapi.UpdateStatus { return httpapi.UpdateStatus(chk.Latest()) }
+	}
+
 	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{
 		Addr:    cfg.RTMPAddr,
 		Handler: engine,
@@ -400,24 +425,50 @@ func run(ctx context.Context, out io.Writer) error {
 		panelFS = nil
 	}
 
+	// El TLS integrado se construye ANTES de la Config de httpapi: PublicURL sale de aquí
+	// y ese paquete no sabe nada de webtls (la CI lo comprueba).
+	tlsSetup, err := webtls.Build(cfg, func(err error) {
+		// Sin secretos: el dominio y el texto de ACME. Cadencia acotada por webtls.
+		if _, e := db.LogEvent(context.Background(), store.Event{
+			Level: store.LevelError, Kind: "tls_certificate_error",
+			Message: "no se pudo obtener el certificado de " + cfg.TLSDomain + ": " + err.Error(),
+		}); e != nil {
+			logger.Error("no se pudo registrar el fallo de certificado", "err", e)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if cfg.SecureCookiesDesactivadas {
+		logger.Warn("SPLITSTREAM_SECURE_COOKIES=false con TLS integrado: la cookie de sesión viaja sin Secure")
+	}
+	publicURL := ""
+	if tlsSetup != nil {
+		publicURL = tlsSetup.PublicURL
+	}
+
 	api, err := httpapi.New(httpapi.Config{
-		DB:            db,
-		Cipher:        cipher,
-		Engine:        engine,
-		Ingest:        ingest,
-		Sinks:         factory,
-		Tester:        factory,
-		Recorder:      factory,
-		RecordingsDir: cfg.RecordingsDir,
-		Webhooks:      webhooks,
-		MasterKey:     cfg.MasterKey,
-		RTMPAddr:      cfg.RTMPAddr,
-		Version:       version,
-		SetupCode:     setupCode,
-		SPA:           panelFS,
-		Logger:        logger,
-		SecureCookies: cfg.SecureCookies,
-		MetricsToken:  cfg.MetricsToken,
+		DB:             db,
+		Cipher:         cipher,
+		Engine:         engine,
+		Ingest:         ingest,
+		Sinks:          factory,
+		Tester:         factory,
+		Recorder:       factory,
+		RecordingsDir:  cfg.RecordingsDir,
+		Webhooks:       webhooks,
+		MasterKey:      cfg.MasterKey,
+		RTMPAddr:       cfg.RTMPAddr,
+		Version:        version,
+		SetupCode:      setupCode,
+		SPA:            panelFS,
+		Logger:         logger,
+		SecureCookies:  cfg.SecureCookies,
+		TrustedProxies: cfg.TrustedProxies,
+		TLS:            cfg.TLS(),
+		PublicURL:      publicURL,
+		MetricsToken:   cfg.MetricsToken,
+		UpdateInfo:     updateInfo,
 		ExtraMetrics: []httpapi.ExtraMetrics{func() []httpapi.Metric {
 			ok, failed := webhooks.Stats()
 			return []httpapi.Metric{
@@ -441,16 +492,66 @@ func run(ctx context.Context, out io.Writer) error {
 		// horas. El plazo de escritura del WS va por mensaje, dentro de su handler.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	var redirSrv *http.Server
+	if tlsSetup != nil {
+		httpSrv.TLSConfig = tlsSetup.TLSConfig
+		if cfg.TLSRedirectAddr != "" {
+			// Mínimo: atiende el reto HTTP-01 y redirige. Sin Handler propio no hay nada
+			// más que pueda hacer, así que el plazo es corto.
+			redirSrv = &http.Server{Addr: cfg.TLSRedirectAddr, Handler: tlsSetup.Redirect, ReadHeaderTimeout: 5 * time.Second}
+		}
+	}
+
+	// El listener se abre AQUÍ y no dentro de la goroutine: si el bind falla, tiene que
+	// morir el proceso. Con TLS integrado los puertos por defecto son :443 y :80, y el
+	// fallo típico es "permission denied" por no tener CAP_NET_BIND_SERVICE; dentro de la
+	// goroutine solo salía una línea de log y el proceso seguía vivo sin panel, así que
+	// systemd lo veía sano y nadie lo reiniciaba.
+	ln, err := net.Listen("tcp", cfg.HTTPAddr)
+	if err != nil {
+		return fmt.Errorf("escuchar el panel en %s: %w", cfg.HTTPAddr, err)
+	}
+	// Serve cierra el listener al terminar; este Close de más devuelve un error que no
+	// importa. Está para los caminos de error de más abajo, antes de arrancar el servidor.
+	defer ln.Close()
+
+	// Lo mismo con el de redirección: si alguien pide el :80 y no puede tenerlo, mejor
+	// enterarse ahora. Quien no lo quiera, lo desactiva con `none`.
+	var lnRedir net.Listener
+	if redirSrv != nil {
+		lnRedir, err = net.Listen("tcp", cfg.TLSRedirectAddr)
+		if err != nil {
+			return fmt.Errorf("escuchar la redirección a HTTPS en %s: %w", cfg.TLSRedirectAddr, err)
+		}
+		defer lnRedir.Close()
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		var err error
+		if tlsSetup != nil {
+			// Con TLSConfig puesto, los archivos vacíos son correctos: el certificado
+			// sale de GetCertificate (autocert) o de Certificates (propio).
+			err = httpSrv.ServeTLS(ln, "", "")
+		} else {
+			err = httpSrv.Serve(ln)
+		}
 		// ErrServerClosed es lo que devuelve SIEMPRE tras un Shutdown: no es un fallo.
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("el servidor HTTP dejó de atender", "err", err)
 		}
 	}()
+	if redirSrv != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := redirSrv.Serve(lnRedir); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("el listener de redirección a HTTPS dejó de atender", "err", err)
+			}
+		}()
+	}
 
 	wg.Add(1)
 	go func() {
@@ -465,8 +566,11 @@ func run(ctx context.Context, out io.Writer) error {
 	// matices, y eso incluye la máscara con los últimos 4 caracteres, que es para la
 	// interfaz —otra superficie, con otro control de acceso—. `ingest_app` no es secreto
 	// y se queda.
-	logger.Info("splitstream arrancado", "config", cfg,
-		"ingest_app", settings.IngestApp, "http_addr", cfg.HTTPAddr)
+	logArgs := []any{"config", cfg, "ingest_app", settings.IngestApp, "http_addr", cfg.HTTPAddr, "tls", cfg.TLS()}
+	if publicURL != "" {
+		logArgs = append(logArgs, "public_url", publicURL)
+	}
+	logger.Info("splitstream arrancado", logArgs...)
 
 	<-ctx.Done()
 	logger.Info("apagando")
@@ -478,6 +582,14 @@ func run(ctx context.Context, out io.Writer) error {
 		logger.Warn("el servidor HTTP no cerró limpiamente", "err", err)
 	}
 	cancelHTTP()
+
+	if redirSrv != nil {
+		redirCtx, cancelRedir := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := redirSrv.Shutdown(redirCtx); err != nil {
+			logger.Warn("el listener de redirección no cerró limpiamente", "err", err)
+		}
+		cancelRedir()
+	}
 
 	if err := ingest.Close(); err != nil {
 		logger.Error("cerrar la ingesta", "err", err)
@@ -516,8 +628,8 @@ func run(ctx context.Context, out io.Writer) error {
 	// Diez segundos, que es el plazo por intento del despachador: un envío que se lanzó
 	// justo antes de cancelar sobrevive a la cancelación y hay que dejarle terminar, o el
 	// aviso de apagado —el que más le importa a quien opera esto— se pierde siempre. El
-	// peor caso del cierre entero suma HTTP 5 s + WaitIdle 5 s + hub 3 s + fondo 10 s +
-	// ingesta 3 s = 26 s, por debajo del TimeoutStopSec=30 de la unidad de systemd.
+	// peor caso del cierre entero suma HTTP 5 s + redirección 2 s + WaitIdle 5 s + hub 3 s +
+	// fondo 10 s + ingesta 3 s = 28 s, por debajo del TimeoutStopSec=30 de systemd.
 	finFondo := make(chan struct{})
 	go func() { fondo.Wait(); close(finFondo) }()
 	select {
@@ -602,18 +714,37 @@ func (a storeAdapter) LogEvent(ctx context.Context, e relay.EngineEvent) error {
 }
 
 // healthcheckURL apunta siempre a la propia máquina: el addr de escucha puede ser ":8080"
-// o "0.0.0.0:8080", que no son direcciones a las que conectar.
-func healthcheckURL(addr string) string {
+// o "0.0.0.0:8080", que no son direcciones a las que conectar. Con TLS integrado el
+// esquema y el puerto por defecto cambian a https y 443.
+func healthcheckURL(addr string, conTLS bool) string {
+	esquema, puertoDef := "http", "8080"
+	if conTLS {
+		esquema, puertoDef = "https", "443"
+	}
 	_, puerto, err := net.SplitHostPort(addr)
 	if err != nil || puerto == "" {
-		puerto = "8080"
+		puerto = puertoDef
 	}
-	return "http://127.0.0.1:" + puerto + "/healthz"
+	return esquema + "://127.0.0.1:" + puerto + "/healthz"
 }
 
-func healthcheck(addr string) error {
+func healthcheck(addr string, conTLS bool, dominio string) error {
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(healthcheckURL(addr))
+	if conTLS {
+		// InsecureSkipVerify: es loopback y solo mide vida; el certificado es del dominio,
+		// nunca de 127.0.0.1, así que validarlo fallaría siempre.
+		//
+		// ServerName: la URL apunta a un literal IP y un literal IP no manda SNI. Sin SNI,
+		// el GetCertificate de autocert rechaza el saludo ("missing server name") y el
+		// healthcheck fallaba SIEMPRE con dominio configurado —el contenedor entero se
+		// declaraba unhealthy. Con certificado propio `dominio` viene vacío y no se manda
+		// SNI, que es justo lo que quiere ese camino: se sirve Certificates[0] igual.
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         dominio,
+		}}
+	}
+	resp, err := client.Get(healthcheckURL(addr, conTLS))
 	if err != nil {
 		return err
 	}

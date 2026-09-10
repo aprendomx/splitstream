@@ -110,24 +110,45 @@ func (s *sessionSigner) sign(payload string) string {
 // molestar a un script, no a alguien que se equivoca dos veces al escribir.
 type loginLimiter struct {
 	mu  sync.Mutex
-	por map[string]*rate.Limiter
+	por map[string]*intentos
+	// now se sustituye en los tests para ejercitar la purga sin esperar 10 minutos.
+	now func() time.Time
 }
+
+type intentos struct {
+	lim    *rate.Limiter
+	ultimo time.Time
+}
+
+// limiterOlvido es cuánto tiempo sin intentos hace falta para soltar la entrada de una IP.
+// Con IPs efímeras el mapa crecería para siempre; a los 10 minutos el limitador ya habría
+// repuesto la ráfaga entera, así que olvidar no regala nada.
+const limiterOlvido = 10 * time.Minute
 
 func newLoginLimiter() *loginLimiter {
-	return &loginLimiter{por: make(map[string]*rate.Limiter)}
+	return &loginLimiter{por: make(map[string]*intentos), now: time.Now}
 }
 
-// allow consume un intento. Ráfaga de 5 y reposición de uno cada 10 s.
+// allow consume un intento. Ráfaga de 5 y reposición de uno cada 10 s. Purga en el propio
+// camino, sin goroutine: el mapa tiene una entrada por IP que lo intentó en los últimos
+// diez minutos, que en este servicio son un puñado.
 func (l *loginLimiter) allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	lim, ok := l.por[ip]
-	if !ok {
-		lim = rate.NewLimiter(rate.Every(10*time.Second), 5)
-		l.por[ip] = lim
+	ahora := l.now()
+	for k, e := range l.por {
+		if ahora.Sub(e.ultimo) > limiterOlvido {
+			delete(l.por, k)
+		}
 	}
-	return lim.Allow()
+	e, ok := l.por[ip]
+	if !ok {
+		e = &intentos{lim: rate.NewLimiter(rate.Every(10*time.Second), 5)}
+		l.por[ip] = e
+	}
+	e.ultimo = ahora
+	return e.lim.Allow()
 }
 
 type loginRequest struct {
@@ -135,7 +156,7 @@ type loginRequest struct {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(clientIP(r)) {
+	if !s.limiter.allow(s.clientIP(r).String()) {
 		writeError(w, http.StatusTooManyRequests, codeRateLimited,
 			"demasiados intentos; espera un momento")
 		return
@@ -166,7 +187,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		// Se registra el intento pero NO la contraseña probada (spec §8).
-		s.logger.Warn("intento de login fallido", "ip", clientIP(r))
+		s.logger.Warn("intento de login fallido", "ip", s.clientIP(r))
 		writeError(w, http.StatusUnauthorized, codeUnauthorized, "contraseña incorrecta")
 		return
 	}

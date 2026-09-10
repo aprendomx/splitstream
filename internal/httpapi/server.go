@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/probe"
@@ -76,6 +77,14 @@ type WebhookSender interface {
 	Send(ctx context.Context, w store.Webhook, ev store.Event) error
 }
 
+// UpdateStatus es lo que el checker de versiones sabe; este paquete no lo importa, lo
+// recibe como función igual que ExtraMetrics.
+type UpdateStatus struct {
+	Latest    string
+	URL       string
+	Available bool
+}
+
 // Config son las dependencias del servidor. DB y Cipher son obligatorias; el resto puede
 // ser nil en los tests que no las ejercitan.
 type Config struct {
@@ -114,12 +123,21 @@ type Config struct {
 	// la petición porque en el despliegue del spec §12 el TLS lo termina un proxy y el
 	// binario solo ve HTTP: adivinarlo daría una cookie sin Secure justo en producción.
 	SecureCookies bool
+	// TrustedProxies son las redes desde las que se cree X-Forwarded-For (ver clientip.go).
+	TrustedProxies []netip.Prefix
+	// TLS y PublicURL describen cómo se sirve el panel (ver panelDTO). Son datos: este
+	// paquete no termina TLS ni importa webtls.
+	TLS       bool
+	PublicURL string
 	// MetricsToken autoriza GET /metrics con `Authorization: Bearer` sin cookie de sesión,
 	// para que Prometheus pueda scrapearlo. Vacío: solo la cookie.
 	MetricsToken string
 	// ExtraMetrics aporta series adicionales a /metrics —el bus de eventos, los
 	// webhooks— sin que este paquete tenga que importar esos componentes.
 	ExtraMetrics []ExtraMetrics
+	// UpdateInfo da el último resultado del checker de versiones (Task 5). Nil: sin
+	// aviso, igual que ExtraMetrics, para que este paquete no importe internal/update.
+	UpdateInfo func() UpdateStatus
 }
 
 // Server sirve la API del spec §9.
@@ -144,6 +162,10 @@ type Server struct {
 	mux          *http.ServeMux
 	metricsToken string
 	extra        []ExtraMetrics
+	proxies      []netip.Prefix
+	tls          bool
+	publicURL    string
+	updateInfo   func() UpdateStatus
 }
 
 func New(cfg Config) (*Server, error) {
@@ -170,6 +192,9 @@ func New(cfg Config) (*Server, error) {
 		setupCode: cfg.SetupCode, version: cfg.Version, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
 		metricsToken: cfg.MetricsToken, extra: cfg.ExtraMetrics,
+		proxies: cfg.TrustedProxies,
+		tls:     cfg.TLS, publicURL: cfg.PublicURL,
+		updateInfo: cfg.UpdateInfo,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto
@@ -255,14 +280,4 @@ func (s *Server) routes() {
 		// método se comprueba dentro del handler.
 		s.mux.HandleFunc("/", s.serveSPA(s.spa))
 	}
-}
-
-// clientIP saca la IP para el limitador. No se mira X-Forwarded-For: quien llega directo
-// puede inventárselo y saltarse el límite creando una IP nueva por intento.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

@@ -452,3 +452,154 @@ func TestRecordingsDirDefaultsNextToTheDatabase(t *testing.T) {
 		t.Errorf("override = %q", cfg.RecordingsDir)
 	}
 }
+
+func TestTLSIsOffByDefaultAndNothingElseChanges(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64()}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.TLS() {
+		t.Fatal("sin variables de TLS, TLS() debería ser false")
+	}
+	if cfg.HTTPAddr != ":8080" || cfg.SecureCookies || cfg.TLSRedirectAddr != "" {
+		t.Errorf("sin TLS cambió algo: http=%q secure=%v redirect=%q", cfg.HTTPAddr, cfg.SecureCookies, cfg.TLSRedirectAddr)
+	}
+	if !cfg.UpdateCheck {
+		t.Error("UpdateCheck debería ser true por defecto")
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("TrustedProxies = %v, quería vacío", cfg.TrustedProxies)
+	}
+}
+
+func TestTLSDomainTurnsOnHTTPSDefaults(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(),
+		"SPLITSTREAM_DB_PATH":    filepath.Join("datos", "s.db"),
+		"SPLITSTREAM_TLS_DOMAIN": " relay.ejemplo.com ",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if !cfg.TLS() || cfg.TLSDomain != "relay.ejemplo.com" {
+		t.Errorf("TLSDomain = %q, TLS() = %v", cfg.TLSDomain, cfg.TLS())
+	}
+	if cfg.HTTPAddr != ":443" {
+		t.Errorf("HTTPAddr = %q, con TLS el defecto es :443", cfg.HTTPAddr)
+	}
+	if !cfg.SecureCookies || cfg.SecureCookiesDesactivadas {
+		t.Errorf("con TLS la cookie debería salir Secure: secure=%v desactivadas=%v", cfg.SecureCookies, cfg.SecureCookiesDesactivadas)
+	}
+	if cfg.TLSRedirectAddr != ":80" {
+		t.Errorf("TLSRedirectAddr = %q, quería :80", cfg.TLSRedirectAddr)
+	}
+	if want := filepath.Join("datos", "tls-cache"); cfg.TLSCacheDir != want {
+		t.Errorf("TLSCacheDir = %q, quería %q", cfg.TLSCacheDir, want)
+	}
+}
+
+func TestTLSExplicitValuesAreHonoured(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY":        testKeyB64(),
+		"SPLITSTREAM_TLS_CERT_FILE":     "/etc/ssl/relay.crt",
+		"SPLITSTREAM_TLS_KEY_FILE":      "/etc/ssl/relay.key",
+		"SPLITSTREAM_HTTP_ADDR":         ":8443",
+		"SPLITSTREAM_SECURE_COOKIES":    "false",
+		"SPLITSTREAM_TLS_REDIRECT_ADDR": "none",
+		"SPLITSTREAM_TLS_CACHE_DIR":     "/var/cache/tls",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if !cfg.TLS() || cfg.TLSDomain != "" {
+		t.Error("con certificado propio TLS() debería ser true y TLSDomain vacío")
+	}
+	if cfg.HTTPAddr != ":8443" {
+		t.Errorf("HTTPAddr = %q: un valor explícito se respeta", cfg.HTTPAddr)
+	}
+	if cfg.SecureCookies || !cfg.SecureCookiesDesactivadas {
+		t.Errorf("SECURE_COOKIES=false explícito debe respetarse y marcarse: secure=%v desactivadas=%v", cfg.SecureCookies, cfg.SecureCookiesDesactivadas)
+	}
+	if cfg.TLSRedirectAddr != "" {
+		t.Errorf("TLSRedirectAddr = %q, `none` debería dejarlo vacío", cfg.TLSRedirectAddr)
+	}
+	if cfg.TLSCacheDir != "/var/cache/tls" {
+		t.Errorf("TLSCacheDir = %q", cfg.TLSCacheDir)
+	}
+}
+
+func TestTLSRejectsContradictoryConfiguration(t *testing.T) {
+	casos := map[string]map[string]string{
+		"dominio y certificado a la vez": {"SPLITSTREAM_TLS_DOMAIN": "a.ejemplo.com", "SPLITSTREAM_TLS_CERT_FILE": "x.crt", "SPLITSTREAM_TLS_KEY_FILE": "x.key"},
+		"certificado sin clave":          {"SPLITSTREAM_TLS_CERT_FILE": "x.crt"},
+		"clave sin certificado":          {"SPLITSTREAM_TLS_KEY_FILE": "x.key"},
+		"dominio con esquema":            {"SPLITSTREAM_TLS_DOMAIN": "https://a.ejemplo.com"},
+		"dominio con puerto":             {"SPLITSTREAM_TLS_DOMAIN": "a.ejemplo.com:443"},
+		"dominio sin punto":              {"SPLITSTREAM_TLS_DOMAIN": "localhost"},
+	}
+	for nombre, env := range casos {
+		env["SPLITSTREAM_MASTER_KEY"] = testKeyB64()
+		if _, err := config.LoadFrom(lookup(env)); err == nil {
+			t.Errorf("%s: LoadFrom aceptó la configuración", nombre)
+		}
+	}
+}
+
+func TestTrustedProxiesParseCIDRsAndBareIPs(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY":      testKeyB64(),
+		"SPLITSTREAM_TRUSTED_PROXIES": "127.0.0.1/32, ::1, 10.0.0.0/8 ,",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	got := make([]string, 0, len(cfg.TrustedProxies))
+	for _, p := range cfg.TrustedProxies {
+		got = append(got, p.String())
+	}
+	want := []string{"127.0.0.1/32", "::1/128", "10.0.0.0/8"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("TrustedProxies = %v, quería %v", got, want)
+	}
+
+	for _, malo := range []string{"casa", "10.0.0.0/33", "127.0.0.1,,300.1.1.1"} {
+		_, err := config.LoadFrom(lookup(map[string]string{
+			"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_TRUSTED_PROXIES": malo,
+		}))
+		if err == nil || !strings.Contains(err.Error(), "SPLITSTREAM_TRUSTED_PROXIES") {
+			t.Errorf("%q: err = %v, quería un error que nombre la variable", malo, err)
+		}
+	}
+}
+
+func TestUpdateCheckCanBeTurnedOff(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_UPDATE_CHECK": "false",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.UpdateCheck {
+		t.Error("UPDATE_CHECK=false debería apagarlo")
+	}
+}
+
+func TestConfigLogValueShowsTLSButNoSecrets(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_TLS_DOMAIN": "a.ejemplo.com",
+		"SPLITSTREAM_TRUSTED_PROXIES": "127.0.0.1",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("cfg", "config", cfg)
+	for _, s := range []string{"tls_domain=a.ejemplo.com", "trusted_proxies=127.0.0.1/32", "update_check=true"} {
+		if !strings.Contains(buf.String(), s) {
+			t.Errorf("el log no lleva %q: %s", s, buf.String())
+		}
+	}
+	if strings.Contains(buf.String(), testKeyB64()) {
+		t.Error("el log lleva la master key")
+	}
+}

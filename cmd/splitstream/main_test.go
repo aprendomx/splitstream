@@ -3,11 +3,21 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/pem"
+	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -430,6 +440,44 @@ func arrancaRun(t *testing.T, out io.Writer) (string, context.CancelFunc, <-chan
 	return addr, cancel, hecho
 }
 
+// Un bind que falla tiene que matar el proceso, no dejarlo vivo sin panel: con TLS
+// integrado los puertos por defecto son :443 y :80, y el "permission denied" de no tener
+// CAP_NET_BIND_SERVICE solo dejaba una línea en el log mientras systemd veía el servicio
+// sano. Aquí se ocupa el puerto a mano para provocar el "address already in use".
+func TestRunFailsWhenThePanelPortIsTaken(t *testing.T) {
+	ocupado, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ocupado.Close()
+
+	master, err := generateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SPLITSTREAM_MASTER_KEY", master)
+	t.Setenv("SPLITSTREAM_DB_PATH", filepath.Join(t.TempDir(), "run.db"))
+	t.Setenv("SPLITSTREAM_RTMP_ADDR", "127.0.0.1:0")
+	t.Setenv("SPLITSTREAM_HTTP_ADDR", ocupado.Addr().String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hecho := make(chan error, 1)
+	go func() { hecho <- run(ctx, io.Discard) }()
+
+	select {
+	case err := <-hecho:
+		if err == nil {
+			t.Fatal("run() con el puerto del panel ocupado = nil, quería error")
+		}
+		if !strings.Contains(err.Error(), "escuchar el panel") {
+			t.Errorf("run() = %v, el error debería decir que no pudo escuchar el panel", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run() no volvió: se quedó vivo sin panel")
+	}
+}
+
 // TestRunServesTheAPI: el binario levanta la API donde dice la configuración.
 //
 // Se comprueba contra /api/auth/login porque es el único endpoint público: un 409 —no hay
@@ -520,7 +568,7 @@ func TestHealthcheckFollowsHealthz(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ok.Close()
-	if err := healthcheck(strings.TrimPrefix(ok.URL, "http://")); err != nil {
+	if err := healthcheck(strings.TrimPrefix(ok.URL, "http://"), false, ""); err != nil {
 		t.Errorf("healthcheck contra un servidor sano = %v", err)
 	}
 
@@ -528,12 +576,57 @@ func TestHealthcheckFollowsHealthz(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer malo.Close()
-	if err := healthcheck(strings.TrimPrefix(malo.URL, "http://")); err == nil {
+	if err := healthcheck(strings.TrimPrefix(malo.URL, "http://"), false, ""); err == nil {
 		t.Error("healthcheck contra un 503 = nil, quería error")
 	}
 
-	if err := healthcheck(freeAddr(t)); err == nil {
+	if err := healthcheck(freeAddr(t), false, ""); err == nil {
 		t.Error("healthcheck contra nadie = nil, quería error")
+	}
+}
+
+// Con dominio, el healthcheck tiene que mandar SNI: la URL apunta a 127.0.0.1 y un literal
+// IP no manda ninguno, así que el GetCertificate de autocert rechazaba el saludo y la
+// imagen se declaraba unhealthy siempre.
+//
+// El servidor se monta a mano —y no con httptest.StartTLS— porque httptest rellena
+// Certificates con un certificado propio cuando está vacío, y entonces crypto/tls sirve
+// Certificates[0] sin llamar a GetCertificate si no hay SNI: justo el caso que hay que
+// distinguir. Sin Certificates, GetCertificate manda, que es como queda autocert.
+func TestHealthcheckSendsTheSNIOfTheDomain(t *testing.T) {
+	certPath, clavePath := certificadoAutofirmado(t)
+	par, err := tls.LoadX509KeyPair(certPath, clavePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		TLSConfig: &tls.Config{
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				// Igual que autocert: sin nombre de servidor no hay certificado que dar.
+				if hello.ServerName != "relay.ejemplo.com" {
+					return nil, fmt.Errorf("missing server name: %q", hello.ServerName)
+				}
+				return &par, nil
+			},
+		},
+	}
+	go srv.ServeTLS(ln, "", "")
+	defer srv.Close()
+
+	addr := ln.Addr().String()
+	if err := healthcheck(addr, true, "relay.ejemplo.com"); err != nil {
+		t.Errorf("healthcheck con el SNI del dominio = %v, quería nil", err)
+	}
+	if err := healthcheck(addr, true, ""); err == nil {
+		t.Error("healthcheck sin SNI = nil, quería el rechazo del servidor")
 	}
 }
 
@@ -544,7 +637,7 @@ func TestHealthcheckURLFor(t *testing.T) {
 		"0.0.0.0:9000":   "http://127.0.0.1:9000/healthz",
 		"127.0.0.1:8081": "http://127.0.0.1:8081/healthz",
 	} {
-		if got := healthcheckURL(addr); got != want {
+		if got := healthcheckURL(addr, false); got != want {
 			t.Errorf("healthcheckURL(%q) = %q, quería %q", addr, got, want)
 		}
 	}
@@ -567,4 +660,137 @@ func TestBackupFlagWritesAnOpenableCopy(t *testing.T) {
 		t.Fatalf("el respaldo no abre: %v", err)
 	}
 	db.Close()
+}
+
+// Con TLS el healthcheck habla HTTPS y el puerto por defecto es el 443, no el 8080.
+func TestHealthcheckURLUsesHTTPSWithTLS(t *testing.T) {
+	if got := healthcheckURL(":443", true); got != "https://127.0.0.1:443/healthz" {
+		t.Errorf("healthcheckURL con TLS = %q", got)
+	}
+	if got := healthcheckURL("", true); got != "https://127.0.0.1:443/healthz" {
+		t.Errorf("sin puerto y con TLS = %q, el defecto es 443", got)
+	}
+}
+
+// certificadoAutofirmado escribe un par para 127.0.0.1 y devuelve las rutas.
+func certificadoAutofirmado(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	dir := t.TempDir()
+	cert, clave := filepath.Join(dir, "c.crt"), filepath.Join(dir, "c.key")
+	os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600)
+	os.WriteFile(clave, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600)
+	return cert, clave
+}
+
+// Con certificado propio: el panel responde por HTTPS, la cookie de sesión sale Secure
+// sin que nadie ponga SPLITSTREAM_SECURE_COOKIES, el listener de redirección manda a
+// HTTPS y -healthcheck funciona. Sin TLS, TestRunServesTheAPI es la regresión.
+func TestRunWithOwnCertificateServesHTTPS(t *testing.T) {
+	cert, clave := certificadoAutofirmado(t)
+	t.Setenv("SPLITSTREAM_TLS_CERT_FILE", cert)
+	t.Setenv("SPLITSTREAM_TLS_KEY_FILE", clave)
+	redirAddr := freeAddr(t)
+	t.Setenv("SPLITSTREAM_TLS_REDIRECT_ADDR", redirAddr)
+
+	addr, cancel, hecho := arrancaRun(t, io.Discard)
+	defer cancel()
+
+	cliente := &http.Client{
+		Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Timeout:       5 * time.Second,
+	}
+	var resp *http.Response
+	var err error
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err = cliente.Get("https://" + addr + "/api/setup")
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("el panel nunca respondió por HTTPS en %s: %v", addr, err)
+	}
+	resp.Body.Close()
+
+	// Configurar la contraseña (desde loopback: sin código) y entrar: la cookie es Secure.
+	// "contraseña-larga-1" cumple minPasswordLen (8).
+	resp, err = cliente.Post("https://"+addr+"/api/setup", "application/json",
+		strings.NewReader(`{"password":"contraseña-larga-1"}`))
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("setup = %d, quería 204", resp.StatusCode)
+	}
+	resp, err = cliente.Post("https://"+addr+"/api/auth/login", "application/json",
+		strings.NewReader(`{"password":"contraseña-larga-1"}`))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("login = %d, quería 204", resp.StatusCode)
+	}
+	var secure bool
+	for _, c := range resp.Cookies() {
+		if c.Name == "splitstream_session" {
+			secure = c.Secure
+		}
+	}
+	if !secure {
+		t.Error("con TLS integrado la cookie de sesión debería salir Secure")
+	}
+
+	// Redirección.
+	resp, err = cliente.Get("http://" + redirAddr + "/api/status?x=1")
+	if err != nil {
+		t.Fatalf("listener de redirección: %v", err)
+	}
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusMovedPermanently || !strings.HasPrefix(loc, "https://") || !strings.HasSuffix(loc, "/api/status?x=1") {
+		t.Errorf("redirección = %d %q", resp.StatusCode, loc)
+	}
+
+	if err := healthcheck(addr, true, ""); err != nil {
+		t.Errorf("healthcheck con TLS: %v", err)
+	}
+
+	cancel()
+	select {
+	case err := <-hecho:
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run no volvió tras cancelar con TLS")
+	}
+	// Los dos puertos quedan libres.
+	for _, a := range []string{addr, redirAddr} {
+		ln, err := net.Listen("tcp", a)
+		if err != nil {
+			t.Errorf("%s sigue ocupado: %v", a, err)
+			continue
+		}
+		ln.Close()
+	}
 }

@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -42,24 +41,6 @@ func GenerateSetupCode() (string, error) {
 	return sb.String(), nil
 }
 
-// esLocal dice si la petición viene de la propia máquina.
-//
-// Es la señal que decide si el primer arranque pide código: quien está en el teclado del
-// equipo ya lo controla, así que exigirle un código sería fricción sin ganancia. Desde
-// fuera —un VPS con el puerto abierto, o la red de casa— sí hace falta, o el primero que
-// cargue la página se queda con el servicio.
-//
-// No se mira X-Forwarded-For a propósito: quien llega de fuera puede inventárselo, y
-// entonces el control no controlaría nada.
-func esLocal(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
 type setupEstadoDTO struct {
 	// Necesario es true mientras no haya contraseña configurada.
 	Necesario bool `json:"necesario"`
@@ -79,7 +60,7 @@ func (s *Server) handleSetupEstado(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, err)
 		return
 	}
-	local := esLocal(r)
+	local := s.esLocal(r)
 	writeJSON(w, http.StatusOK, setupEstadoDTO{
 		Necesario:  settings.PasswordHash == "",
 		PideCodigo: !local,
@@ -95,7 +76,7 @@ type setupRequest struct {
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// El mismo limitador que el login: sin él, el código de doce caracteres se puede
 	// probar a fuerza bruta.
-	if !s.limiter.allow(clientIP(r)) {
+	if !s.limiter.allow(s.clientIP(r).String()) {
 		writeError(w, http.StatusTooManyRequests, codeRateLimited,
 			"demasiados intentos; espera un momento")
 		return
@@ -119,7 +100,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !esLocal(r) {
+	if !s.esLocal(r) {
 		if s.setupCode == "" {
 			writeError(w, http.StatusConflict, codeConflict,
 				"la configuración inicial desde fuera de esta máquina necesita el código "+
@@ -130,7 +111,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		// caracteres iniciales acertó quien lo intenta.
 		dado := strings.ToUpper(strings.TrimSpace(in.Codigo))
 		if subtle.ConstantTimeCompare([]byte(dado), []byte(s.setupCode)) != 1 {
-			s.logger.Warn("código de configuración incorrecto", "ip", clientIP(r))
+			s.logger.Warn("código de configuración incorrecto", "ip", s.clientIP(r))
 			writeError(w, http.StatusUnauthorized, codeUnauthorized,
 				"el código no es correcto; míralo en la consola donde arrancaste splitstream")
 			return
@@ -161,7 +142,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		s.logger.Error("no se pudo registrar la configuración inicial", "err", err)
 	}
-	s.logger.Info("configuración inicial completada", "desde", clientIP(r))
+	s.logger.Info("configuración inicial completada", "desde", s.clientIP(r))
 
 	// Se deja la sesión abierta: obligar a escribir otra vez la contraseña recién elegida
 	// no aporta seguridad y rompe el hilo del asistente.

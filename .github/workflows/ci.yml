@@ -51,12 +51,14 @@ jobs:
             exit 1
           fi
 
-      # La simétrica: la capa HTTP no debe conocer la librería RTMP. Habla con la ingesta
-      # a través de interfaces estrechas, no del tipo concreto.
-      - name: internal/httpapi no conoce go-rtmp
+      # La simétrica: la capa HTTP no debe conocer la librería RTMP ni cómo se termina el
+      # TLS. Habla con la ingesta a través de interfaces estrechas, no del tipo concreto,
+      # y el panel.tls que expone es un dato que le pasa main.go, no algo que calcule
+      # importando webtls.
+      - name: internal/httpapi no conoce go-rtmp ni el TLS
         run: |
-          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio'; then
-            echo "::error::internal/httpapi importa go-rtmp o internal/rtmpio"
+          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio|internal/webtls'; then
+            echo "::error::internal/httpapi importa go-rtmp, internal/rtmpio o internal/webtls"
             exit 1
           fi
 
@@ -151,6 +153,24 @@ jobs:
           # sus directivas de endurecimiento, no que el programa esté puesto.
           sudo install -m 755 /bin/true /usr/local/bin/splitstream
           systemd-analyze verify deploy/splitstream.service
+
+  # Los instaladores son scripts: sin esto, un error de sintaxis en install.sh solo se
+  # vería cuando alguien lo ejecutara con `curl | sh` en su servidor.
+  instaladores:
+    name: instaladores
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: shellcheck
+        run: shellcheck deploy/*.sh deploy/homebrew/*.sh deploy/winget/*.sh
+      - name: render.sh de Homebrew y winget
+        run: sh deploy/render_test.sh
+      - name: install.sh en ubuntu y alpine contra una release local
+        run: sh deploy/install_test.sh
 
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:

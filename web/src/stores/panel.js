@@ -33,6 +33,7 @@ export const usePanel = defineStore('panel', {
     },
     eventosRecientes: (s) => s.estado?.recent_events ?? [],
     grabacion: (s) => s.estado?.recording ?? null,
+    actualizacion: (s) => s.estado?.update ?? null,
   },
 
   actions: {
