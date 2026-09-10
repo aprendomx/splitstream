@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -529,7 +530,7 @@ func TestHealthcheckFollowsHealthz(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ok.Close()
-	if err := healthcheck(strings.TrimPrefix(ok.URL, "http://"), false); err != nil {
+	if err := healthcheck(strings.TrimPrefix(ok.URL, "http://"), false, ""); err != nil {
 		t.Errorf("healthcheck contra un servidor sano = %v", err)
 	}
 
@@ -537,12 +538,57 @@ func TestHealthcheckFollowsHealthz(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer malo.Close()
-	if err := healthcheck(strings.TrimPrefix(malo.URL, "http://"), false); err == nil {
+	if err := healthcheck(strings.TrimPrefix(malo.URL, "http://"), false, ""); err == nil {
 		t.Error("healthcheck contra un 503 = nil, quería error")
 	}
 
-	if err := healthcheck(freeAddr(t), false); err == nil {
+	if err := healthcheck(freeAddr(t), false, ""); err == nil {
 		t.Error("healthcheck contra nadie = nil, quería error")
+	}
+}
+
+// Con dominio, el healthcheck tiene que mandar SNI: la URL apunta a 127.0.0.1 y un literal
+// IP no manda ninguno, así que el GetCertificate de autocert rechazaba el saludo y la
+// imagen se declaraba unhealthy siempre.
+//
+// El servidor se monta a mano —y no con httptest.StartTLS— porque httptest rellena
+// Certificates con un certificado propio cuando está vacío, y entonces crypto/tls sirve
+// Certificates[0] sin llamar a GetCertificate si no hay SNI: justo el caso que hay que
+// distinguir. Sin Certificates, GetCertificate manda, que es como queda autocert.
+func TestHealthcheckSendsTheSNIOfTheDomain(t *testing.T) {
+	certPath, clavePath := certificadoAutofirmado(t)
+	par, err := tls.LoadX509KeyPair(certPath, clavePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		TLSConfig: &tls.Config{
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				// Igual que autocert: sin nombre de servidor no hay certificado que dar.
+				if hello.ServerName != "relay.ejemplo.com" {
+					return nil, fmt.Errorf("missing server name: %q", hello.ServerName)
+				}
+				return &par, nil
+			},
+		},
+	}
+	go srv.ServeTLS(ln, "", "")
+	defer srv.Close()
+
+	addr := ln.Addr().String()
+	if err := healthcheck(addr, true, "relay.ejemplo.com"); err != nil {
+		t.Errorf("healthcheck con el SNI del dominio = %v, quería nil", err)
+	}
+	if err := healthcheck(addr, true, ""); err == nil {
+		t.Error("healthcheck sin SNI = nil, quería el rechazo del servidor")
 	}
 }
 
@@ -687,7 +733,7 @@ func TestRunWithOwnCertificateServesHTTPS(t *testing.T) {
 		t.Errorf("redirección = %d %q", resp.StatusCode, loc)
 	}
 
-	if err := healthcheck(addr, true); err != nil {
+	if err := healthcheck(addr, true, ""); err != nil {
 		t.Errorf("healthcheck con TLS: %v", err)
 	}
 

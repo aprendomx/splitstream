@@ -67,8 +67,11 @@ func main() {
 		// Solo el puerto y si hay TLS: config.Load crearía un archivo de clave si no lo
 		// hubiera, y un healthcheck no debe tener efectos secundarios.
 		addr := os.Getenv("SPLITSTREAM_HTTP_ADDR")
-		conTLS := os.Getenv("SPLITSTREAM_TLS_DOMAIN") != "" || os.Getenv("SPLITSTREAM_TLS_CERT_FILE") != ""
-		if err := healthcheck(addr, conTLS); err != nil {
+		// TrimSpace porque config.go también recorta el dominio: si aquí no se hiciera, un
+		// espacio de más en el .env daría un SNI distinto al del certificado servido.
+		dominio := strings.TrimSpace(os.Getenv("SPLITSTREAM_TLS_DOMAIN"))
+		conTLS := dominio != "" || os.Getenv("SPLITSTREAM_TLS_CERT_FILE") != ""
+		if err := healthcheck(addr, conTLS, dominio); err != nil {
 			fmt.Fprintln(os.Stderr, "healthcheck:", err)
 			os.Exit(1)
 		}
@@ -701,12 +704,21 @@ func healthcheckURL(addr string, conTLS bool) string {
 	return esquema + "://127.0.0.1:" + puerto + "/healthz"
 }
 
-func healthcheck(addr string, conTLS bool) error {
+func healthcheck(addr string, conTLS bool, dominio string) error {
 	client := &http.Client{Timeout: 3 * time.Second}
 	if conTLS {
-		// Es loopback y solo mide vida: el certificado es del dominio, nunca de
-		// 127.0.0.1, así que validarlo fallaría siempre.
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		// InsecureSkipVerify: es loopback y solo mide vida; el certificado es del dominio,
+		// nunca de 127.0.0.1, así que validarlo fallaría siempre.
+		//
+		// ServerName: la URL apunta a un literal IP y un literal IP no manda SNI. Sin SNI,
+		// el GetCertificate de autocert rechaza el saludo ("missing server name") y el
+		// healthcheck fallaba SIEMPRE con dominio configurado —el contenedor entero se
+		// declaraba unhealthy. Con certificado propio `dominio` viene vacío y no se manda
+		// SNI, que es justo lo que quiere ese camino: se sirve Certificates[0] igual.
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         dominio,
+		}}
 	}
 	resp, err := client.Get(healthcheckURL(addr, conTLS))
 	if err != nil {
