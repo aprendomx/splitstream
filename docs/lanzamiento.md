@@ -70,6 +70,12 @@ cuenta cada intento como una emisión activa. Le agotamos la cuota a la cuenta y
 poder emitir. Ahora los reintentos se espacian, y transmitir unos pocos kilobytes ya no
 cuenta como «la configuración es correcta».
 
+La v0.8 añade lo que nos hubiera ahorrado varias de estas sorpresas: `/metrics` en formato
+Prometheus para vigilarlo desde fuera, avisos por webhook cuando algo falla, y un botón
+«probar destino» que sondea la configuración sin emitir. Y el propio fallo de Facebook ya
+no puede repetirse: un destino que nunca consigue transmitir se suspende tras diez intentos
+seguidos y lo dice, en vez de reintentar para siempre.
+
 > Los tres fallos producían exactamente el mismo mensaje en el registro. Por eso el panel no
 > te enseña el error técnico: te dice «conecta y se corta» y te sugiere revisar si alcanzaste
 > el límite de emisiones de la plataforma.

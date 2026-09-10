@@ -147,6 +147,9 @@ Todo se controla con variables de entorno:
 | `SPLITSTREAM_DB_PATH` | `splitstream.db` | Archivo SQLite |
 | `SPLITSTREAM_LOG_LEVEL` | `info` | `debug`, `info`, `warn` o `error` |
 | `SPLITSTREAM_SECURE_COOKIES` | `false` | `true` si sirves el panel por HTTPS |
+| `SPLITSTREAM_METRICS_TOKEN` | vacío | Con valor, `/metrics` acepta `Authorization: Bearer`. Vacío: solo cookie de sesión |
+| `SPLITSTREAM_RETENTION_DAYS` | `90` | Eventos y sesiones cerradas más viejos se borran. `0` desactiva |
+| `SPLITSTREAM_RETENTION_MAX_EVENTS` | `50000` | Tope de filas en `events`. `0` desactiva |
 
 Comandos:
 
@@ -154,12 +157,30 @@ Comandos:
 splitstream -genkey        # imprime una clave maestra nueva
 splitstream -version       # imprime la versión
 splitstream -setpassword   # cambia la contraseña del panel, leyéndola de stdin
+splitstream -backup <ruta> # copia consistente de la base de datos, y sale
+splitstream -healthcheck   # sale 0 si /healthz responde 200, si no 1
 ```
 
 Para cambiar la contraseña sin que quede en el historial del shell:
 
 ```bash
 read -rs PW && printf '%s' "$PW" | splitstream -setpassword && unset PW
+```
+
+### Vigilarlo desde fuera
+
+- `GET /healthz` responde `200` si el proceso atiende y la base contesta. No necesita
+  sesión. Es lo que consulta el `HEALTHCHECK` de la imagen de Docker.
+- `GET /metrics` expone métricas en formato Prometheus: estado y bitrate de cada canal,
+  descartes, reconexiones, entregas de avisos. Pide sesión o
+  `Authorization: Bearer $SPLITSTREAM_METRICS_TOKEN`.
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: splitstream
+    authorization: { credentials: TU_TOKEN }
+    static_configs: [{ targets: ['127.0.0.1:8080'] }]
 ```
 
 ---

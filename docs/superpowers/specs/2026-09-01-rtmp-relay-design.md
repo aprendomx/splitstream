@@ -77,7 +77,8 @@ de transmisión.
 ### 3.7 `degraded` es un atributo, no un estado
 
 Estando degradado la conexión sigue arriba. Estados:
-`idle | connecting | live | reconnecting | error`, más un `degraded bool` independiente.
+`idle | connecting | live | reconnecting | error | suspended`, más un `degraded bool`
+independiente. *(`suspended` desde la v0.8, 2026-09-09; ver spec de la entrega §2.1.)*
 
 ### 3.8 La resolución sale del SPS
 
@@ -238,6 +239,13 @@ Un sink nunca propaga su error al hub. Error → fila en `events` + `state = err
 backoff `1s × 2ⁿ` topado a 30 s con jitter ±20% → `reconnecting`. Reintentos indefinidos
 mientras la sesión siga viva.
 
+> **Enmienda 2026-09-09 (v0.8):** los reintentos ya no son indefinidos. Tras
+> `SuspendAfterAttempts` (10) intentos seguidos sin transmitir, o `SuspendAfterFlaps` (5)
+> sesiones cortas seguidas, el sink pasa a `suspended` y deja de reintentar hasta que el
+> usuario pulse «Reintentar» o empiece otra sesión. `enabled` no se toca. Razón: con una
+> clave mal pegada, el bucle era silencioso; contra Facebook, cada intento cuenta como
+> emisión activa y agotó el cupo de una cuenta real.
+
 Cuando el publisher (OBS) se desconecta, la sesión se cierra y todos los sinks hacen
 `FCUnpublish` + `deleteStream` de forma ordenada; pasan a `idle`.
 
@@ -306,6 +314,20 @@ GET    /api/destinations/:id/key  → revela la clave en claro
 GET    /api/status                → snapshot completo del estado
 GET    /api/events?limit=100
 GET    /ws                        → push de estado y métricas cada 1s
+
+POST   /api/destinations/:id/test     → sonda sin emitir (§3)                    (v0.8)
+POST   /api/destinations/:id/retry    → reconstruye un destino suspendido        (v0.8)
+GET    /healthz                       → público; 200 ok / 503 degraded           (v0.8)
+GET    /metrics                       → Prometheus; cookie o Bearer
+                                         SPLITSTREAM_METRICS_TOKEN                (v0.8)
+GET    /api/webhooks                  → listado                                  (v0.8)
+POST   /api/webhooks                                                             (v0.8)
+PATCH  /api/webhooks/:id                                                         (v0.8)
+DELETE /api/webhooks/:id                                                         (v0.8)
+POST   /api/webhooks/:id/test         → manda un evento sintético                (v0.8)
+POST   /api/backup                    → descarga un .db consistente              (v0.8)
+GET    /api/sessions?limit=50&before= → sesiones, de la más reciente a la
+                                         más antigua                             (v0.8)
 ```
 
 Errores siempre con la forma `{"error": {"code": "...", "message": "..."}}`.
@@ -360,6 +382,14 @@ matado vuelve a `live` por sí solo al levantarse.
 
 Configuración por variables de entorno con defaults sensatos: `SPLITSTREAM_MASTER_KEY`
 (obligatoria), `SPLITSTREAM_HTTP_ADDR`, `SPLITSTREAM_RTMP_ADDR`, `SPLITSTREAM_DB_PATH`, `SPLITSTREAM_LOG_LEVEL`.
+
+**Desde la v0.8 (2026-09-09):** tres variables más — `SPLITSTREAM_METRICS_TOKEN` (vacío
+por defecto; con valor, `/metrics` acepta `Authorization: Bearer` además de la cookie de
+sesión), `SPLITSTREAM_RETENTION_DAYS` (`90` por defecto; `0` desactiva la poda por fecha)
+y `SPLITSTREAM_RETENTION_MAX_EVENTS` (`50000` por defecto; `0` desactiva el tope de filas)
+— y dos comandos nuevos: `splitstream -backup <ruta>` (copia consistente de la base con
+`VACUUM INTO`) y `splitstream -healthcheck` (sale 0 si `/healthz` responde 200; existe
+porque la imagen `scratch` no tiene `curl`).
 
 `Dockerfile` multi-etapa (build de la SPA + build de Go + imagen final distroless),
 `docker-compose.yml`, y unidad de systemd como alternativa.
