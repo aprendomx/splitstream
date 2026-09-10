@@ -96,6 +96,15 @@ export function diagnosticar(destino, haySesion) {
     }
   }
 
+  if (m.state === 'suspended') {
+    return {
+      tono: 'fallo',
+      titulo: 'Suspendido',
+      detalle: 'Dejó de reintentar en esta emisión.',
+      consejo: 'Revisa la URL y la clave y pulsa «Reintentar». Si no haces nada, volverá a intentarlo en la próxima emisión.',
+    }
+  }
+
   if (m.state === 'error') {
     return {
       tono: 'fallo',

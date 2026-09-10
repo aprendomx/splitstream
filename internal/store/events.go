@@ -120,7 +120,8 @@ func (d *DB) SessionByID(ctx context.Context, id int64) (*Session, error) {
 	return &s, nil
 }
 
-// LogEvent persiste un evento y devuelve su id. Ignora e.ID y e.CreatedAt.
+// LogEvent persiste un evento y devuelve su id. Ignora e.ID y e.CreatedAt. Si hay hook, lo
+// llama con el evento completo tras el INSERT.
 func (d *DB) LogEvent(ctx context.Context, e Event) (int64, error) {
 	if !e.Level.Valid() {
 		return 0, fmt.Errorf("nivel de evento desconocido %q", e.Level)
@@ -128,16 +129,22 @@ func (d *DB) LogEvent(ctx context.Context, e Event) (int64, error) {
 	if e.Kind == "" {
 		return 0, fmt.Errorf("el evento necesita un kind")
 	}
+	now := time.Now()
 	res, err := d.ex.ExecContext(ctx,
 		`INSERT INTO events (session_id, destination_id, level, kind, message, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		e.SessionID, e.DestinationID, string(e.Level), e.Kind, e.Message, nowRFC3339())
+		e.SessionID, e.DestinationID, string(e.Level), e.Kind, e.Message, formatTime(now))
 	if err != nil {
 		return 0, fmt.Errorf("registrar evento: %w", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("registrar evento: %w", err)
+	}
+	if d.hook != nil {
+		e.ID = id
+		e.CreatedAt = now.UTC()
+		d.hook(e)
 	}
 	return id, nil
 }

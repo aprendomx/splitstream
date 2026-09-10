@@ -289,3 +289,47 @@ func (s *Server) removeHot(id int64) {
 func (s *Server) liveSession() bool {
 	return s.engine != nil && s.engine.Session().ID != 0
 }
+
+// handleRetryDestination reconstruye el sink de un destino suspendido (spec v0.8 §2.1).
+//
+// Solo tiene sentido con sesión viva y con el destino en `suspended`: sobre uno en vivo,
+// reconstruirlo cortaría la transmisión, y sin sesión el destino conectará solo al empezar
+// la siguiente. La reconstrucción es el mismo camino que una edición en caliente: Build +
+// AddSink, que reemplaza al sink anterior sin ventana de escritura doble.
+func (s *Server) handleRetryDestination(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathID(w, r)
+	if !ok {
+		return
+	}
+	if !s.liveSession() {
+		writeError(w, http.StatusConflict, codeConflict,
+			"no hay emisión en curso: el destino conectará solo al empezar la siguiente")
+		return
+	}
+
+	d, err := s.db.DestinationByID(r.Context(), id)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	// Apagado primero: un destino apagado no tiene sink, así que no aparece en Snapshot()
+	// y la comprobación de «suspendido» se lo comía con un mensaje que no ayuda a nadie.
+	if !d.Enabled {
+		writeError(w, http.StatusConflict, codeConflict, "el destino está apagado: enciéndelo")
+		return
+	}
+	if m, ok := s.engine.Snapshot()[id]; !ok || m.State != relay.StateSuspended.String() {
+		writeError(w, http.StatusConflict, codeConflict, "el destino no está suspendido")
+		return
+	}
+
+	if _, err := s.db.LogEvent(r.Context(), store.Event{
+		DestinationID: &id, Level: store.LevelInfo, Kind: "destination_retry",
+		Message: "se reintenta el destino a petición del usuario",
+	}); err != nil {
+		s.logger.Error("no se pudo registrar el reintento", "err", err)
+	}
+
+	s.applyHot(r, *d)
+	writeJSON(w, http.StatusOK, newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID)))
+}

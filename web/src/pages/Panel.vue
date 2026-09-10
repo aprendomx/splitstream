@@ -9,6 +9,7 @@ import { bitrateLegible, duracionLegible } from '@/diagnostico'
 import DialogoDestino from '@/components/DialogoDestino.vue'
 import TarjetaDestino from '@/components/TarjetaDestino.vue'
 import VistaPrevia from '@/components/VistaPrevia.vue'
+import RegistroEventos from '@/components/RegistroEventos.vue'
 
 const $q = useQuasar()
 const panel = usePanel()
@@ -124,6 +125,53 @@ async function alternar(d) {
   }
 }
 
+async function reintentar(d) {
+  try {
+    await api.reintentarDestino(d.id)
+    await panel.cargar()
+    $q.notify({ type: 'info', message: `Reintentando ${d.name}` })
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  }
+}
+
+const TITULOS_SONDA = {
+  plausible: { titulo: 'Configuración plausible', tipo: 'positive' },
+  closed_early: { titulo: 'Conecta y se corta', tipo: 'warning' },
+  rejected: { titulo: 'Rechazado', tipo: 'negative' },
+  unreachable: { titulo: 'No se llega al servidor', tipo: 'negative' },
+}
+
+async function probar(d) {
+  // Facebook cuenta cada publicación como emisión activa, y las cuenta contra un cupo.
+  if (d.platform === 'facebook') {
+    const seguir = await new Promise((resolve) => {
+      $q.dialog({
+        title: 'Probar en Facebook',
+        message: 'Facebook cuenta cada prueba como una emisión activa. Si tienes el cupo justo, mejor no.',
+        cancel: { flat: true, noCaps: true, label: 'Cancelar' },
+        ok: { unelevated: true, noCaps: true, color: 'primary', label: 'Probar igual' },
+      }).onOk(() => resolve(true)).onCancel(() => resolve(false))
+    })
+    if (!seguir) return
+  }
+  const aviso = $q.notify({ type: 'ongoing', message: `Probando ${d.name}…`, timeout: 0 })
+  try {
+    const r = await api.probarDestino(d.id)
+    const t = TITULOS_SONDA[r.outcome] ?? { titulo: r.outcome, tipo: 'info' }
+    aviso()
+    $q.dialog({
+      title: t.titulo,
+      message: `${r.message}<br><br><span class="text-caption text-grey-5">${r.stage} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
+      html: true,
+      ok: { flat: true, noCaps: true, label: 'Cerrar' },
+    })
+  } catch (e) {
+    aviso()
+    $q.notify({ type: 'negative', message: e.message })
+  }
+}
+
 function borrar(d) {
   // Confirmación antes de una acción irreversible, nombrando lo que se va a borrar.
   $q.dialog({
@@ -152,8 +200,6 @@ async function revelar(d) {
       html: true,
       ok: { flat: true, noCaps: true, label: 'Cerrar' },
     })
-    // El backend deja constancia de cada revelado; refrescamos para que se vea en el log.
-    panel.refrescarEventos()
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   }
@@ -233,7 +279,6 @@ async function rotarClave() {
   try {
     const { key } = await api.rotarClave(false)
     await panel.cargar()
-    panel.refrescarEventos()
 
     // La clave se enseña UNA sola vez: es la única ocasión de copiarla. Por eso el diálogo
     // no se puede cerrar por accidente pulsando fuera.
@@ -360,10 +405,14 @@ async function rotarClave() {
             @alternar="alternar(element)"
             @borrar="borrar(element)"
             @revelar="revelar(element)"
+            @reintentar="reintentar(element)"
+            @probar="probar(element)"
           />
         </div>
       </template>
     </draggable>
+
+    <RegistroEventos class="q-mt-md" />
 
     <DialogoDestino v-model="dialogo" :destino="editando" @guardado="trasGuardar" />
   </q-page>

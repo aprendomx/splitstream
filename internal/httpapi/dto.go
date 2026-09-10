@@ -135,4 +135,57 @@ type statusDTO struct {
 	Ingest       ingestDTO        `json:"ingest"`
 	Session      sessionDTO       `json:"session"`
 	Destinations []destinationDTO `json:"destinations"`
+	// RecentEvents son los últimos 20 eventos, para el registro del panel y sus avisos.
+	RecentEvents []eventDTO `json:"recent_events"`
+}
+
+// sessionSummaryDTO es una fila del historial: la sesión y cuántos eventos dejó por nivel.
+type sessionSummaryDTO struct {
+	ID         int64      `json:"id"`
+	StartedAt  time.Time  `json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at"`
+	Width      *int       `json:"width"`
+	Height     *int       `json:"height"`
+	BitrateBPS *int       `json:"bitrate_bps"`
+	Events     struct {
+		Info  int `json:"info"`
+		Warn  int `json:"warn"`
+		Error int `json:"error"`
+	} `json:"events"`
+}
+
+func newSessionSummaryDTO(s store.SessionSummary) sessionSummaryDTO {
+	dto := sessionSummaryDTO{
+		ID: s.ID, StartedAt: s.StartedAt.UTC(),
+		Width: s.Width, Height: s.Height, BitrateBPS: s.BitrateBPS,
+	}
+	if s.EndedAt != nil {
+		e := s.EndedAt.UTC()
+		dto.EndedAt = &e
+	}
+	dto.Events.Info, dto.Events.Warn, dto.Events.Error = s.Info, s.Warn, s.Error
+	return dto
+}
+
+type webhookDTO struct {
+	ID         int64     `json:"id"`
+	Name       string    `json:"name"`
+	URL        string    `json:"url"`
+	Format     string    `json:"format"`
+	HasSecret  bool      `json:"has_secret"`
+	MinLevel   string    `json:"min_level"`
+	Enabled    bool      `json:"enabled"`
+	LastStatus *int      `json:"last_status"`
+	LastError  string    `json:"last_error"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// newWebhookDTO. El secreto no aparece: el store ni siquiera lo pone en Webhook.
+func newWebhookDTO(w store.Webhook) webhookDTO {
+	return webhookDTO{
+		ID: w.ID, Name: w.Name, URL: w.URL, Format: string(w.Format), HasSecret: w.HasSecret,
+		MinLevel: string(w.MinLevel), Enabled: w.Enabled, LastStatus: w.LastStatus,
+		LastError: w.LastError, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
+	}
 }

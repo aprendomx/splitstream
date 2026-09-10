@@ -124,6 +124,7 @@ Si la emisión se corta, la vista se cierra sola avisando. No se reabre por su c
 | **Reconectando…** | Se cayó la conexión y lo está reintentando | Suele resolverse solo |
 | **Conecta y se corta** | La plataforma acepta y cierra enseguida, una y otra vez | Ver abajo |
 | **No llega a transmitir** | Nunca consigue enviar nada | Casi siempre es la clave: revísala |
+| **Suspendido** | Lo intentó diez veces sin conseguirlo y dejó de insistir en esta emisión | Revisa la clave y pulsa **Reintentar** |
 | **Apagado** | Lo apagaste tú | Enciéndelo con el interruptor |
 
 ---
@@ -169,6 +170,30 @@ real, no con la que anuncia tu operador.
 Es lo normal y está diseñado así: cada canal es independiente. Que Facebook se caiga no
 afecta a YouTube ni a Twitch.
 
+### Probar un canal antes de emitir
+
+Antes de salir al aire puedes comprobar que un canal está bien configurado sin emitir
+nada. En el menú de su tarjeta (los tres puntos), elige **Probar**.
+
+Splitstream se conecta a la plataforma como si fuera a transmitir, espera unos segundos y
+se desconecta sin haber mandado vídeo. El resultado es uno de estos cuatro:
+
+| Resultado | Qué significa |
+| --- | --- |
+| **Configuración plausible** | La plataforma aceptó la conexión y la mantuvo abierta. La configuración es plausible; solo emitir de verdad confirma la clave |
+| **Conecta y se corta** | La plataforma aceptó la conexión y la cerró enseguida. Casi siempre es la clave, o una emisión que ya no está abierta en la plataforma |
+| **Rechazado** | La plataforma rechazó el handshake, o la URL no vale — revísala |
+| **No se llega al servidor** | No se pudo conectar: revisa la URL, el puerto y tu red |
+
+Dos cosas a tener en cuenta:
+
+- **No puedes probar un canal mientras está emitiendo.** Una segunda conexión con la
+  misma clave haría que la plataforma cortara la que va en vivo, así que Splitstream lo
+  bloquea.
+- **En Facebook, cada prueba cuenta como una emisión activa** contra su cupo, igual que
+  una emisión de verdad. El panel te avisa antes de dejarte probar un canal de Facebook,
+  por si tienes el cupo justo.
+
 ---
 
 ## 6. Límites de cada plataforma
@@ -207,7 +232,67 @@ alguien entra en tu panel, quieres poder verlo.
 
 ---
 
-## 9. Preguntas frecuentes
+## 9. Avisos
+
+Splitstream puede avisarte cuando un canal falla o se corta la emisión, sin que tengas que
+tener el panel abierto: en **Ajustes → Avisos**, pulsa **Nuevo aviso** y dale una URL de
+Discord, de Slack, o de tu propio servidor.
+
+### Crear un webhook de Discord
+
+En el servidor de Discord donde quieras recibir los avisos: **Ajustes del servidor →
+Integraciones → Webhooks → Nuevo webhook**, y **Copiar URL del webhook**. Pégala en el
+campo **URL** del diálogo de Splitstream y elige el formato **Discord**.
+
+Para Slack, el camino es el mismo dentro de tu espacio de trabajo: creas el webhook
+entrante y copias la URL que te da.
+
+### Qué avisa cada nivel
+
+El campo **Avisar de** filtra qué llega a tu webhook:
+
+| Nivel | Qué manda |
+| --- | --- |
+| **Solo errores** | Únicamente lo que necesita que actúes: un canal suspendido, un fallo que no se resuelve solo |
+| **Avisos y errores** | Lo anterior, más avisos — como el resultado de una prueba que no fue «plausible» |
+| **Todo** | Todo lo que se registra, incluida la actividad normal |
+
+### El formato JSON, para quien monte su propio receptor
+
+Si eliges el formato **JSON genérico**, cada evento llega así:
+
+```json
+{"id":42,"kind":"destination_suspended","level":"error","message":"…",
+ "session_id":7,"destination":{"id":3,"name":"YouTube","platform":"youtube"},
+ "at":"2026-09-09T20:15:03.123456789Z"}
+```
+
+Con la cabecera `X-Splitstream-Event` llevando el tipo de evento. Si le pusiste un
+**secreto** al crear el aviso, también llega `X-Splitstream-Signature: sha256=<hex>`: el
+HMAC-SHA256 del cuerpo exacto de la petición, calculado con ese secreto. Verifícalo antes
+de confiar en el contenido — es lo que te dice que el aviso viene de tu Splitstream y no
+de cualquiera que adivine la URL.
+
+Discord y Slack no llevan firma: su propia URL ya funciona como el secreto.
+
+---
+
+## 10. Respaldo
+
+En **Ajustes → Respaldo**, el botón **Descargar respaldo** te da una copia de la base de
+datos completa: canales, claves cifradas y la contraseña del panel.
+
+No se puede descargar con una emisión en curso: la copia retiene la base de datos y
+frenaría a tus canales. Hazlo al terminar.
+
+**Sin tu `splitstream.key` ese archivo no sirve de nada.** Las claves de tus canales están
+cifradas con tu clave maestra; sin ella, el respaldo es un montón de bytes ilegibles.
+Guarda los dos juntos, pero no en el mismo sitio que el original — el objetivo de un
+respaldo es sobrevivir a que pierdas el original.
+
+---
+
+## 11. Preguntas frecuentes
 
 **¿Puedo cambiar la calidad por canal?**
 No. Splitstream reenvía el vídeo tal cual, sin tocarlo — por eso apenas consume CPU. Emitir

@@ -798,3 +798,87 @@ func TestListIncludesMetricsOfTheLiveSession(t *testing.T) {
 		}
 	}
 }
+
+// --- reintentar ---
+
+// Reintentar reconstruye el sink de un destino suspendido: es la única salida de ese
+// estado sin esperar a la siguiente sesión.
+func TestRetryRebuildsASuspendedDestination(t *testing.T) {
+	srv, db, eng, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k1", true)
+	eng.setLive(7)
+	eng.setMetrics(map[int64]relay.Metrics{d.ID: {State: "suspended"}})
+
+	rec := do(t, srv, cookies, http.MethodPost, destPath(d.ID)+"/retry", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d: %s", rec.Code, rec.Body.String())
+	}
+	added, _ := eng.snapshotSinks()
+	if len(added) != 1 || added[0] != d.ID {
+		t.Errorf("AddSink recibió %v, quería [%d]", added, d.ID)
+	}
+
+	eventos, err := db.RecentEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eventos) == 0 || eventos[0].Kind != "destination_retry" {
+		t.Errorf("no quedó evento destination_retry: %+v", eventos)
+	}
+}
+
+// Reintentar un destino que está emitiendo lo reconstruiría y cortaría la transmisión.
+func TestRetryRefusesADestinationThatIsNotSuspended(t *testing.T) {
+	srv, db, eng, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k1", true)
+	eng.setLive(7)
+	eng.setMetrics(map[int64]relay.Metrics{d.ID: {State: "live"}})
+
+	rec := do(t, srv, cookies, http.MethodPost, destPath(d.ID)+"/retry", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("código = %d, quería 409: %s", rec.Code, rec.Body.String())
+	}
+	if added, _ := eng.snapshotSinks(); len(added) != 0 {
+		t.Errorf("se reconstruyó un destino que estaba en vivo: %v", added)
+	}
+}
+
+// Un destino apagado no tiene sink, así que no sale en Snapshot(): sin comprobarlo antes,
+// el usuario recibía «el destino no está suspendido», que no le dice qué hacer.
+func TestRetryRefusesADisabledDestination(t *testing.T) {
+	srv, db, eng, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k1", false)
+	eng.setLive(7)
+
+	rec := do(t, srv, cookies, http.MethodPost, destPath(d.ID)+"/retry", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("código = %d, quería 409: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "apagado") {
+		t.Errorf("el mensaje no menciona que está apagado: %s", rec.Body.String())
+	}
+	if added, _ := eng.snapshotSinks(); len(added) != 0 {
+		t.Errorf("se reconstruyó un destino apagado: %v", added)
+	}
+}
+
+func TestRetryWithoutASessionIsAConflict(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k1", true)
+
+	rec := do(t, srv, cookies, http.MethodPost, destPath(d.ID)+"/retry", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("código = %d, quería 409: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRetryUnknownDestinationIs404(t *testing.T) {
+	srv, _, eng, _, cookies := newDestServer(t)
+	eng.setLive(7)
+	eng.setMetrics(map[int64]relay.Metrics{9999: {State: "suspended"}})
+
+	rec := do(t, srv, cookies, http.MethodPost, destPath(9999)+"/retry", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("código = %d, quería 404: %s", rec.Code, rec.Body.String())
+	}
+}

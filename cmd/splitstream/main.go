@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,9 +24,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aprendomx/splitstream/internal/alerts"
 	"github.com/aprendomx/splitstream/internal/config"
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/events"
 	"github.com/aprendomx/splitstream/internal/httpapi"
+	"github.com/aprendomx/splitstream/internal/maintenance"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
@@ -46,6 +50,9 @@ func main() {
 	setpw := flag.Bool("setpassword", false,
 		"lee una contraseña de stdin y la fija como la del panel; "+
 			"invócalo como: read -rs PW && printf '%s' \"$PW\" | splitstream -setpassword")
+	hc := flag.Bool("healthcheck", false,
+		"consulta /healthz del servicio local y sale 0 si responde; para el HEALTHCHECK de Docker")
+	bk := flag.String("backup", "", "escribe una copia consistente de la base en la ruta dada y sale")
 	flag.Parse()
 
 	if *showVersion {
@@ -53,8 +60,30 @@ func main() {
 		return
 	}
 
+	if *hc {
+		// Solo el puerto: config.Load crearía un archivo de clave si no lo hubiera, y un
+		// healthcheck no debe tener efectos secundarios.
+		addr := os.Getenv("SPLITSTREAM_HTTP_ADDR")
+		if addr == "" {
+			addr = ":8080"
+		}
+		if err := healthcheck(addr); err != nil {
+			fmt.Fprintln(os.Stderr, "healthcheck:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if *setpw {
 		if err := setPassword(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *bk != "" {
+		if err := backup(context.Background(), *bk, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -211,11 +240,31 @@ func run(ctx context.Context, out io.Writer) error {
 		return err
 	}
 
+	// El bus de eventos: todo lo que se persiste en `events` sale también por aquí, para
+	// las alertas del panel y los webhooks. Se cablea antes que el motor y la API para que
+	// ningún evento del arranque se quede sin anunciar.
+	bus := events.NewBus()
+	db.SetEventHook(bus.Publish)
+
 	// Los sinks NO heredan el contexto de señales: si lo hicieran, un SIGTERM los mataría
 	// antes de que el cierre ordenado del spec §6.5 pudiera mandar su FCUnpublish. Este
 	// contexto se cancela al final, tras la espera.
 	sinkCtx, cancelSinks := context.WithCancel(context.Background())
 	defer cancelSinks()
+
+	// fondo agrupa a los consumidores del bus que escriben en la base —el despachador de
+	// webhooks y el mantenimiento—. Hay que verlos volver ANTES de salir de run(), porque
+	// al salir corre el `defer db.Close()` de arriba y una entrega en vuelo todavía tiene
+	// que apuntar su resultado con RecordWebhookDelivery.
+	var fondo sync.WaitGroup
+
+	// Webhooks salientes: consumen el bus en su propia goroutine y jamás lo frenan.
+	webhooks := alerts.NewWebhookDispatcher(bus, db, cipher, logger, version)
+	fondo.Add(1)
+	go func() {
+		defer fondo.Done()
+		webhooks.Run(sinkCtx)
+	}()
 
 	hub := relay.NewHub(logger)
 	engine := relay.NewEngine(relay.EngineConfig{
@@ -248,6 +297,45 @@ func run(ctx context.Context, out io.Writer) error {
 	engine.SetSinkProvider(func() ([]*relay.Sink, error) {
 		return factory.BuildEnabled(ctx)
 	})
+
+	// Mantenimiento diario: poda de eventos y sesiones. Nunca con sesión viva.
+	mant := &maintenance.Scheduler{
+		Logger: logger,
+		Busy:   func() bool { return engine.SessionID() != 0 },
+		Jobs: []maintenance.Job{
+			{Name: "eventos", Run: func(ctx context.Context) (string, error) {
+				var corte time.Time
+				if cfg.RetentionDays > 0 {
+					corte = time.Now().Add(-time.Duration(cfg.RetentionDays) * 24 * time.Hour)
+				}
+				n, err := db.PruneEvents(ctx, corte, cfg.RetentionMaxEvents)
+				return fmt.Sprintf("eventos: %d borrados", n), err
+			}},
+			{Name: "sesiones", Run: func(ctx context.Context) (string, error) {
+				if cfg.RetentionDays == 0 {
+					return "sesiones: retención desactivada", nil
+				}
+				n, err := db.PruneSessions(ctx, time.Now().Add(-time.Duration(cfg.RetentionDays)*24*time.Hour))
+				return fmt.Sprintf("sesiones: %d borradas", n), err
+			}},
+		},
+		OnDone: func(resumen string, err error) {
+			level := store.LevelInfo
+			if err != nil {
+				level = store.LevelWarn
+			}
+			if _, e := db.LogEvent(context.Background(), store.Event{
+				Level: level, Kind: "maintenance_ran", Message: "mantenimiento: " + resumen,
+			}); e != nil {
+				logger.Error("no se pudo registrar el mantenimiento", "err", e)
+			}
+		},
+	}
+	fondo.Add(1)
+	go func() {
+		defer fondo.Done()
+		mant.Run(sinkCtx)
+	}()
 
 	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{
 		Addr:    cfg.RTMPAddr,
@@ -288,6 +376,8 @@ func run(ctx context.Context, out io.Writer) error {
 		Engine:        engine,
 		Ingest:        ingest,
 		Sinks:         factory,
+		Tester:        factory,
+		Webhooks:      webhooks,
 		MasterKey:     cfg.MasterKey,
 		RTMPAddr:      cfg.RTMPAddr,
 		Version:       version,
@@ -295,6 +385,18 @@ func run(ctx context.Context, out io.Writer) error {
 		SPA:           panelFS,
 		Logger:        logger,
 		SecureCookies: cfg.SecureCookies,
+		MetricsToken:  cfg.MetricsToken,
+		ExtraMetrics: []httpapi.ExtraMetrics{func() []httpapi.Metric {
+			ok, failed := webhooks.Stats()
+			return []httpapi.Metric{
+				{Name: "splitstream_events_bus_dropped_total", Type: "counter",
+					Help: "Eventos que un consumidor lento no llegó a recibir.", Value: float64(bus.Dropped())},
+				{Name: "splitstream_webhook_deliveries_total", Type: "counter", Help: "Entregas de webhooks por resultado.",
+					Labels: map[string]string{"result": "ok"}, Value: float64(ok)},
+				{Name: "splitstream_webhook_deliveries_total", Type: "counter", Help: "Entregas de webhooks por resultado.",
+					Labels: map[string]string{"result": "failed"}, Value: float64(failed)},
+			}
+		}},
 	})
 	if err != nil {
 		return err
@@ -372,6 +474,25 @@ func run(ctx context.Context, out io.Writer) error {
 	case <-time.After(3 * time.Second):
 		logger.Warn("la ingesta no cerró en 3s; se sigue adelante")
 	}
+
+	// Y esto va lo ÚLTIMO, justo antes del return: al volver de run() corre el
+	// `defer db.Close()`, y tanto el despachador como el mantenimiento escriben en la
+	// base. WebhookDispatcher.Run espera a sus envíos en vuelo antes de volver, así que
+	// verlo volver es lo que garantiza que ningún RecordWebhookDelivery —ni el del aviso
+	// de apagado— llegue tarde, cuando la base ya no acepta escrituras.
+	//
+	// Diez segundos, que es el plazo por intento del despachador: un envío que se lanzó
+	// justo antes de cancelar sobrevive a la cancelación y hay que dejarle terminar, o el
+	// aviso de apagado —el que más le importa a quien opera esto— se pierde siempre. El
+	// peor caso del cierre entero suma HTTP 5 s + WaitIdle 5 s + hub 3 s + fondo 10 s +
+	// ingesta 3 s = 26 s, por debajo del TimeoutStopSec=30 de la unidad de systemd.
+	finFondo := make(chan struct{})
+	go func() { fondo.Wait(); close(finFondo) }()
+	select {
+	case <-finFondo:
+	case <-time.After(10 * time.Second):
+		logger.Warn("los avisos y el mantenimiento no terminaron en 10s; se sigue adelante")
+	}
 	return nil
 }
 
@@ -446,4 +567,46 @@ func (a storeAdapter) LogEvent(ctx context.Context, e relay.EngineEvent) error {
 		Message:       e.Message,
 	})
 	return err
+}
+
+// healthcheckURL apunta siempre a la propia máquina: el addr de escucha puede ser ":8080"
+// o "0.0.0.0:8080", que no son direcciones a las que conectar.
+func healthcheckURL(addr string) string {
+	_, puerto, err := net.SplitHostPort(addr)
+	if err != nil || puerto == "" {
+		puerto = "8080"
+	}
+	return "http://127.0.0.1:" + puerto + "/healthz"
+}
+
+func healthcheck(addr string) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(healthcheckURL(addr))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("/healthz respondió %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// backup copia la base con VACUUM INTO. Abre la base como el servicio —con sus
+// migraciones— para que el respaldo esté en la versión actual del esquema.
+func backup(ctx context.Context, destino string, out io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	db, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.BackupTo(ctx, destino); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "respaldo escrito en %s\nRecuerda: sin la clave maestra es ilegible.\n", destino)
+	return nil
 }

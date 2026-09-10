@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,11 @@ const (
 	StateLive
 	StateReconnecting
 	StateError
+	// StateSuspended: el sink dejó de reintentar dentro de esta sesión tras
+	// SuspendAfterAttempts intentos sin transmitir o SuspendAfterFlaps cortes seguidos
+	// (spec base §6.5, enmendado en la v0.8). Sale de aquí al reconstruirlo («Reintentar»)
+	// o al empezar otra sesión.
+	StateSuspended
 )
 
 func (s State) String() string {
@@ -33,6 +39,8 @@ func (s State) String() string {
 		return "reconnecting"
 	case StateError:
 		return "error"
+	case StateSuspended:
+		return "suspended"
 	default:
 		return "desconocido"
 	}
@@ -64,6 +72,17 @@ const minHealthySession = 30 * time.Second
 // destino aletea. Como suspectThreshold, no deja de reintentar (spec §6.5): deja constancia.
 const flapThreshold = 3
 
+// Umbrales de suspensión (spec base §6.5, enmendado). Antes los reintentos eran
+// indefinidos; con una clave mal pegada eso era un bucle silencioso, y contra una
+// plataforma que cuenta cada intento como emisión activa, un cupo agotado.
+//
+// Diez intentos con el backoff topado a 30 s son unos dos minutos: de sobra para una
+// caída puntual de red, y un tope claro para una configuración que nunca va a funcionar.
+const (
+	DefaultSuspendAfterAttempts = 10
+	DefaultSuspendAfterFlaps    = 5
+)
+
 // SinkConfig son los datos para construir un sink.
 type SinkConfig struct {
 	ID   int64
@@ -78,6 +97,10 @@ type SinkConfig struct {
 	Now     func() time.Time
 	Seed    int64
 	OnEvent func(EngineEvent)
+	// SuspendAfterAttempts y SuspendAfterFlaps sobreescriben los umbrales de suspensión.
+	// 0 usa el valor por defecto.
+	SuspendAfterAttempts int
+	SuspendAfterFlaps    int
 }
 
 // Sink atiende a un destino desde su propia goroutine: conecta, reenvía, y reconecta con
@@ -91,6 +114,9 @@ type Sink struct {
 	met     *metrics
 	bo      *backoff
 	onEvent func(EngineEvent)
+
+	suspendAttempts int
+	suspendFlaps    int
 
 	quit      chan struct{}
 	done      chan struct{}
@@ -125,17 +151,28 @@ func NewSink(cfg SinkConfig) *Sink {
 		}
 	}
 
+	suspendAttempts := cfg.SuspendAfterAttempts
+	if suspendAttempts <= 0 {
+		suspendAttempts = DefaultSuspendAfterAttempts
+	}
+	suspendFlaps := cfg.SuspendAfterFlaps
+	if suspendFlaps <= 0 {
+		suspendFlaps = DefaultSuspendAfterFlaps
+	}
+
 	return &Sink{
-		id:      cfg.ID,
-		name:    cfg.Name,
-		newPub:  newPub,
-		log:     log.With("destino_id", cfg.ID, "destino", cfg.Name),
-		q:       newQueue(cfg.Queue),
-		met:     newMetrics(cfg.Now),
-		bo:      newBackoff(seed),
-		onEvent: cfg.OnEvent,
-		quit:    make(chan struct{}),
-		done:    make(chan struct{}),
+		id:              cfg.ID,
+		name:            cfg.Name,
+		newPub:          newPub,
+		log:             log.With("destino_id", cfg.ID, "destino", cfg.Name),
+		q:               newQueue(cfg.Queue),
+		met:             newMetrics(cfg.Now),
+		bo:              newBackoff(seed),
+		onEvent:         cfg.OnEvent,
+		suspendAttempts: suspendAttempts,
+		suspendFlaps:    suspendFlaps,
+		quit:            make(chan struct{}),
+		done:            make(chan struct{}),
 	}
 }
 
@@ -308,6 +345,15 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 			s.log.Error("el destino nunca llega a transmitir: revisa la URL y la clave")
 		}
 
+		// Suspensión: tras N intentos seguidos sin transmitir, o M sesiones cortas
+		// seguidas, se deja de reintentar. bo.attempts() cuenta los next() ya hechos, así
+		// que el intento que acaba de fallar es attempts()+1.
+		intentos := s.bo.attempts() + 1
+		if (!transmitted && intentos >= s.suspendAttempts) || flaps >= s.suspendFlaps {
+			s.suspend(ctx, intentos, flaps, flaps >= s.suspendFlaps)
+			return
+		}
+
 		wait := s.bo.next()
 		s.setState(StateReconnecting)
 		s.log.Info("reintentando el destino", "espera", wait, "intento", s.bo.attempts())
@@ -322,6 +368,34 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 		case <-time.After(wait):
 		}
 	}
+}
+
+// suspend deja el sink parado dentro de la sesión, sin cerrar su cola: el hub sigue
+// entregándole mensajes y la política de descarte de la cola —que se aplica en push— evita
+// que crezca. Se sale solo por Stop (que llegará con «Reintentar» o con el fin de sesión)
+// o por el contexto del proceso.
+// porAleteo distingue cuál de los dos umbrales saltó, porque lo que hay que revisar es
+// distinto: aletear es conectar y que te corten —emisión cerrada o cupo agotado—, mientras
+// que no llegar a transmitir nunca huele a URL o clave mal pegadas.
+func (s *Sink) suspend(ctx context.Context, intentos, flaps int, porAleteo bool) {
+	s.setState(StateSuspended)
+	msg := fmt.Sprintf(
+		"el destino queda suspendido en esta sesión tras %d intentos sin transmitir; "+
+			"revisa la URL y la clave y pulsa «Reintentar»", intentos)
+	if porAleteo {
+		msg = fmt.Sprintf(
+			"el destino queda suspendido en esta sesión tras %d cortes seguidos: conecta, "+
+				"transmite poco y la plataforma corta; revisa si la emisión sigue abierta o si "+
+				"alcanzaste su límite y pulsa «Reintentar»", flaps)
+	}
+	s.emit("error", "destination_suspended", msg)
+	s.log.Error("destino suspendido", "intentos", intentos, "cortes", flaps, "por_aleteo", porAleteo)
+
+	select {
+	case <-s.quit:
+	case <-ctx.Done():
+	}
+	s.setState(StateIdle)
 }
 
 // session abre una conexión y transmite hasta que falla o se para el sink.

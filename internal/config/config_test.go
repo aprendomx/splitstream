@@ -367,6 +367,29 @@ func TestEmptyKeyFileIsAnErrorNotANewKey(t *testing.T) {
 	}
 }
 
+func TestMetricsTokenIsReadAndNeverLogged(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY":    testKeyB64(),
+		"SPLITSTREAM_METRICS_TOKEN": "token-de-metricas-inconfundible",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.MetricsToken != "token-de-metricas-inconfundible" {
+		t.Errorf("MetricsToken = %q", cfg.MetricsToken)
+	}
+
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("config", "config", cfg)
+	if strings.Contains(buf.String(), "inconfundible") {
+		t.Error("el token de métricas salió por el log")
+	}
+	blob, _ := json.Marshal(cfg)
+	if strings.Contains(string(blob), "inconfundible") {
+		t.Error("el token de métricas salió por JSON")
+	}
+}
+
 // TestKeyPathSitsNextToTheDatabase: los dos archivos se respaldan y se mueven juntos.
 func TestKeyPathSitsNextToTheDatabase(t *testing.T) {
 	casos := map[string]string{
@@ -379,5 +402,32 @@ func TestKeyPathSitsNextToTheDatabase(t *testing.T) {
 		if got := config.KeyPathFor(db); got != quiero {
 			t.Errorf("KeyPathFor(%q) = %q, quería %q", db, got, quiero)
 		}
+	}
+}
+
+func TestRetentionDefaultsAndOverrides(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RetentionDays != 90 || cfg.RetentionMaxEvents != 50000 {
+		t.Errorf("defaults = %d días, %d eventos", cfg.RetentionDays, cfg.RetentionMaxEvents)
+	}
+
+	cfg, err = config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_RETENTION_DAYS": "0",
+		"SPLITSTREAM_RETENTION_MAX_EVENTS": "1000",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RetentionDays != 0 || cfg.RetentionMaxEvents != 1000 {
+		t.Errorf("override = %d días, %d eventos", cfg.RetentionDays, cfg.RetentionMaxEvents)
+	}
+
+	if _, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_RETENTION_DAYS": "muchos",
+	})); err == nil {
+		t.Error("un valor no numérico debería ser error")
 	}
 }

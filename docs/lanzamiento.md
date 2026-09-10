@@ -1,8 +1,7 @@
 # Entrada de lanzamiento
 
 Borrador listo para publicar y el trabajo de posicionamiento que lo acompaña.
-Escrito para la v0.6.0. Si cambian las plataformas soportadas o lo que la
-herramienta no hace, hay que revisarlo: son las dos cosas que el texto promete.
+Escrito para la v0.8.0, la primera con `/metrics`, avisos y «probar destino»; si cambian las plataformas soportadas o lo que la herramienta no hace, hay que revisarlo. Son las dos cosas que el texto promete.
 
 ---
 
@@ -70,6 +69,12 @@ El más caro fue con Facebook. Al ser rechazados, reintentábamos cada segundo �
 cuenta cada intento como una emisión activa. Le agotamos la cuota a la cuenta y se quedó sin
 poder emitir. Ahora los reintentos se espacian, y transmitir unos pocos kilobytes ya no
 cuenta como «la configuración es correcta».
+
+La v0.8 añade lo que nos hubiera ahorrado varias de estas sorpresas: `/metrics` en formato
+Prometheus para vigilarlo desde fuera, avisos por webhook cuando algo falla, y un botón
+«probar destino» que sondea la configuración sin emitir. Y el propio fallo de Facebook ya
+no puede repetirse: un destino que nunca consigue transmitir se suspende tras diez intentos
+seguidos y lo dice, en vez de reintentar para siempre.
 
 > Los tres fallos producían exactamente el mismo mensaje en el registro. Por eso el panel no
 > te enseña el error técnico: te dice «conecta y se corta» y te sugiere revisar si alcanzaste

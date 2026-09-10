@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { Notify } from 'quasar'
 import { api, ApiError } from '@/api'
 
 // El estado del panel se alimenta del WebSocket, que empuja el mismo statusDTO que
@@ -13,10 +14,10 @@ export const usePanel = defineStore('panel', {
     esLocal: true,
     cargando: true,
     estado: null,      // statusDTO
-    eventos: [],
     errorConexion: null,
     ws: null,
     reintentoWs: 0,
+    ultimoEventoAvisado: null,
   }),
 
   getters: {
@@ -30,6 +31,7 @@ export const usePanel = defineStore('panel', {
       // segundo. Es "todavía no se sabe", no un error.
       return ses?.width && ses?.height ? `${ses.width}×${ses.height}` : null
     },
+    eventosRecientes: (s) => s.estado?.recent_events ?? [],
   },
 
   actions: {
@@ -53,9 +55,9 @@ export const usePanel = defineStore('panel', {
       this.cargando = true
       try {
         this.estado = await api.estado()
+        this.marcarVistos(this.estado.recent_events ?? [])
         this.autenticado = true
         this.errorConexion = null
-        this.refrescarEventos()
         // Al recargar la página la cookie sigue siendo válida, así que se entra por aquí
         // y no por entrar(). Sin esto el panel se quedaba con la foto del GET inicial y
         // no volvía a actualizarse nunca.
@@ -92,8 +94,24 @@ export const usePanel = defineStore('panel', {
       await this.cargar()
     },
 
-    async refrescarEventos() {
-      try { this.eventos = await api.eventos(50) } catch { /* el log no es crítico */ }
+    /** El primer estado no avisa: son eventos de antes de abrir el panel. */
+    marcarVistos(eventos) {
+      this.ultimoEventoAvisado = eventos[0]?.id ?? 0
+    },
+
+    /**
+     * Un aviso por cada evento de nivel error que no se había visto. Los warn no avisan:
+     * un destino reconectando durante una emisión larga produciría una notificación cada
+     * pocos segundos, y eso es ruido que acaba en "cerrar sin leer".
+     */
+    avisarErroresNuevos(eventos) {
+      if (this.ultimoEventoAvisado === null) { this.marcarVistos(eventos); return }
+      const nuevos = eventos.filter((e) => e.id > this.ultimoEventoAvisado)
+      if (!nuevos.length) return
+      this.ultimoEventoAvisado = nuevos[0].id
+      for (const e of nuevos.filter((e) => e.level === 'error').reverse()) {
+        Notify.create({ type: 'negative', message: e.message, timeout: 8000, actions: [{ label: 'Cerrar', color: 'white' }] })
+      }
     },
 
     conectarWs() {
@@ -104,7 +122,9 @@ export const usePanel = defineStore('panel', {
 
       ws.onmessage = (ev) => {
         try {
-          this.estado = JSON.parse(ev.data)
+          const nuevo = JSON.parse(ev.data)
+          this.avisarErroresNuevos(nuevo.recent_events ?? [])
+          this.estado = nuevo
           this.errorConexion = null
           this.reintentoWs = 0
         } catch { /* un mensaje ilegible no debe tirar el panel */ }

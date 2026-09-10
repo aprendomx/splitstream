@@ -529,3 +529,22 @@ func TestEventsIsAnArrayEvenWhenEmpty(t *testing.T) {
 		t.Errorf("cuerpo = %q, quería []", got)
 	}
 }
+
+// El estado lleva los últimos eventos para que el panel no sondee GET /api/events. Van en
+// el mismo tipo que empuja el WebSocket (spec base §10).
+func TestStatusCarriesRecentEventsNewestFirst(t *testing.T) {
+	srv, db, _, _, cookies := newDestServer(t)
+	ctx := context.Background()
+	for i := 0; i < 25; i++ {
+		if _, err := db.LogEvent(ctx, store.Event{Level: store.LevelInfo, Kind: "k", Message: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if len(st.RecentEvents) != 20 {
+		t.Fatalf("recent_events = %d, quería 20", len(st.RecentEvents))
+	}
+	if st.RecentEvents[0].ID < st.RecentEvents[1].ID {
+		t.Error("recent_events no va del más reciente al más antiguo")
+	}
+}

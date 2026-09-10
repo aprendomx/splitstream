@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/probe"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
@@ -287,3 +288,51 @@ type aceptaTodo struct{}
 func (aceptaTodo) OnPublishStart(app, key string) error { return nil }
 func (aceptaTodo) OnMessage(msg *relay.Message)         {}
 func (aceptaTodo) OnPublishEnd()                        {}
+
+// Test descifra la clave con DestinationKeyForRelay —no es una divulgación, no se
+// audita— y sondea. Contra un puerto cerrado el resultado es "unreachable" y no un error:
+// el error es para "no pude ni intentarlo".
+func TestTestProbesTheDestination(t *testing.T) {
+	db, c, f := setup(t)
+	ctx := context.Background()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	d, err := db.CreateDestination(ctx, c, store.NewDestination{
+		Name: "cerrado", Platform: store.PlatformCustom, RTMPURL: "rtmp://" + addr + "/live",
+		Key: crypto.Secret("k"), Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := f.Test(ctx, *d)
+	if err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	if res.Outcome != probe.Unreachable {
+		t.Errorf("outcome = %v, quería unreachable", res.Outcome)
+	}
+
+	eventos, err := db.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range eventos {
+		if e.Kind == "key_revealed" {
+			t.Error("Test auditó como si hubiera revelado la clave a una persona")
+		}
+	}
+}
+
+func TestTestMissingDestination(t *testing.T) {
+	_, _, f := setup(t)
+	if _, err := f.Test(context.Background(), store.Destination{ID: 9999}); err == nil {
+		t.Error("quería error para un destino que no existe")
+	}
+}

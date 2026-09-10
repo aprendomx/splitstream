@@ -1,0 +1,51 @@
+package store
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// PruneEvents borra eventos más viejos que olderThan (si no es cero) y deja como mucho
+// keepAtMost filas (si es > 0), conservando las más recientes. Devuelve cuántas borró.
+//
+// La comparación por fecha es sobre texto y funciona porque desde la migración 0002 todos
+// los timestamps tienen ancho fijo en UTC (spec base §15.4).
+func (d *DB) PruneEvents(ctx context.Context, olderThan time.Time, keepAtMost int) (int64, error) {
+	var total int64
+	if !olderThan.IsZero() {
+		res, err := d.ex.ExecContext(ctx, `DELETE FROM events WHERE created_at < ?`, formatTime(olderThan))
+		if err != nil {
+			return total, fmt.Errorf("podar eventos por fecha: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	if keepAtMost > 0 {
+		res, err := d.ex.ExecContext(ctx,
+			`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)`, keepAtMost)
+		if err != nil {
+			return total, fmt.Errorf("podar eventos por cantidad: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	return total, nil
+}
+
+// PruneSessions borra sesiones cerradas que empezaron antes de olderThan y a las que ya
+// no apunta ningún evento. Una sesión abierta nunca se toca, por vieja que parezca: puede
+// ser la de ahora mismo tras un reloj mal puesto.
+func (d *DB) PruneSessions(ctx context.Context, olderThan time.Time) (int64, error) {
+	res, err := d.ex.ExecContext(ctx,
+		`DELETE FROM sessions
+		  WHERE ended_at IS NOT NULL
+		    AND started_at < ?
+		    AND id NOT IN (SELECT session_id FROM events WHERE session_id IS NOT NULL)`,
+		formatTime(olderThan))
+	if err != nil {
+		return 0, fmt.Errorf("podar sesiones: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}

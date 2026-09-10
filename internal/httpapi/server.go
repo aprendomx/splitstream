@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/probe"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/store"
 )
@@ -26,6 +27,13 @@ type Disconnecter interface {
 // *sinks.Factory (Task 8).
 type SinkBuilder interface {
 	Build(ctx context.Context, d store.Destination) (*relay.Sink, error)
+}
+
+// DestinationTester sondea un destino sin emitir. Lo cumple *sinks.Factory. Devuelve
+// probe.Result y no un tipo de rtmpio para que este paquete no importe go-rtmp ni de
+// forma transitiva.
+type DestinationTester interface {
+	Test(ctx context.Context, d store.Destination) (probe.Result, error)
 }
 
 // EngineView es lo que la API necesita saber del motor: si hay sesión y cómo va cada
@@ -56,6 +64,12 @@ type EngineView interface {
 	VideoConfig() []byte
 }
 
+// WebhookSender manda un evento a un webhook. Lo cumple *alerts.WebhookDispatcher; la API
+// lo usa para el botón «Probar».
+type WebhookSender interface {
+	Send(ctx context.Context, w store.Webhook, ev store.Event) error
+}
+
 // Config son las dependencias del servidor. DB y Cipher son obligatorias; el resto puede
 // ser nil en los tests que no las ejercitan.
 type Config struct {
@@ -64,6 +78,10 @@ type Config struct {
 	Engine EngineView
 	Ingest Disconnecter
 	Sinks  SinkBuilder
+	Tester DestinationTester
+	// Webhooks manda el evento sintético del botón «Probar». Nil en los tests que no lo
+	// ejercitan: handleTestWebhook responde 409 en vez de entrar en pánico.
+	Webhooks WebhookSender
 	// MasterKey solo se usa para derivar la clave de firma de la cookie; no se guarda.
 	MasterKey [32]byte
 	Logger    *slog.Logger
@@ -84,24 +102,34 @@ type Config struct {
 	// la petición porque en el despliegue del spec §12 el TLS lo termina un proxy y el
 	// binario solo ve HTTP: adivinarlo daría una cookie sin Secure justo en producción.
 	SecureCookies bool
+	// MetricsToken autoriza GET /metrics con `Authorization: Bearer` sin cookie de sesión,
+	// para que Prometheus pueda scrapearlo. Vacío: solo la cookie.
+	MetricsToken string
+	// ExtraMetrics aporta series adicionales a /metrics —el bus de eventos, los
+	// webhooks— sin que este paquete tenga que importar esos componentes.
+	ExtraMetrics []ExtraMetrics
 }
 
 // Server sirve la API del spec §9.
 type Server struct {
-	db        *store.DB
-	cipher    *crypto.Cipher
-	engine    EngineView
-	ingest    Disconnecter
-	sinks     SinkBuilder
-	signer    *sessionSigner
-	limiter   *loginLimiter
-	logger    *slog.Logger
-	setupCode string
-	version   string
-	spa       fs.FS
-	secure    bool
-	rtmpPort  string
-	mux       *http.ServeMux
+	db           *store.DB
+	cipher       *crypto.Cipher
+	engine       EngineView
+	ingest       Disconnecter
+	sinks        SinkBuilder
+	tester       DestinationTester
+	webhooks     WebhookSender
+	signer       *sessionSigner
+	limiter      *loginLimiter
+	logger       *slog.Logger
+	setupCode    string
+	version      string
+	spa          fs.FS
+	secure       bool
+	rtmpPort     string
+	mux          *http.ServeMux
+	metricsToken string
+	extra        []ExtraMetrics
 }
 
 func New(cfg Config) (*Server, error) {
@@ -122,10 +150,11 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
-		ingest: cfg.Ingest, sinks: cfg.Sinks,
+		ingest: cfg.Ingest, sinks: cfg.Sinks, tester: cfg.Tester, webhooks: cfg.Webhooks,
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
 		setupCode: cfg.SetupCode, version: cfg.Version, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
+		metricsToken: cfg.MetricsToken, extra: cfg.ExtraMetrics,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto
@@ -145,6 +174,8 @@ func (s *Server) routes() {
 	// Públicas: son el camino para conseguir una sesión.
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
+	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+	s.mux.Handle("GET /metrics", s.requireSessionOrToken(http.HandlerFunc(s.handleMetrics)))
 
 	// La configuración inicial también es pública, por definición: existe justo cuando
 	// todavía no hay contraseña con la que autenticarse. Se protege de otra forma —solo
@@ -168,11 +199,20 @@ func (s *Server) routes() {
 	// más específico, así que no compite con PATCH/DELETE /api/destinations/{id}.
 	protegida("POST /api/destinations/toggle-all", s.handleToggleAllDestinations)
 	protegida("GET /api/destinations/{id}/key", s.handleRevealDestinationKey)
+	protegida("POST /api/destinations/{id}/retry", s.handleRetryDestination)
+	protegida("POST /api/destinations/{id}/test", s.handleTestDestination)
 	protegida("PUT /api/destinations/{id}/logo", s.handlePutDestinationLogo)
 	protegida("GET /api/destinations/{id}/logo", s.handleGetDestinationLogo)
 	protegida("DELETE /api/destinations/{id}/logo", s.handleDeleteDestinationLogo)
+	protegida("GET /api/webhooks", s.handleListWebhooks)
+	protegida("POST /api/webhooks", s.handleCreateWebhook)
+	protegida("PATCH /api/webhooks/{id}", s.handlePatchWebhook)
+	protegida("DELETE /api/webhooks/{id}", s.handleDeleteWebhook)
+	protegida("POST /api/webhooks/{id}/test", s.handleTestWebhook)
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
+	protegida("GET /api/sessions", s.handleSessions)
+	protegida("POST /api/backup", s.handleBackup)
 	protegida("GET /ws", s.handleWS)
 	protegida("GET /api/preview/ws", s.handlePreviewWS)
 

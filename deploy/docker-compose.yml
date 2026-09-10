@@ -40,8 +40,8 @@ services:
     security_opt:
       - no-new-privileges:true
 
-    # Sin healthcheck con curl: la imagen es scratch y no tiene shell ni binarios. Docker
-    # ya reinicia el contenedor si el proceso muere, que es lo que puede pasar aquí.
+    # El healthcheck lo trae la imagen: `splitstream -healthcheck` consulta /healthz.
+    # `docker compose ps` enseña healthy/unhealthy.
 
 volumes:
   splitstream-datos:

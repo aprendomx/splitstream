@@ -92,7 +92,6 @@ export const api = {
   logout: () => pedir('POST', '/api/auth/logout'),
 
   estado: () => pedir('GET', '/api/status'),
-  eventos: (limit = 50) => pedir('GET', `/api/events?limit=${limit}`),
 
   ingesta: () => pedir('GET', '/api/ingest'),
   rotarClave: (desconectarAhora) =>
@@ -105,6 +104,8 @@ export const api = {
   alternarDestino: (id) => pedir('POST', `/api/destinations/${id}/toggle`),
   reordenarDestinos: (ids) => pedir('POST', '/api/destinations/reorder', { ids }),
   revelarClave: (id) => pedir('GET', `/api/destinations/${id}/key`),
+  reintentarDestino: (id) => pedir('POST', `/api/destinations/${id}/retry`),
+  probarDestino: (id) => pedir('POST', `/api/destinations/${id}/test`),
 
   // El interruptor maestro manda el estado deseado, no una orden de invertir: si unos
   // canales están encendidos y otros no, invertir dejaría la mitad al revés de lo que el
@@ -116,4 +117,18 @@ export const api = {
   // La URL lleva la versión del logo para que al cambiarlo el navegador no siga
   // enseñando el anterior desde su caché.
   urlLogo: (d) => `/api/destinations/${d.id}/logo?v=${d.logo_etag}`,
+
+  webhooks: () => pedir('GET', '/api/webhooks'),
+  crearWebhook: (w) => pedir('POST', '/api/webhooks', w),
+  editarWebhook: (id, patch) => pedir('PATCH', `/api/webhooks/${id}`, patch),
+  borrarWebhook: (id) => pedir('DELETE', `/api/webhooks/${id}`),
+  probarWebhook: (id) => pedir('POST', `/api/webhooks/${id}/test`),
+  sesiones: (limit = 50, before = 0) => pedir('GET', `/api/sessions?limit=${limit}&before=${before}`),
+  // El respaldo es una descarga, no JSON: se pide con fetch y se entrega como blob.
+  descargarRespaldo: async () => {
+    const res = await fetch('/api/backup', { method: 'POST', credentials: 'same-origin' })
+    if (!res.ok) throw new ApiError(res.status, 'internal', 'No se pudo generar el respaldo')
+    const nombre = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? 'splitstream.db'
+    return { blob: await res.blob(), nombre }
+  },
 }
