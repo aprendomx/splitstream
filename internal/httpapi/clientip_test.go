@@ -83,6 +83,27 @@ func TestClientIPFallsBackToTheProxyOnGarbageOrAllTrusted(t *testing.T) {
 	}
 }
 
+// Un proxy de confianza que no es loopback —la red puente de Docker, por ejemplo— no
+// convierte a nadie en «local»: una cabecera con 127.0.0.1, ::1 o 0.0.0.0 solo puede
+// haberla inventado el cliente, y creerla saltaría el código del primer arranque.
+func TestClientIPRejectsLoopbackInTheForwardedChain(t *testing.T) {
+	s := servidorConProxies(t, "172.16.0.0/12")
+	for _, xff := range []string{"127.0.0.1", "::1", "0.0.0.0", "::"} {
+		r := peticion("172.17.0.1:9", xff)
+		if got := s.clientIP(r); got.String() != "172.17.0.1" {
+			t.Errorf("X-Forwarded-For %q: clientIP = %s, quería la del proxy 172.17.0.1", xff, got)
+		}
+		if s.esLocal(r) {
+			t.Errorf("X-Forwarded-For %q volvió local a quien llega por la red puente", xff)
+		}
+	}
+	// La cadena legítima sigue funcionando: el loopback falsificado corta ahí y no
+	// devuelve al cliente de más a la izquierda.
+	if got := s.clientIP(peticion("172.17.0.1:9", "127.0.0.1, 203.0.113.9")); got.String() != "203.0.113.9" {
+		t.Errorf("clientIP = %s, quería 203.0.113.9", got)
+	}
+}
+
 func TestClientIPHandlesIPv6AndMappedAddresses(t *testing.T) {
 	s := servidorConProxies(t, "::1/128")
 	if got := s.clientIP(peticion("[::1]:9", "2001:db8::5")); got.String() != "2001:db8::5" {

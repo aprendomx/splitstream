@@ -29,7 +29,12 @@ func (s *Server) clientIP(r *http.Request) netip.Addr {
 	}
 	for i := len(cadena) - 1; i >= 0; i-- {
 		a := addrDe(strings.TrimSpace(cadena[i]))
-		if !a.IsValid() {
+		// Loopback y 0.0.0.0/:: nunca son una dirección de cliente legítima aquí: si el
+		// proxy corre en la misma máquina, su propia IP loopback ya es de confianza y se
+		// salta unas líneas más abajo. Que quede una en la cadena significa que la
+		// escribió el cliente, y creerla volvería «local» —sin código del primer arranque
+		// y con el limitador del login en otro cubo— a cualquiera que la mande.
+		if !a.IsValid() || a.IsLoopback() || a.IsUnspecified() {
 			return remota
 		}
 		if !s.esProxyDeConfianza(a) {
