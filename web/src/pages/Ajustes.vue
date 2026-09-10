@@ -135,7 +135,6 @@ function guardarGrabacion() {
 const usoGrabacion = computed(() => {
   const g = grabacion.value
   if (!g) return ''
-  const tope = g.max_gb * 2 ** 30
   return `${bytesLegibles(g.used_bytes)} de ${g.max_gb} GB · ${bytesLegibles(g.free_bytes)} libres en el disco`
 })
 
