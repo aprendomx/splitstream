@@ -3,9 +3,11 @@ package alerts
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -162,11 +164,14 @@ func (d *WebhookDispatcher) Send(ctx context.Context, w store.Webhook, ev store.
 		if (status != 0 && status < 500) || intento >= len(d.Backoff) {
 			break
 		}
+		// El temporizador se para si gana el contexto: con time.After, cada Send abortado
+		// dejaba vivo hasta 16 s de temporizador que ya no le importaba a nadie.
+		esperar := time.NewTimer(d.Backoff[intento])
 		select {
 		case <-ctx.Done():
+			esperar.Stop()
 			lastErr = ctx.Err()
-			intento = len(d.Backoff)
-		case <-time.After(d.Backoff[intento]):
+		case <-esperar.C:
 			continue
 		}
 		break
@@ -177,12 +182,12 @@ func (d *WebhookDispatcher) Send(ctx context.Context, w store.Webhook, ev store.
 }
 
 // intento hace un POST. Devuelve el código HTTP (0 si no hubo respuesta) y el error.
-func (d *WebhookDispatcher) intento(ctx context.Context, url, kind, firma string, body []byte) (int, error) {
+func (d *WebhookDispatcher) intento(ctx context.Context, destino, kind, firma string, body []byte) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.Timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, destino, bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return 0, sinURL(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "splitstream/"+d.version)
@@ -192,13 +197,24 @@ func (d *WebhookDispatcher) intento(ctx context.Context, url, kind, firma string
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, sinURL(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp.StatusCode, nil
 	}
 	return resp.StatusCode, fmt.Errorf("el servidor respondió %d", resp.StatusCode)
+}
+
+// sinURL quita la URL del error de red. Un *url.Error imprime la URL entera, y en Discord
+// o Slack la URL ES el secreto: sin esto acabaría en el log de dispatch, en el `last_error`
+// de la fila del webhook y en el cuerpo del 502 del botón «Probar» (spec §8).
+func sinURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 // rank ordena los niveles para comparar con min_level.

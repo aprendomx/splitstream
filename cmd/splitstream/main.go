@@ -252,9 +252,19 @@ func run(ctx context.Context, out io.Writer) error {
 	sinkCtx, cancelSinks := context.WithCancel(context.Background())
 	defer cancelSinks()
 
+	// fondo agrupa a los consumidores del bus que escriben en la base —el despachador de
+	// webhooks y el mantenimiento—. Hay que verlos volver ANTES de salir de run(), porque
+	// al salir corre el `defer db.Close()` de arriba y una entrega en vuelo todavía tiene
+	// que apuntar su resultado con RecordWebhookDelivery.
+	var fondo sync.WaitGroup
+
 	// Webhooks salientes: consumen el bus en su propia goroutine y jamás lo frenan.
 	webhooks := alerts.NewWebhookDispatcher(bus, db, cipher, logger, version)
-	go webhooks.Run(sinkCtx)
+	fondo.Add(1)
+	go func() {
+		defer fondo.Done()
+		webhooks.Run(sinkCtx)
+	}()
 
 	hub := relay.NewHub(logger)
 	engine := relay.NewEngine(relay.EngineConfig{
@@ -321,7 +331,11 @@ func run(ctx context.Context, out io.Writer) error {
 			}
 		},
 	}
-	go mant.Run(sinkCtx)
+	fondo.Add(1)
+	go func() {
+		defer fondo.Done()
+		mant.Run(sinkCtx)
+	}()
 
 	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{
 		Addr:    cfg.RTMPAddr,
@@ -459,6 +473,19 @@ func run(ctx context.Context, out io.Writer) error {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		logger.Warn("la ingesta no cerró en 3s; se sigue adelante")
+	}
+
+	// Y esto va lo ÚLTIMO, justo antes del return: al volver de run() corre el
+	// `defer db.Close()`, y tanto el despachador como el mantenimiento escriben en la
+	// base. WebhookDispatcher.Run espera a sus envíos en vuelo antes de volver, así que
+	// verlo volver es lo que garantiza que ningún RecordWebhookDelivery —ni el del aviso
+	// de apagado— llegue tarde, cuando la base ya no acepta escrituras.
+	finFondo := make(chan struct{})
+	go func() { fondo.Wait(); close(finFondo) }()
+	select {
+	case <-finFondo:
+	case <-time.After(5 * time.Second):
+		logger.Warn("los avisos y el mantenimiento no terminaron en 5s; se sigue adelante")
 	}
 	return nil
 }

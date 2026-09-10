@@ -185,12 +185,22 @@ func TestDispatcherRetriesOn5xxButNotOn4xx(t *testing.T) {
 func TestDispatcherDoesNotBlockTheBusOnASlowEndpoint(t *testing.T) {
 	db, c, bus := setup(t)
 	var atendidas atomic.Int32
+	// El handler no contesta nunca: se queda ahí hasta que el cliente se rinde por plazo
+	// (o hasta que acaba el test). Antes dormía 30 s, y como httptest.Server.Close espera
+	// a los handlers vivos, el test entero duraba medio minuto.
+	fin := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atendidas.Add(1)
-		time.Sleep(30 * time.Second)
+		select {
+		case <-r.Context().Done():
+		case <-fin:
+		}
 	}))
-	defer srv.CloseClientConnections()
+	// Los defer corren en orden inverso: primero se sueltan los handlers, luego se cortan
+	// las conexiones y solo al final Close, que ya no tiene a quién esperar.
 	defer srv.Close()
+	defer srv.CloseClientConnections()
+	defer close(fin)
 	crearHook(t, db, c, srv.URL, nil)
 
 	d := alerts.NewWebhookDispatcher(bus, db, c, nil, "v")
@@ -210,4 +220,89 @@ func TestDispatcherDoesNotBlockTheBusOnASlowEndpoint(t *testing.T) {
 		t.Fatalf("50 LogEvent tardaron %v con un webhook colgado", d)
 	}
 	esperar(t, 5*time.Second, func() bool { _, f := d.Stats(); return f >= 1 }, "algún envío falló por plazo")
+}
+
+// La URL de un webhook de Discord o de Slack ES el secreto: quien la tiene puede publicar
+// en ese canal. Un fallo de red no puede filtrarla ni al error, ni al log, ni a la fila.
+func TestSendDoesNotLeakTheURLOnANetworkError(t *testing.T) {
+	db, c, _ := setup(t)
+	const token = "TOKEN-INCONFUNDIBLE"
+	// Puerto 1: cerrado en cualquier máquina, así que el fallo es de red y el *url.Error
+	// que devuelve el cliente HTTP lleva la URL entera.
+	w := crearHook(t, db, c, "http://127.0.0.1:1/hooks/"+token, nil)
+
+	d := alerts.NewWebhookDispatcher(nil, db, c, nil, "v")
+	d.Backoff = nil
+	ev := store.Event{ID: 1, Level: store.LevelWarn, Kind: "k", Message: "m"}
+	err := d.Send(context.Background(), *w, ev)
+	if err == nil {
+		t.Fatal("Send contra un puerto cerrado = nil, quería error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Errorf("el error devuelto lleva la URL del webhook: %v", err)
+	}
+
+	hooks, err := db.ListWebhooks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hooks[0].LastError == "" {
+		t.Fatal("no se registró el fallo en la fila del webhook")
+	}
+	if strings.Contains(hooks[0].LastError, token) {
+		t.Errorf("last_error lleva la URL del webhook: %q", hooks[0].LastError)
+	}
+}
+
+// Run no puede volver mientras quede un envío en vuelo: main espera a que vuelva justo
+// antes de que corra su `defer db.Close()`, y todo envío apunta su resultado con
+// RecordWebhookDelivery. Si Run se adelantara, esa escritura caería sobre una base cerrada.
+func TestRunWaitsForInFlightSends(t *testing.T) {
+	db, c, bus := setup(t)
+	recibida := make(chan struct{})
+	var unaVez sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		unaVez.Do(func() { close(recibida) })
+		time.Sleep(300 * time.Millisecond)
+	}))
+	defer srv.Close()
+	defer srv.CloseClientConnections()
+	crearHook(t, db, c, srv.URL, nil)
+
+	d := alerts.NewWebhookDispatcher(bus, db, c, nil, "v")
+	d.Backoff = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	vuelto := make(chan struct{})
+	go func() { d.Run(ctx); close(vuelto) }()
+
+	if _, err := db.LogEvent(context.Background(), store.Event{Level: store.LevelError, Kind: "k", Message: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-recibida:
+	case <-time.After(5 * time.Second):
+		t.Fatal("el receptor no llegó a recibir el envío")
+	}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-vuelto:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run no volvió tras cancelar el contexto")
+	}
+
+	// Sin esperas ni reintentos a propósito: lo que main necesita es que esto ya esté
+	// hecho en el instante en que Run vuelve.
+	ok, failed := d.Stats()
+	if ok+failed != 1 {
+		t.Errorf("Stats = %d ok, %d failed al volver Run; quería el envío ya contabilizado", ok, failed)
+	}
+	hooks, err := db.ListWebhooks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hooks[0].LastStatus == nil && hooks[0].LastError == "" {
+		t.Error("Run volvió antes de que el envío registrara su resultado en la base")
+	}
 }
