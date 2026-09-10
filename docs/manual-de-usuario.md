@@ -282,6 +282,9 @@ Discord y Slack no llevan firma: su propia URL ya funciona como el secreto.
 En **Ajustes → Respaldo**, el botón **Descargar respaldo** te da una copia de la base de
 datos completa: canales, claves cifradas y la contraseña del panel.
 
+No se puede descargar con una emisión en curso: la copia retiene la base de datos y
+frenaría a tus canales. Hazlo al terminar.
+
 **Sin tu `splitstream.key` ese archivo no sirve de nada.** Las claves de tus canales están
 cifradas con tu clave maestra; sin ella, el respaldo es un montón de bytes ilegibles.
 Guarda los dos juntos, pero no en el mismo sitio que el original — el objetivo de un

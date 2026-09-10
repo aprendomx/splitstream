@@ -33,8 +33,9 @@ Se aplican en el spec base con la fecha de esta entrega.
 
 > **Antes:** «Reintentos indefinidos mientras la sesión siga viva.»
 >
-> **Desde el 2026-09-09:** reintentos hasta `SuspendAfterAttempts` (10) intentos seguidos
-> sin llegar a transmitir, o `SuspendAfterFlaps` (5) sesiones cortas seguidas. Alcanzado
+> **Desde el 2026-09-09:** reintentos hasta `SuspendAfterAttempts` (10) intentos sin
+> transmitir desde el último reinicio del backoff (una sesión sana de al menos 30 s), o
+> `SuspendAfterFlaps` (5) sesiones cortas seguidas. Alcanzado
 > cualquiera de los dos, el sink pasa a `suspended`, deja de reintentar y emite
 > `destination_suspended`. Sigue registrado en el hub: su cola recibe y descarta según su
 > política normal, así que no crece. Sale del estado cuando el usuario pulsa «Reintentar»
@@ -225,8 +226,10 @@ splitstream_webhook_deliveries_total{result="ok"|"failed"}
 - Respaldo con `VACUUM INTO` a un archivo temporal y `rename` atómico: copiar el `.db` a
   mano en modo WAL puede dar un archivo inconsistente. `POST /api/backup` lo descarga como
   `splitstream-AAAAMMDD-HHMMSS.db` y deja un evento `backup_downloaded` (warn: es un
-  archivo con todas las claves, aunque cifradas). `-backup <ruta>` hace lo mismo desde la
-  consola.
+  archivo con todas las claves, aunque cifradas). Con sesión viva **se rechaza con 409**,
+  por la misma razón por la que el scheduler espera: `VACUUM INTO` retiene la única
+  conexión de la base mientras copia y dejaría a los destinos esperando para escribir.
+  `-backup <ruta>` hace lo mismo desde la consola.
 
 ## 8. Pruebas
 

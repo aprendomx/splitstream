@@ -240,8 +240,8 @@ backoff `1s × 2ⁿ` topado a 30 s con jitter ±20% → `reconnecting`. Reintent
 mientras la sesión siga viva.
 
 > **Enmienda 2026-09-09 (v0.8):** los reintentos ya no son indefinidos. Tras
-> `SuspendAfterAttempts` (10) intentos seguidos sin transmitir, o `SuspendAfterFlaps` (5)
-> sesiones cortas seguidas, el sink pasa a `suspended` y deja de reintentar hasta que el
+> `SuspendAfterAttempts` (10) intentos sin transmitir desde el último reinicio del backoff
+> (una sesión sana de al menos 30 s), o `SuspendAfterFlaps` (5) sesiones cortas seguidas, el sink pasa a `suspended` y deja de reintentar hasta que el
 > usuario pulse «Reintentar» o empiece otra sesión. `enabled` no se toca. Razón: con una
 > clave mal pegada, el bucle era silencioso; contra Facebook, cada intento cuenta como
 > emisión activa y agotó el cupo de una cuenta real.
