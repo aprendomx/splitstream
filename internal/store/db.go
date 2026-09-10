@@ -37,8 +37,9 @@ var ErrNestedTransaction = errors.New("transacción anidada: InTx no se puede an
 
 // DB es la base de datos del servicio.
 type DB struct {
-	db *sql.DB // solo para abrir transacciones y cerrar
-	ex execer  // por donde salen todas las consultas: *sql.DB o *sql.Tx
+	db   *sql.DB // solo para abrir transacciones y cerrar
+	ex   execer  // por donde salen todas las consultas: *sql.DB o *sql.Tx
+	hook EventHook
 }
 
 // SQL expone el *sql.DB subyacente. Solo para tests y para los repositorios de este
@@ -59,7 +60,7 @@ func (d *DB) InTx(ctx context.Context, fn func(*DB) error) error {
 	if err != nil {
 		return fmt.Errorf("abrir transacción: %w", err)
 	}
-	if err := fn(&DB{db: d.db, ex: tx}); err != nil {
+	if err := fn(&DB{db: d.db, ex: tx, hook: d.hook}); err != nil {
 		tx.Rollback()
 		return err
 	}
