@@ -84,7 +84,10 @@ func TestPatchEnablingRecordingWhileLiveAddsAndRemovesTheSink(t *testing.T) {
 		t.Errorf("llamadas=%v added=%v", fr.llamadas, added)
 	}
 
-	// Cambiar otro ajuste con la grabación ya encendida NO reconstruye el sink.
+	// Cambiar otro ajuste con la grabación ya encendida Y CORRIENDO no reconstruye el
+	// sink. El fake no arranca nada de verdad, así que se le dice a mano que el sink de
+	// grabación está en el motor, como estaría tras el AddSink de arriba.
+	eng.setMetrics(map[int64]relay.Metrics{relay.RecorderSinkID: {State: "live"}})
 	if rec := do(t, srv, cookies, http.MethodPatch, "/api/recording/settings", `{"segment_min":3}`); rec.Code != http.StatusOK {
 		t.Fatalf("segment_min: %d", rec.Code)
 	}
@@ -97,6 +100,31 @@ func TestPatchEnablingRecordingWhileLiveAddsAndRemovesTheSink(t *testing.T) {
 	}
 	if _, removed := eng.snapshotSinks(); len(removed) != 1 || removed[0] != relay.RecorderSinkID {
 		t.Errorf("removed = %v", removed)
+	}
+}
+
+// La grabación puede estar encendida en la base y NO estar corriendo: al abrir la sesión
+// no había sitio y BuildRecorder la saltó. Hacer hueco en el disco y volver a guardar los
+// ajustes la rearma sin cortar la emisión. El Snapshot vacío del fake es justo ese caso.
+func TestPatchRecoversASkippedRecordingWhenEnabledStaysOn(t *testing.T) {
+	srv, db, eng, _, cookies := newDestServer(t)
+	fr := &fakeRecorder{}
+	srv.recorder = fr
+	on := true
+	if _, err := db.UpdateRecordingSettings(context.Background(), store.RecordingSettingsPatch{Enabled: &on}); err != nil {
+		t.Fatal(err)
+	}
+	eng.setLive(7)
+
+	if rec := do(t, srv, cookies, http.MethodPatch, "/api/recording/settings", `{"segment_min":5}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH: %d — %s", rec.Code, rec.Body.String())
+	}
+	added, removed := eng.snapshotSinks()
+	if len(fr.llamadas) != 1 || fr.llamadas[0] != 7 {
+		t.Errorf("llamadas a BuildRecorder = %v, quería [7]", fr.llamadas)
+	}
+	if len(added) != 1 || added[0] != relay.RecorderSinkID || len(removed) != 0 {
+		t.Errorf("added=%v removed=%v, quería que se añadiera el recorder", added, removed)
 	}
 }
 

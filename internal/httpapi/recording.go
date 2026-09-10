@@ -38,7 +38,7 @@ func (s *Server) recordingStatus(ctx context.Context) (recordingStatusDTO, error
 		return recordingStatusDTO{}, err
 	}
 	out := recordingStatusDTO{
-		Enabled: st.Enabled, MaxBytes: int64(st.MaxGB * float64(1<<30)), UsedBytes: used,
+		Enabled: st.Enabled, MaxBytes: st.MaxBytes(), UsedBytes: used,
 		FreeBytes: s.freeBytes(), Dir: s.recDir,
 	}
 	if s.engine == nil {
@@ -88,9 +88,25 @@ type recordingSettingsPatch struct {
 	KeepDays   *int     `json:"keep_days"`
 }
 
-// handlePatchRecordingSettings guarda los ajustes y, si hay sesión viva y cambió
-// `enabled`, arranca o para la grabación al momento. Los demás ajustes esperan a la
-// siguiente sesión: cambiar el tamaño de segmento a mitad de archivo no vale la pena.
+// grabacionEnMarcha dice si el motor tiene ahora mismo el sink de grabación. Se mira el
+// Snapshot y no `enabled`, porque la grabación puede estar encendida en la base y NO
+// correr: al abrir la sesión no había sitio y BuildRecorder la saltó.
+func (s *Server) grabacionEnMarcha() bool {
+	if s.engine == nil {
+		return false
+	}
+	_, ok := s.engine.Snapshot()[relay.RecorderSinkID]
+	return ok
+}
+
+// handlePatchRecordingSettings guarda los ajustes y, si hay sesión viva, arranca o para la
+// grabación al momento. Los demás ajustes esperan a la siguiente sesión: cambiar el tamaño
+// de segmento a mitad de archivo no vale la pena.
+//
+// Arrancar no depende solo de que `enabled` haya cambiado: si la grabación está encendida
+// pero el sink NO está corriendo —se saltó por cuota al abrir la sesión—, volver a guardar
+// los ajustes la rearma. Es el gesto natural de quien acaba de hacer sitio en el disco, y
+// sin esto la única salida era cortar la emisión y volver a empezar.
 func (s *Server) handlePatchRecordingSettings(w http.ResponseWriter, r *http.Request) {
 	var in recordingSettingsPatch
 	if !decodeBody(w, r, &in) {
@@ -110,16 +126,17 @@ func (s *Server) handlePatchRecordingSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if s.liveSession() && antes.Enabled != st.Enabled {
+	if s.liveSession() {
 		switch {
-		case st.Enabled && s.recorder != nil:
+		// Encender, o rearmar una grabación que está encendida pero no corre.
+		case st.Enabled && s.recorder != nil && !s.grabacionEnMarcha():
 			sink, err := s.recorder.BuildRecorder(ctx, s.engine.Session().ID)
 			if err != nil {
 				s.logger.Error("no se pudo arrancar la grabación en caliente", "err", err)
 			} else if sink != nil {
 				s.engine.AddSink(sink)
 			}
-		case !st.Enabled:
+		case !st.Enabled && antes.Enabled:
 			s.engine.RemoveSink(relay.RecorderSinkID)
 		}
 	}
