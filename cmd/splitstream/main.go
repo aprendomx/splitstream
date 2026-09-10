@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aprendomx/splitstream/internal/alerts"
 	"github.com/aprendomx/splitstream/internal/config"
 	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/events"
@@ -251,6 +252,10 @@ func run(ctx context.Context, out io.Writer) error {
 	sinkCtx, cancelSinks := context.WithCancel(context.Background())
 	defer cancelSinks()
 
+	// Webhooks salientes: consumen el bus en su propia goroutine y jamás lo frenan.
+	webhooks := alerts.NewWebhookDispatcher(bus, db, cipher, logger, version)
+	go webhooks.Run(sinkCtx)
+
 	hub := relay.NewHub(logger)
 	engine := relay.NewEngine(relay.EngineConfig{
 		Hub:         hub,
@@ -367,11 +372,15 @@ func run(ctx context.Context, out io.Writer) error {
 		SecureCookies: cfg.SecureCookies,
 		MetricsToken:  cfg.MetricsToken,
 		ExtraMetrics: []httpapi.ExtraMetrics{func() []httpapi.Metric {
-			return []httpapi.Metric{{
-				Name: "splitstream_events_bus_dropped_total", Type: "counter",
-				Help:  "Eventos que un consumidor lento no llegó a recibir.",
-				Value: float64(bus.Dropped()),
-			}}
+			ok, failed := webhooks.Stats()
+			return []httpapi.Metric{
+				{Name: "splitstream_events_bus_dropped_total", Type: "counter",
+					Help: "Eventos que un consumidor lento no llegó a recibir.", Value: float64(bus.Dropped())},
+				{Name: "splitstream_webhook_deliveries_total", Type: "counter", Help: "Entregas de webhooks por resultado.",
+					Labels: map[string]string{"result": "ok"}, Value: float64(ok)},
+				{Name: "splitstream_webhook_deliveries_total", Type: "counter", Help: "Entregas de webhooks por resultado.",
+					Labels: map[string]string{"result": "failed"}, Value: float64(failed)},
+			}
 		}},
 	})
 	if err != nil {
