@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +27,7 @@ var (
 // segmentos captura las llamadas a OnOpen y OnSegment.
 type segmentos struct {
 	abiertos []string
+	indices  []int
 	cerrados []Segment
 }
 
@@ -35,7 +37,10 @@ func nuevoWriter(t *testing.T, o Options) (*FLVWriter, *segmentos) {
 	if o.Dir == "" {
 		o.Dir = filepath.Join(t.TempDir(), "sesion-1")
 	}
-	o.OnOpen = func(path string, _ int, _ time.Time) { segs.abiertos = append(segs.abiertos, path) }
+	o.OnOpen = func(path string, index int, _ time.Time) {
+		segs.abiertos = append(segs.abiertos, path)
+		segs.indices = append(segs.indices, index)
+	}
 	o.OnSegment = func(s Segment) { segs.cerrados = append(segs.cerrados, s) }
 	return NewFLVWriter(o), segs
 }
@@ -260,6 +265,69 @@ func TestWriterWarnsOnceAtEightyPercent(t *testing.T) {
 	}
 	if avisos != 1 {
 		t.Errorf("avisos = %d, quería exactamente 1", avisos)
+	}
+}
+
+// Con segment_min = 0 no hay rotación, y la cuota solo se comprobaba en Connect: un
+// archivo único podía llenar el disco entero. Ahora se remira cada quotaCheckEveryBytes,
+// que el test baja para no escribir 64 MiB de verdad.
+func TestWriterRechecksTheQuotaWhileWritingASingleFile(t *testing.T) {
+	original := quotaCheckEveryBytes
+	quotaCheckEveryBytes = 32 << 10
+	t.Cleanup(func() { quotaCheckEveryBytes = original })
+
+	const tope = 200 << 10
+	w, _ := nuevoWriter(t, Options{SegmentMinutes: 0, Quota: Quota{MaxBytes: tope}})
+	if err := w.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	preambulo(t, w)
+
+	// 4 KiB de "audio" por tag: mucho menos que el intervalo de comprobación, para que la
+	// cuota tenga que saltar por acumulación y no por un solo tag enorme.
+	gordo := append([]byte{0xAF, 0x01}, make([]byte, 4094)...)
+	var escritos int64
+	var err error
+	for i := 0; i < 10_000; i++ {
+		ts := uint32(i + 1)
+		if err = w.WriteAudio(ts, gordo); err != nil {
+			break
+		}
+		escritos += int64(11 + len(gordo) + 4)
+	}
+	if !errors.Is(err, ErrDiskFull) {
+		t.Fatalf("error = %v, quería ErrDiskFull antes de las 10 000 escrituras", err)
+	}
+	if escritos < tope {
+		t.Errorf("cortó tras %d bytes, antes del tope de %d", escritos, tope)
+	}
+	if escritos > (64<<20)+tope {
+		t.Errorf("cortó tras %d bytes: el intervalo de comprobación no se respetó", escritos)
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("Close tras el fallo = %v", err)
+	}
+}
+
+// FirstIndex continúa la numeración de la sesión: encender y apagar la grabación en
+// caliente no puede volver a empezar en 1 ni pisar el archivo del writer anterior.
+func TestWriterHonoursFirstIndex(t *testing.T) {
+	w, segs := nuevoWriter(t, Options{FirstIndex: 3})
+	if err := w.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	preambulo(t, w)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(segs.indices) != 1 || segs.indices[0] != 3 {
+		t.Fatalf("índices abiertos = %v, quería [3]", segs.indices)
+	}
+	if !strings.HasSuffix(segs.abiertos[0], "-03.flv") {
+		t.Errorf("archivo = %q, quería que terminara en -03.flv", segs.abiertos[0])
+	}
+	if segs.cerrados[0].Index != 3 {
+		t.Errorf("Index del segmento cerrado = %d, quería 3", segs.cerrados[0].Index)
 	}
 }
 

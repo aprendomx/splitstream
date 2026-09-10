@@ -23,6 +23,15 @@ const (
 	flushEveryMS = 2000
 )
 
+// quotaCheckEveryBytes es cada cuántos bytes escritos se vuelve a mirar la cuota DENTRO
+// de un archivo. Sin esto, con `segment_min = 0` no hay rotación y la cuota solo se
+// comprobaba en Connect: una sesión larga en un único archivo podía llenar el disco
+// entero sin que nadie mirara. 64 MiB son unos segundos de vídeo y un statfs cada tanto,
+// coste despreciable frente a llenar el disco del VPS.
+//
+// Es var y no const para que los tests puedan bajarlo sin escribir 64 MiB.
+var quotaCheckEveryBytes int64 = 64 << 20
+
 // Segment describe un archivo cerrado.
 type Segment struct {
 	Path       string
@@ -38,12 +47,18 @@ type Options struct {
 	Dir            string
 	SessionID      int64
 	SegmentMinutes int
-	Quota          Quota
-	OnOpen         func(path string, index int, startedAt time.Time)
-	OnSegment      func(Segment)
-	OnDiskWarning  func(used, max int64)
-	Now            func() time.Time
-	Logger         *slog.Logger
+	// FirstIndex es el número del primer segmento (0 = 1). Lo fija quien compone el sink
+	// para CONTINUAR la numeración de la sesión: apagar y encender la grabación en
+	// caliente crea un writer nuevo, y sin esto volvía a empezar en 1 —dos filas «segmento
+	// 1» de la misma sesión— y podía chocar con el archivo del writer anterior si los dos
+	// arrancaban dentro del mismo segundo (el nombre lleva la hora y O_EXCL falla).
+	FirstIndex    int
+	Quota         Quota
+	OnOpen        func(path string, index int, startedAt time.Time)
+	OnSegment     func(Segment)
+	OnDiskWarning func(used, max int64)
+	Now           func() time.Time
+	Logger        *slog.Logger
 }
 
 // FLVWriter es el Publisher de la grabación: escribe lo que el sink le manda en archivos
@@ -64,6 +79,7 @@ type FLVWriter struct {
 	segStart    time.Time
 	segBytes    int64
 	total       int64
+	sinceCheck  int64
 	base        uint32
 	lastTS      uint32
 	lastFlushTS uint32
@@ -82,7 +98,13 @@ func NewFLVWriter(o Options) *FLVWriter {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &FLVWriter{o: o, now: now, log: log.With("sesion_id", o.SessionID)}
+	w := &FLVWriter{o: o, now: now, log: log.With("sesion_id", o.SessionID)}
+	// openSegment incrementa antes de nombrar el archivo: para que el primero sea
+	// FirstIndex hay que arrancar uno por debajo.
+	if o.FirstIndex > 0 {
+		w.index = o.FirstIndex - 1
+	}
+	return w
 }
 
 var _ relay.Publisher = (*FLVWriter)(nil)
@@ -103,8 +125,9 @@ func (w *FLVWriter) Connect(ctx context.Context) error {
 }
 
 // checkQuota aplica la cuota con lo que este writer lleva escrito, y avisa una sola vez
-// al cruzar el umbral.
+// al cruzar el umbral. Reinicia el contador de bytes desde la última comprobación.
 func (w *FLVWriter) checkQuota() error {
+	w.sinceCheck = 0
 	warn, err := w.o.Quota.Check(w.o.Dir, w.total)
 	if err != nil {
 		return err
@@ -135,6 +158,7 @@ func (w *FLVWriter) openSegment() error {
 	}
 	w.segBytes += int64(len(flvHeader))
 	w.total += int64(len(flvHeader))
+	w.sinceCheck += int64(len(flvHeader))
 	if w.o.OnOpen != nil {
 		w.o.OnOpen(w.path, w.index, w.segStart)
 	}
@@ -217,6 +241,7 @@ func (w *FLVWriter) writeTag(typ byte, rel uint32, data []byte) error {
 	n := int64(11 + len(data) + 4)
 	w.segBytes += n
 	w.total += n
+	w.sinceCheck += n
 	return nil
 }
 
@@ -232,10 +257,20 @@ func (w *FLVWriter) media(typ byte, ts uint32, data []byte) error {
 	if ts > w.lastTS {
 		w.lastTS = ts
 	}
-	if ts-w.lastFlushTS >= flushEveryMS {
+	// ts > lastFlushTS antes de restar: los timestamps son uint32 y un tag que llega
+	// atrasado (audio detrás del vídeo) daba una resta enorme por desbordamiento, que
+	// pasaba el umbral y forzaba un Flush por frame.
+	if ts > w.lastFlushTS && ts-w.lastFlushTS >= flushEveryMS {
 		w.lastFlushTS = ts
 		if err := w.buf.Flush(); err != nil {
 			return fmt.Errorf("escribir en la grabación: %w", err)
+		}
+	}
+	// La cuota también se mira mientras se escribe: con segment_min = 0 no hay rotación
+	// que la compruebe (spec v0.9 §4).
+	if w.sinceCheck >= quotaCheckEveryBytes {
+		if err := w.checkQuota(); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -261,8 +296,11 @@ func (w *FLVWriter) WriteVideo(ts uint32, payload []byte) error {
 		w.videoSeq = clonar(payload)
 		return w.writeTag(TagVideo, 0, payload)
 	}
+	// ts > base antes de restar, por lo mismo que en media: con uint32, un keyframe
+	// atrasado respecto a la base del segmento daba una resta gigante y rotaba el archivo
+	// a destiempo.
 	if info.IsKeyframe && w.o.SegmentMinutes > 0 && w.f != nil &&
-		ts-w.base >= uint32(w.o.SegmentMinutes)*60_000 {
+		ts > w.base && ts-w.base >= uint32(w.o.SegmentMinutes)*60_000 {
 		if err := w.rotate(ts); err != nil {
 			return err
 		}
