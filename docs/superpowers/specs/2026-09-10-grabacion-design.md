@@ -81,7 +81,11 @@ var _ relay.Publisher = (*FLVWriter)(nil)
 
 - **Archivos:** `<Dir>/<AAAAMMDD-HHMMSS>-<nn>.flv`, abiertos con `O_EXCL`. `Connect` abre
   el primero tras comprobar la cuota (§4). Cabecera FLV con flags audio+vídeo y
-  `PreviousTagSize0`.
+  `PreviousTagSize0`. El índice `<nn>` **continúa desde los segmentos que la sesión ya
+  tiene** (`Options.FirstIndex`, que la fábrica calcula con `CountSessionRecordings`): un
+  apagado y encendido en caliente construye otro writer, y reiniciar en 1 daba dos
+  «segmento 1» de la misma sesión y podía chocar con el archivo anterior si los dos caían
+  dentro del mismo segundo.
 - **Tags:** tipo 18 (script) para el `onMetaData` —el payload que circula por el hub ya es
   el cuerpo AMF0 `"onMetaData" + ECMA array`, se escribe tal cual—, 8 para audio, 9 para
   vídeo; datasize de 3 bytes, timestamp de 3 + 1 extendido, streamID 0,
@@ -120,6 +124,8 @@ func FreeSpace(dir string) (free, total int64, err error) // Statfs en unix, Get
 - **En cada rotación**: la misma comprobación. Si no hay sitio se cierra el segmento en
   curso y `Connect` del siguiente falla con `ErrDiskFull`; evento
   `recording_stopped_disk_full` (error), una sola vez por sesión.
+- **Mientras se escribe**: cada 64 MiB escritos, la misma comprobación, para que un
+  archivo único (`segment_min = 0`) no eluda la cuota.
 - **Aviso al 80 %**: al cruzar `WarnAt · MaxBytes`, evento `recording_disk_warning`
   (warn), una vez por sesión.
 - Un `kill -9` no puede costar más de un segmento (§3): cada archivo cerrado ya está
@@ -179,6 +185,12 @@ session_id IS NOT NULL)`.
   prefijo «grabación: ». Un `destination_id = -1` violaría la clave ajena.
 - `main.go`: el `SinkProvider` recibe `sessionID`, construye los destinos y, si procede,
   añade el recorder.
+- **Reconciliación al arrancar** (`sinks.(*Factory).ReconcileRecordings`, antes de que el
+  motor pueda abrir una sesión): las filas en curso de un arranque anterior se cierran con
+  el tamaño y la fecha del archivo, o se borran si el archivo no está. Un `kill -9` no
+  llama a `OnSegment`, y una fila abierta para siempre no se puede descargar ni borrar
+  (409), la poda la salta, la cuota la cuenta como 0 bytes y `PruneSessions` no puede
+  reciclar su sesión. Deja evento `recording_reconciled` (warn) solo si tocó algo.
 - **Estado** (`statusDTO.Recording`, REST y WS por igual):
   `{enabled, active, state, degraded, bytes, segments, free_bytes, used_bytes, max_bytes, dir}`.
   `active` y `state` salen de `Snapshot()[RecorderSinkID]`; `segments`, `used_bytes` del
@@ -187,7 +199,7 @@ session_id IS NOT NULL)`.
 
 ```
 GET    /api/recording/settings           → {enabled, segment_min, max_gb, keep_days, dir, used_bytes, free_bytes}
-PATCH  /api/recording/settings           → mismos campos (punteros); con sesión viva, encender arranca el recorder y apagar lo para (RemoveSink(-1))
+PATCH  /api/recording/settings           → mismos campos (punteros); con sesión viva, encender arranca el recorder y apagar lo para (RemoveSink(-1)); si la grabación está encendida pero el sink NO corre —se saltó por cuota al abrir la sesión—, volver a guardar los ajustes la rearma
 GET    /api/recordings?session_id=&limit=&before=  → [{id, session_id, segment, path, started_at, ended_at, bytes, duration_ms}]
 GET    /api/recordings/{id}/download     → attachment (http.ServeContent); 409 si el segmento está en curso
 DELETE /api/recordings/{id}              → 204; 409 si está en curso; borra archivo y fila
