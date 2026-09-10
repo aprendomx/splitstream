@@ -77,6 +77,14 @@ type WebhookSender interface {
 	Send(ctx context.Context, w store.Webhook, ev store.Event) error
 }
 
+// UpdateStatus es lo que el checker de versiones sabe; este paquete no lo importa, lo
+// recibe como función igual que ExtraMetrics.
+type UpdateStatus struct {
+	Latest    string
+	URL       string
+	Available bool
+}
+
 // Config son las dependencias del servidor. DB y Cipher son obligatorias; el resto puede
 // ser nil en los tests que no las ejercitan.
 type Config struct {
@@ -127,6 +135,9 @@ type Config struct {
 	// ExtraMetrics aporta series adicionales a /metrics —el bus de eventos, los
 	// webhooks— sin que este paquete tenga que importar esos componentes.
 	ExtraMetrics []ExtraMetrics
+	// UpdateInfo da el último resultado del checker de versiones (Task 5). Nil: sin
+	// aviso, igual que ExtraMetrics, para que este paquete no importe internal/update.
+	UpdateInfo func() UpdateStatus
 }
 
 // Server sirve la API del spec §9.
@@ -154,6 +165,7 @@ type Server struct {
 	proxies      []netip.Prefix
 	tls          bool
 	publicURL    string
+	updateInfo   func() UpdateStatus
 }
 
 func New(cfg Config) (*Server, error) {
@@ -182,6 +194,7 @@ func New(cfg Config) (*Server, error) {
 		metricsToken: cfg.MetricsToken, extra: cfg.ExtraMetrics,
 		proxies: cfg.TrustedProxies,
 		tls:     cfg.TLS, publicURL: cfg.PublicURL,
+		updateInfo: cfg.UpdateInfo,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto

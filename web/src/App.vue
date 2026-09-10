@@ -1,6 +1,6 @@
 <script setup>
 import { iAjustes, iBroadcast, iGrabaciones, iInfo, iOcultar, iSalir, iVer } from '@/iconos'
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { usePanel } from '@/stores/panel'
 import Asistente from '@/components/Asistente.vue'
 import { ApiError } from '@/api'
@@ -12,6 +12,21 @@ const errorLogin = ref(null)
 const entrando = ref(false)
 
 onMounted(() => panel.cargar())
+
+// El aviso de versión se cierra por versión: si sale otra, vuelve a aparecer.
+const CLAVE_AVISO = 'splitstream.aviso-version-cerrado'
+const avisoCerrado = ref(leerAvisoCerrado())
+function leerAvisoCerrado() {
+  try { return localStorage.getItem(CLAVE_AVISO) } catch { return null }
+}
+const avisoVersion = computed(() => {
+  const u = panel.actualizacion
+  return panel.autenticado && u?.available && avisoCerrado.value !== u.latest ? u : null
+})
+function cerrarAviso() {
+  avisoCerrado.value = panel.actualizacion?.latest ?? null
+  try { localStorage.setItem(CLAVE_AVISO, avisoCerrado.value) } catch { /* sin almacenamiento, se repite al recargar */ }
+}
 
 async function entrar() {
   entrando.value = true
@@ -47,6 +62,14 @@ async function entrar() {
     </q-header>
 
     <q-page-container>
+      <q-banner v-if="avisoVersion" dense class="bg-primary text-white" role="status">
+        Hay una versión nueva de Splitstream ({{ avisoVersion.latest }}).
+        <template #action>
+          <q-btn flat no-caps label="Ver" :href="avisoVersion.url" target="_blank" rel="noopener" />
+          <q-btn flat no-caps label="Cerrar" @click="cerrarAviso" />
+        </template>
+      </q-banner>
+
       <!-- Mientras se sabe si hay sesión, no se enseña ni el login ni el panel: parpadear
            entre los dos es peor que esperar medio segundo. -->
       <q-page v-if="panel.cargando" class="flex flex-center">

@@ -35,6 +35,7 @@ import (
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
 	"github.com/aprendomx/splitstream/internal/store"
+	"github.com/aprendomx/splitstream/internal/update"
 	"github.com/aprendomx/splitstream/internal/webtls"
 	"github.com/aprendomx/splitstream/web"
 )
@@ -367,6 +368,27 @@ func run(ctx context.Context, out io.Writer) error {
 		mant.Run(sinkCtx)
 	}()
 
+	// Aviso de versión: una consulta a GitHub 30 s después de arrancar y luego cada 24 h.
+	// Va en `fondo` para que el apagado la espere como a los webhooks; Run vuelve en
+	// cuanto el contexto termina.
+	var updateInfo func() httpapi.UpdateStatus
+	if cfg.UpdateCheck {
+		chk := &update.Checker{Current: version, Logger: logger}
+		fondo.Add(1)
+		go func() {
+			defer fondo.Done()
+			chk.Run(ctx, 30*time.Second, 24*time.Hour, func(i update.Info) {
+				if _, err := db.LogEvent(context.Background(), store.Event{
+					Level: store.LevelInfo, Kind: "update_available",
+					Message: "Hay una versión nueva: " + i.Latest,
+				}); err != nil {
+					logger.Error("no se pudo registrar el aviso de versión", "err", err)
+				}
+			})
+		}()
+		updateInfo = func() httpapi.UpdateStatus { return httpapi.UpdateStatus(chk.Latest()) }
+	}
+
 	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{
 		Addr:    cfg.RTMPAddr,
 		Handler: engine,
@@ -443,6 +465,7 @@ func run(ctx context.Context, out io.Writer) error {
 		TLS:            cfg.TLS(),
 		PublicURL:      publicURL,
 		MetricsToken:   cfg.MetricsToken,
+		UpdateInfo:     updateInfo,
 		ExtraMetrics: []httpapi.ExtraMetrics{func() []httpapi.Metric {
 			ok, failed := webhooks.Stats()
 			return []httpapi.Metric{

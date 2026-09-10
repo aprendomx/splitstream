@@ -565,3 +565,19 @@ func TestStatusReportsHowThePanelIsServed(t *testing.T) {
 		t.Errorf("panel = %+v", st.Panel)
 	}
 }
+
+// TestStatusCarriesTheUpdateNotice: el estado lleva el aviso de versión nueva del checker
+// (Task 5) para que el panel enseñe el banner.
+//
+// Desviación del brief: los helpers supuestos servidorAutenticado/getJSON no existen en
+// este paquete; se usan los reales, igual que en TestStatusReportsHowThePanelIsServed.
+func TestStatusCarriesTheUpdateNotice(t *testing.T) {
+	srv, _ := newTestServer(t, func(c *Config) {
+		c.UpdateInfo = func() UpdateStatus { return UpdateStatus{Latest: "v0.11.0", URL: "https://r", Available: true} }
+	})
+	cookies := login(t, srv)
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if !st.Update.Available || st.Update.Latest != "v0.11.0" || st.Update.URL != "https://r" {
+		t.Errorf("update = %+v", st.Update)
+	}
+}
