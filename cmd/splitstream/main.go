@@ -397,6 +397,8 @@ func run(ctx context.Context, out io.Writer) error {
 		Ingest:        ingest,
 		Sinks:         factory,
 		Tester:        factory,
+		Recorder:      factory,
+		RecordingsDir: cfg.RecordingsDir,
 		Webhooks:      webhooks,
 		MasterKey:     cfg.MasterKey,
 		RTMPAddr:      cfg.RTMPAddr,

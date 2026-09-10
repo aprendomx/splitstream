@@ -137,6 +137,8 @@ type statusDTO struct {
 	Destinations []destinationDTO `json:"destinations"`
 	// RecentEvents son los últimos 20 eventos, para el registro del panel y sus avisos.
 	RecentEvents []eventDTO `json:"recent_events"`
+	// Recording es el estado de la grabación de la sesión (spec v0.9 §6).
+	Recording recordingStatusDTO `json:"recording"`
 }
 
 // sessionSummaryDTO es una fila del historial: la sesión y cuántos eventos dejó por nivel.
@@ -188,4 +190,52 @@ func newWebhookDTO(w store.Webhook) webhookDTO {
 		MinLevel: string(w.MinLevel), Enabled: w.Enabled, LastStatus: w.LastStatus,
 		LastError: w.LastError, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 	}
+}
+
+type recordingStatusDTO struct {
+	Enabled       bool   `json:"enabled"`
+	Active        bool   `json:"active"`
+	State         string `json:"state"`
+	Degraded      bool   `json:"degraded"`
+	Bytes         uint64 `json:"bytes"`
+	DroppedFrames uint64 `json:"dropped_frames"`
+	Segments      int    `json:"segments"`
+	UsedBytes     int64  `json:"used_bytes"`
+	MaxBytes      int64  `json:"max_bytes"`
+	FreeBytes     int64  `json:"free_bytes"`
+	Dir           string `json:"dir"`
+}
+
+type recordingSettingsDTO struct {
+	Enabled    bool    `json:"enabled"`
+	SegmentMin int     `json:"segment_min"`
+	MaxGB      float64 `json:"max_gb"`
+	KeepDays   int     `json:"keep_days"`
+	Dir        string  `json:"dir"`
+	UsedBytes  int64   `json:"used_bytes"`
+	FreeBytes  int64   `json:"free_bytes"`
+}
+
+type recordingDTO struct {
+	ID         int64      `json:"id"`
+	SessionID  *int64     `json:"session_id"`
+	Segment    int        `json:"segment"`
+	Path       string     `json:"path"`
+	StartedAt  time.Time  `json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at"`
+	Bytes      int64      `json:"bytes"`
+	DurationMS int        `json:"duration_ms"`
+	InProgress bool       `json:"in_progress"`
+}
+
+func newRecordingDTO(r store.Recording) recordingDTO {
+	dto := recordingDTO{
+		ID: r.ID, SessionID: r.SessionID, Segment: r.Segment, Path: r.Path,
+		StartedAt: r.StartedAt.UTC(), Bytes: r.Bytes, DurationMS: r.DurationMS, InProgress: r.EndedAt == nil,
+	}
+	if r.EndedAt != nil {
+		e := r.EndedAt.UTC()
+		dto.EndedAt = &e
+	}
+	return dto
 }
