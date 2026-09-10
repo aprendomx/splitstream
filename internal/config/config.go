@@ -39,6 +39,9 @@ type Config struct {
 	// cookie sin Secure justo en producción, que es donde importa. Por defecto false, para
 	// que el panel funcione en local sin TLS.
 	SecureCookies bool
+	// MetricsToken autoriza GET /metrics con `Authorization: Bearer`. Vacío: solo cookie
+	// de sesión. Se omite en LogValue y MarshalJSON como la master key.
+	MetricsToken string
 }
 
 // LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente. Receptor por
@@ -148,6 +151,7 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		DBPath:   get("SPLITSTREAM_DB_PATH", "splitstream.db"),
 
 		SecureCookies: get("SPLITSTREAM_SECURE_COOKIES", "false") == "true",
+		MetricsToken:  get("SPLITSTREAM_METRICS_TOKEN", ""),
 	}
 
 	level, err := parseLevel(get("SPLITSTREAM_LOG_LEVEL", "info"))

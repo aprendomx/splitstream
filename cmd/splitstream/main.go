@@ -234,7 +234,6 @@ func run(ctx context.Context, out io.Writer) error {
 	// ningún evento del arranque se quede sin anunciar.
 	bus := events.NewBus()
 	db.SetEventHook(bus.Publish)
-	_ = bus // se consume en las tareas siguientes
 
 	// Los sinks NO heredan el contexto de señales: si lo hicieran, un SIGTERM los mataría
 	// antes de que el cierre ordenado del spec §6.5 pudiera mandar su FCUnpublish. Este
@@ -321,6 +320,14 @@ func run(ctx context.Context, out io.Writer) error {
 		SPA:           panelFS,
 		Logger:        logger,
 		SecureCookies: cfg.SecureCookies,
+		MetricsToken:  cfg.MetricsToken,
+		ExtraMetrics: []httpapi.ExtraMetrics{func() []httpapi.Metric {
+			return []httpapi.Metric{{
+				Name: "splitstream_events_bus_dropped_total", Type: "counter",
+				Help:  "Eventos que un consumidor lento no llegó a recibir.",
+				Value: float64(bus.Dropped()),
+			}}
+		}},
 	})
 	if err != nil {
 		return err

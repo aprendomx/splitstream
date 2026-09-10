@@ -367,6 +367,29 @@ func TestEmptyKeyFileIsAnErrorNotANewKey(t *testing.T) {
 	}
 }
 
+func TestMetricsTokenIsReadAndNeverLogged(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY":    testKeyB64(),
+		"SPLITSTREAM_METRICS_TOKEN": "token-de-metricas-inconfundible",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.MetricsToken != "token-de-metricas-inconfundible" {
+		t.Errorf("MetricsToken = %q", cfg.MetricsToken)
+	}
+
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("config", "config", cfg)
+	if strings.Contains(buf.String(), "inconfundible") {
+		t.Error("el token de métricas salió por el log")
+	}
+	blob, _ := json.Marshal(cfg)
+	if strings.Contains(string(blob), "inconfundible") {
+		t.Error("el token de métricas salió por JSON")
+	}
+}
+
 // TestKeyPathSitsNextToTheDatabase: los dos archivos se respaldan y se mueven juntos.
 func TestKeyPathSitsNextToTheDatabase(t *testing.T) {
 	casos := map[string]string{

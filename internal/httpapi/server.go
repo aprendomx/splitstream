@@ -93,25 +93,33 @@ type Config struct {
 	// la petición porque en el despliegue del spec §12 el TLS lo termina un proxy y el
 	// binario solo ve HTTP: adivinarlo daría una cookie sin Secure justo en producción.
 	SecureCookies bool
+	// MetricsToken autoriza GET /metrics con `Authorization: Bearer` sin cookie de sesión,
+	// para que Prometheus pueda scrapearlo. Vacío: solo la cookie.
+	MetricsToken string
+	// ExtraMetrics aporta series adicionales a /metrics —el bus de eventos, los
+	// webhooks— sin que este paquete tenga que importar esos componentes.
+	ExtraMetrics []ExtraMetrics
 }
 
 // Server sirve la API del spec §9.
 type Server struct {
-	db        *store.DB
-	cipher    *crypto.Cipher
-	engine    EngineView
-	ingest    Disconnecter
-	sinks     SinkBuilder
-	tester    DestinationTester
-	signer    *sessionSigner
-	limiter   *loginLimiter
-	logger    *slog.Logger
-	setupCode string
-	version   string
-	spa       fs.FS
-	secure    bool
-	rtmpPort  string
-	mux       *http.ServeMux
+	db           *store.DB
+	cipher       *crypto.Cipher
+	engine       EngineView
+	ingest       Disconnecter
+	sinks        SinkBuilder
+	tester       DestinationTester
+	signer       *sessionSigner
+	limiter      *loginLimiter
+	logger       *slog.Logger
+	setupCode    string
+	version      string
+	spa          fs.FS
+	secure       bool
+	rtmpPort     string
+	mux          *http.ServeMux
+	metricsToken string
+	extra        []ExtraMetrics
 }
 
 func New(cfg Config) (*Server, error) {
@@ -136,6 +144,7 @@ func New(cfg Config) (*Server, error) {
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
 		setupCode: cfg.SetupCode, version: cfg.Version, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
+		metricsToken: cfg.MetricsToken, extra: cfg.ExtraMetrics,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto
@@ -156,6 +165,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+	s.mux.Handle("GET /metrics", s.requireSessionOrToken(http.HandlerFunc(s.handleMetrics)))
 
 	// La configuración inicial también es pública, por definición: existe justo cuando
 	// todavía no hay contraseña con la que autenticarse. Se protege de otra forma —solo
