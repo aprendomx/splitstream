@@ -115,6 +115,10 @@ func TestRedirectSendsToHTTPSKeepingPathAndQuery(t *testing.T) {
 		{":443", "relay.ejemplo.com", "https://relay.ejemplo.com/api/status?x=1"},
 		{":443", "relay.ejemplo.com:80", "https://relay.ejemplo.com/api/status?x=1"},
 		{":8443", "relay.ejemplo.com", "https://relay.ejemplo.com:8443/api/status?x=1"},
+		// IPv6 sin puerto: los corchetes no se duplican y se conservan sin puerto.
+		{":8443", "[::1]", "https://[::1]:8443/api/status?x=1"},
+		{":443", "[::1]", "https://[::1]/api/status?x=1"},
+		{":443", "[::1]:80", "https://[::1]/api/status?x=1"},
 	}
 	for _, c := range casos {
 		s, err := webtls.Build(&config.Config{HTTPAddr: c.addr, TLSCertFile: certFile, TLSKeyFile: keyFile}, nil)

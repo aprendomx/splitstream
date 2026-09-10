@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,8 +120,15 @@ func redirigirAHTTPS(puerto string) http.Handler {
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
+		// Un cliente que llega por el puerto por defecto manda Host sin puerto (RFC 7230),
+		// y un literal IPv6 viene entonces entre corchetes: SplitHostPort falla y los
+		// corchetes se quedan. Se quitan aquí para que JoinHostPort los ponga él y no
+		// salga "[[::1]]:8443".
+		host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 		if puerto != "" && puerto != "443" {
 			host = net.JoinHostPort(host, puerto)
+		} else if strings.Contains(host, ":") {
+			host = "[" + host + "]"
 		}
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusMovedPermanently)
 	})
