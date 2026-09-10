@@ -627,8 +627,9 @@ func TestRunWithOwnCertificateServesHTTPS(t *testing.T) {
 	defer cancel()
 
 	cliente := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Timeout:       5 * time.Second,
 	}
 	var resp *http.Response
 	var err error

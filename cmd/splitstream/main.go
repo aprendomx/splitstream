@@ -578,8 +578,8 @@ func run(ctx context.Context, out io.Writer) error {
 	// Diez segundos, que es el plazo por intento del despachador: un envío que se lanzó
 	// justo antes de cancelar sobrevive a la cancelación y hay que dejarle terminar, o el
 	// aviso de apagado —el que más le importa a quien opera esto— se pierde siempre. El
-	// peor caso del cierre entero suma HTTP 5 s + WaitIdle 5 s + hub 3 s + fondo 10 s +
-	// ingesta 3 s = 26 s, por debajo del TimeoutStopSec=30 de la unidad de systemd.
+	// peor caso del cierre entero suma HTTP 5 s + redirección 2 s + WaitIdle 5 s + hub 3 s +
+	// fondo 10 s + ingesta 3 s = 28 s, por debajo del TimeoutStopSec=30 de systemd.
 	finFondo := make(chan struct{})
 	go func() { fondo.Wait(); close(finFondo) }()
 	select {

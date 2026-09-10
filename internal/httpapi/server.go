@@ -181,7 +181,7 @@ func New(cfg Config) (*Server, error) {
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
 		metricsToken: cfg.MetricsToken, extra: cfg.ExtraMetrics,
 		proxies: cfg.TrustedProxies,
-		tls: cfg.TLS, publicURL: cfg.PublicURL,
+		tls:     cfg.TLS, publicURL: cfg.PublicURL,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto
