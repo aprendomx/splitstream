@@ -549,3 +549,22 @@ func TestHealthcheckURLFor(t *testing.T) {
 		}
 	}
 }
+
+func TestBackupFlagWritesAnOpenableCopy(t *testing.T) {
+	_ = setPasswordEnv(t)
+	ctx := context.Background()
+
+	destino := filepath.Join(t.TempDir(), "copia.db")
+	var out bytes.Buffer
+	if err := backup(ctx, destino, &out); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if !strings.Contains(out.String(), destino) {
+		t.Errorf("la salida no dice dónde quedó el respaldo: %q", out.String())
+	}
+	db, err := store.Open(ctx, destino)
+	if err != nil {
+		t.Fatalf("el respaldo no abre: %v", err)
+	}
+	db.Close()
+}

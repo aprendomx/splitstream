@@ -51,6 +51,7 @@ func main() {
 			"invócalo como: read -rs PW && printf '%s' \"$PW\" | splitstream -setpassword")
 	hc := flag.Bool("healthcheck", false,
 		"consulta /healthz del servicio local y sale 0 si responde; para el HEALTHCHECK de Docker")
+	bk := flag.String("backup", "", "escribe una copia consistente de la base en la ruta dada y sale")
 	flag.Parse()
 
 	if *showVersion {
@@ -74,6 +75,14 @@ func main() {
 
 	if *setpw {
 		if err := setPassword(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *bk != "" {
+		if err := backup(context.Background(), *bk, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -537,5 +546,24 @@ func healthcheck(addr string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("/healthz respondió %d", resp.StatusCode)
 	}
+	return nil
+}
+
+// backup copia la base con VACUUM INTO. Abre la base como el servicio —con sus
+// migraciones— para que el respaldo esté en la versión actual del esquema.
+func backup(ctx context.Context, destino string, out io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	db, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.BackupTo(ctx, destino); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "respaldo escrito en %s\nRecuerda: sin la clave maestra es ilegible.\n", destino)
 	return nil
 }
