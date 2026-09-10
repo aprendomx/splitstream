@@ -63,6 +63,13 @@ if [ -z "$VERSION" ]; then
   VERSION=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$TMP/latest.json" | head -n 1)
   [ -n "$VERSION" ] || fallar "no se pudo leer la versión de la respuesta de GitHub"
 fi
+# La versión se pega en las URLs de descarga y en los nombres de archivo. Se valida venga
+# de donde venga —también de la API— porque una respuesta rara de GitHub o un
+# SPLITSTREAM_VERSION con una barra de más apuntarían a otro sitio sin que nadie lo note.
+case "$VERSION" in
+  v[0-9]*) ;;
+  *) fallar "versión inválida: $VERSION" ;;
+esac
 BASE="${SPLITSTREAM_RELEASE_URL:-https://github.com/$REPO/releases/download/$VERSION}"
 ARCHIVO="splitstream-$VERSION-$NOMBRE.tar.gz"
 decir "Splitstream $VERSION para $NOMBRE"
@@ -128,9 +135,11 @@ instrucciones_servicio() {
 
 instalar_servicio() {
   UNIT="$CARPETA/splitstream.service"
+  # Solo la unidad que venía dentro del tar.gz, cuyo checksum ya se verificó. Antes se
+  # descargaba de raw.githubusercontent.com si faltaba, sin checksum que comprobar: un
+  # archivo que acaba en /etc/systemd/system y arranca como root no puede entrar así.
   if [ ! -f "$UNIT" ]; then
-    descargar "https://raw.githubusercontent.com/$REPO/$VERSION/deploy/splitstream.service" "$UNIT" \
-      || fallar "no se pudo descargar la unidad de systemd"
+    fallar "esta release no trae splitstream.service; usa deploy/splitstream.service del repo"
   fi
   decir "Voy a ejecutar con sudo: useradd splitstream, crear /var/lib/splitstream y /etc/splitstream/env, instalar la unidad y systemctl enable --now."
   id splitstream >/dev/null 2>&1 \
