@@ -35,7 +35,9 @@ sobre `run()` lo vigila.
 ## 2. Enmiendas al spec base
 
 - **§5 Dependencias**: `golang.org/x/crypto/acme/autocert` entra como paquete de un módulo
-  que ya se trae; no hay módulo nuevo. Sigue siendo `go mod` de cinco directas.
+  que ya se trae; no hay módulo nuevo. Sigue siendo `go mod` de cinco directas. `go.mod`
+  gana `golang.org/x/net` y `golang.org/x/text` como `// indirect` —transitivas de
+  `autocert`— sin que cambien las cinco directas.
 - **§12 Despliegue**: «el TLS lo termina un proxy» deja de ser la única opción. Se añaden
   `SPLITSTREAM_TLS_DOMAIN`, `SPLITSTREAM_TLS_CACHE_DIR`, `SPLITSTREAM_TLS_CERT_FILE`,
   `SPLITSTREAM_TLS_KEY_FILE`, `SPLITSTREAM_TLS_REDIRECT_ADDR`, `SPLITSTREAM_TRUSTED_PROXIES`
@@ -212,8 +214,9 @@ proyecto salvo `internal/config`):
   Si `RemoteAddr` no cae en ningún prefijo de confianza, devuelve `RemoteAddr` y punto.
   Si cae: recorre `X-Forwarded-For` de **derecha a izquierda** saltando las direcciones de
   confianza y devuelve la primera que no lo es; si todas son de confianza o la cabecera
-  no viene, devuelve `RemoteAddr`. Direcciones que no parsean cuentan como «no de
-  confianza» (se devuelven tal cual, y el limitador las agrupa por texto).
+  no viene, devuelve `RemoteAddr`. Una dirección de la cabecera que no parsea hace que se
+  devuelva `RemoteAddr` (la IP del proxy, nunca local): el limitador la agrupa en un solo
+  cubo, no por el texto de la cabecera.
 - `esLocal(r)` pasa a ser `s.clientIP(r).IsLoopback()`; el `loginLimiter` se clava por el
   resultado de `clientIP`. Ambos comentarios se reescriben: la razón de ignorar la cabecera
   sigue siendo la misma, pero ahora es una decisión de configuración.

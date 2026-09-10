@@ -27,7 +27,44 @@ seguidos— y el producto se instala descargando un archivo.
 
 ## Instalación
 
-### Descarga el binario
+### Mac (Homebrew)
+
+```bash
+brew install aprendomx/tap/splitstream
+splitstream
+```
+
+Homebrew quita la marca de cuarentena: no hay aviso de Gatekeeper. Para dejarlo
+funcionando siempre, `brew services start splitstream` (base y clave en
+`$(brew --prefix)/var/splitstream`, log en `$(brew --prefix)/var/log/splitstream.log`).
+
+### Windows (winget)
+
+```powershell
+winget install aprendomx.Splitstream
+splitstream
+```
+
+Sin SmartScreen: winget verifica el paquete por su checksum. Se instala como binario
+portátil y queda en el `PATH`.
+
+### Linux, o macOS sin Homebrew (script)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/install.sh | sh
+```
+
+El script detecta tu sistema, descarga la última release, **verifica el checksum** y copia
+el binario a `/usr/local/bin`. Si eso necesita `sudo`, te enseña el comando y te pregunta
+antes. En Linux con systemd te ofrece instalarlo como servicio. Puedes leerlo entero en
+[`deploy/install.sh`](deploy/install.sh); para instalar en tu carpeta sin `sudo`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/install.sh \
+  | SPLITSTREAM_INSTALL_DIR=$HOME/.local/bin sh
+```
+
+### A mano
 
 Ve a [las releases](https://github.com/aprendomx/splitstream/releases) y descarga el
 archivo de tu plataforma:
@@ -60,7 +97,7 @@ programa sea correcto. Tienes dos formas de desbloquearlo:
 
 ```bash
 # Quita la marca que el navegador puso al descargar
-xattr -dr com.apple.quarantine splitstream-v0.8.0-macos-apple-silicon
+xattr -dr com.apple.quarantine splitstream-*-macos-apple-silicon
 ```
 
 O sin terminal: **Ajustes del Sistema → Privacidad y seguridad**, baja hasta el aviso
@@ -129,9 +166,70 @@ tu servicio: quien puede leer la consola del servidor es quien puede reclamarlo.
 Cámbialo mentalmente por esto: en un VPS, mira el código en la misma terminal donde
 arrancaste el programa, o con `journalctl -u splitstream`.
 
-Y si el panel va a ser accesible desde internet, **ponlo detrás de HTTPS** con un proxy
-como Caddy o nginx, y activa `SPLITSTREAM_SECURE_COOKIES=true`. Sin TLS, la contraseña
-viaja en claro.
+Si el panel va a ser accesible desde internet tiene que ir por HTTPS: sin TLS, la
+contraseña viaja en claro. Tienes dos caminos: el TLS integrado (siguiente sección) o un
+proxy delante (la de después).
+
+### Ponerlo en internet
+
+Con un dominio apuntando a la máquina y los puertos 80 y 443 abiertos, el binario pide y
+renueva el certificado solo, con Let's Encrypt:
+
+```bash
+SPLITSTREAM_TLS_DOMAIN=relay.ejemplo.com splitstream
+```
+
+Con eso el panel escucha en `:443`, el `:80` redirige a HTTPS, la cookie de sesión sale
+`Secure` y el estado enseña la URL pública. Los certificados se guardan en `tls-cache/`
+junto a la base: respáldalo con ella y **no lo borres para «reintentar»**: Let's Encrypt
+limita a 5 certificados por semana por dominio, y un reinicio en bucle sin caché los agota.
+
+- Como servicio de systemd, descomenta `AmbientCapabilities=CAP_NET_BIND_SERVICE` en la
+  unidad: es lo que permite abrir 80 y 443 sin root.
+- En Docker no hace falta nada: publica `80:80` y `443:443` (hay un ejemplo comentado en
+  `deploy/docker-compose.yml`).
+- Si el certificado no llega, el registro del panel muestra `tls_certificate_error` con
+  el motivo (casi siempre: el dominio no apunta aquí, o el 80 está cerrado).
+
+Con un certificado propio, en vez del dominio:
+
+```bash
+SPLITSTREAM_TLS_CERT_FILE=/etc/ssl/relay.crt SPLITSTREAM_TLS_KEY_FILE=/etc/ssl/relay.key splitstream
+```
+
+### Detrás de un proxy
+
+Si prefieres Caddy o nginx delante, ellos terminan el TLS y el binario sigue en `:8080`.
+Dos cosas:
+
+1. `SPLITSTREAM_SECURE_COOKIES=true`, para que la cookie no salga sin `Secure`.
+2. `SPLITSTREAM_TRUSTED_PROXIES` con la IP del proxy, para que el limitador del login y el
+   asistente del primer arranque vean la IP real y no la del proxy. Sin esto, un intento
+   fallido de cualquiera castiga a todos, y el asistente cree que todo es remoto.
+
+```caddyfile
+relay.ejemplo.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+```bash
+SPLITSTREAM_SECURE_COOKIES=true SPLITSTREAM_TRUSTED_PROXIES=127.0.0.1/32,::1/128 splitstream
+```
+
+Con Docker y el proxy en el host, la red puente suele ser `172.16.0.0/12`. **Nunca pongas
+`0.0.0.0/0`**: confiar en todo el mundo anula el limitador y convierte a cualquiera en
+«local» con una cabecera.
 
 ---
 
@@ -146,11 +244,17 @@ Todo se controla con variables de entorno:
 | `SPLITSTREAM_RTMP_ADDR` | `:1935` | Dónde escucha la ingesta de OBS |
 | `SPLITSTREAM_DB_PATH` | `splitstream.db` | Archivo SQLite |
 | `SPLITSTREAM_LOG_LEVEL` | `info` | `debug`, `info`, `warn` o `error` |
-| `SPLITSTREAM_SECURE_COOKIES` | `false` | `true` si sirves el panel por HTTPS |
+| `SPLITSTREAM_SECURE_COOKIES` | `false`; `true` con TLS integrado | `true` si sirves el panel por HTTPS |
 | `SPLITSTREAM_METRICS_TOKEN` | vacío | Con valor, `/metrics` acepta `Authorization: Bearer`. Vacío: solo cookie de sesión |
 | `SPLITSTREAM_RETENTION_DAYS` | `90` | Eventos y sesiones cerradas más viejos se borran. `0` desactiva |
 | `SPLITSTREAM_RETENTION_MAX_EVENTS` | `50000` | Tope de filas en `events`. `0` desactiva |
 | `SPLITSTREAM_RECORDINGS_DIR` | `recordings/` junto a la base | Dónde se escriben los archivos de grabación |
+| `SPLITSTREAM_TLS_DOMAIN` | vacío | Con valor, TLS integrado con Let's Encrypt para ese dominio; el panel pasa a `:443` |
+| `SPLITSTREAM_TLS_CACHE_DIR` | `tls-cache/` junto a la base | Cuenta y certificados de Let's Encrypt |
+| `SPLITSTREAM_TLS_CERT_FILE` / `SPLITSTREAM_TLS_KEY_FILE` | vacíos | Certificado propio en PEM, en vez del dominio |
+| `SPLITSTREAM_TLS_REDIRECT_ADDR` | `:80` con TLS | Listener que redirige a HTTPS y atiende el reto de Let's Encrypt; `none` lo apaga |
+| `SPLITSTREAM_TRUSTED_PROXIES` | vacío | CIDR o IP, separadas por comas, desde las que se cree `X-Forwarded-For` |
+| `SPLITSTREAM_UPDATE_CHECK` | `true` | `false` apaga la consulta diaria de versión nueva |
 
 Comandos:
 
@@ -217,14 +321,17 @@ resto de destinos.
 ## Con Docker
 
 ```bash
-git clone https://github.com/aprendomx/splitstream && cd splitstream
-cp deploy/env.example deploy/.env
+mkdir splitstream && cd splitstream
+curl -fsSLO https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/env.example -o .env
 
-# Genera la clave maestra y pégala en deploy/.env
-docker compose -f deploy/docker-compose.yml run --rm splitstream -genkey
+# Genera la clave maestra y pégala en .env
+docker compose run --rm splitstream -genkey
 
-docker compose -f deploy/docker-compose.yml up -d
+docker compose up -d
 ```
+
+(el `compose` ya apunta a `ghcr.io/aprendomx/splitstream:latest`; no hace falta clonar el repo).
 
 La imagen pesa unos 18 MB y no lleva ni shell: es el binario sobre `scratch`, con los
 certificados raíz —que hacen falta para los destinos `rtmps://`— y nada más. Corre como
@@ -236,12 +343,28 @@ petición llega por la red puente del contenedor y no por `localhost`, así que 
 la trata como si viniera de otra máquina. Míralo con:
 
 ```bash
-docker compose -f deploy/docker-compose.yml logs | grep -A2 "te pedirá este código"
+docker compose logs | grep -A2 "te pedirá este código"
 ```
+
+o pon la IP del host de Docker en `SPLITSTREAM_TRUSTED_PROXIES` si hay un proxy delante
+que manda `X-Forwarded-For`.
 
 El panel se publica solo en `127.0.0.1:8080` a propósito. Si quieres alcanzarlo desde
 fuera, ponlo detrás de un proxy con HTTPS en lugar de abrir el puerto: sin TLS, tu
 contraseña viaja en claro.
+
+## Actualizar
+
+El panel avisa cuando hay una versión nueva (una consulta a GitHub al arrancar y cada
+24 h, con la versión como único dato; `SPLITSTREAM_UPDATE_CHECK=false` la apaga). Nada se
+actualiza solo:
+
+```bash
+brew upgrade splitstream                    # Homebrew
+winget upgrade aprendomx.Splitstream        # winget
+curl -fsSL https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/install.sh | sh   # script
+docker compose pull && docker compose up -d # Docker
+```
 
 ## Dejarlo funcionando siempre
 
@@ -249,6 +372,8 @@ contraseña viaja en claro.
 
 Hay una unidad lista en [`deploy/splitstream.service`](deploy/splitstream.service), con
 las instrucciones de instalación en su cabecera. Lo esencial:
+
+`install.sh` ofrece hacer todo esto por ti. A mano:
 
 ```bash
 sudo install -d -o splitstream -g splitstream /var/lib/splitstream

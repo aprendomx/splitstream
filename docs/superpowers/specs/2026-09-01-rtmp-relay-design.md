@@ -167,6 +167,11 @@ integración y build de producción), ffmpeg (solo para tests). El piso es 1.25 
 1.23 porque `golang.org/x/crypto` lo exige; el `Dockerfile` de la §12 fija la imagen
 de build, así que el piso no restringe el despliegue.
 
+**Desde la v0.10 (2026-09-10):** `golang.org/x/crypto/acme/autocert`, un paquete más del
+módulo `x/crypto` que ya se traía. Sigue sin haber módulo nuevo. `go.mod` gana
+`golang.org/x/net` y `golang.org/x/text` como `// indirect` —transitivas de `autocert`—
+sin que cambien las cinco directas.
+
 ## 6. Arquitectura del motor
 
 ### 6.1 Ingesta
@@ -316,6 +321,10 @@ una fila en `events`. Las claves nunca llegan a los logs — el logger tiene un 
 `SPLITSTREAM_MASTER_KEY` — sin tabla de sesiones, porque es un solo usuario. Rate limit del
 login con `x/time/rate`: 5 intentos por minuto por IP, más un límite global.
 
+**Desde la v0.10:** `X-Forwarded-For` se honra solo desde `SPLITSTREAM_TRUSTED_PROXIES`;
+por defecto se ignora, como siempre. El binario puede terminar TLS él mismo
+(`internal/webtls`); `SecureCookies` pasa a `true` por defecto en ese caso.
+
 ## 9. API HTTP
 
 ```
@@ -359,6 +368,9 @@ Errores siempre con la forma `{"error": {"code": "...", "message": "..."}}`.
 
 `POST /api/destinations/reorder` no estaba en el spec original; se añade porque el drag
 & drop necesita persistir el orden completo en una sola operación en vez de N `PATCH`.
+
+**Desde la v0.10:** `statusDTO` gana `panel {tls, public_url}` y
+`update {available, latest, url}`.
 
 ## 10. Frontend
 
@@ -421,6 +433,13 @@ porque la imagen `scratch` no tiene `curl`).
 
 **Desde la v0.9 (2026-09-10):** una variable más — `SPLITSTREAM_RECORDINGS_DIR` (por
 defecto `recordings/` junto a la base).
+
+**Desde la v0.10 (2026-09-10):** `SPLITSTREAM_TLS_DOMAIN`, `SPLITSTREAM_TLS_CACHE_DIR`,
+`SPLITSTREAM_TLS_CERT_FILE`, `SPLITSTREAM_TLS_KEY_FILE`, `SPLITSTREAM_TLS_REDIRECT_ADDR`,
+`SPLITSTREAM_TRUSTED_PROXIES`, `SPLITSTREAM_UPDATE_CHECK`. Instalación por Homebrew
+(`aprendomx/tap`), winget (`aprendomx.Splitstream`), `deploy/install.sh` e imagen
+`ghcr.io/aprendomx/splitstream`. Eventos nuevos: `update_available`,
+`tls_certificate_error`.
 
 README con instalación, configuración de OBS, y la nota de ancho de banda: **el subida
 necesario es bitrate × número de destinos**. Sin transcodificación no hay nada que hacer
