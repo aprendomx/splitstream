@@ -3,17 +3,17 @@ package config
 
 import (
 	"crypto/rand"
-	"errors"
-	"io/fs"
-	"path/filepath"
-	"strings"
-
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // MasterKeyLen es el tamaño exacto, en bytes, de la master key de AES-256.
@@ -53,6 +53,30 @@ type Config struct {
 	// por la misma razón que el archivo de clave: lo que hay que respaldar o mover va
 	// junto.
 	RecordingsDir string
+	// TLSDomain enciende el TLS integrado con Let's Encrypt para ese dominio y solo ese.
+	// Vacío: el binario sirve HTTP y el TLS, si lo hay, lo termina un proxy (spec §12).
+	TLSDomain string
+	// TLSCacheDir es donde autocert guarda la cuenta ACME y los certificados. Junto a la
+	// base por la misma razón que la clave: lo que hay que respaldar va junto, y borrarlo
+	// sin querer cuesta certificados (Let's Encrypt limita a 5 por semana por dominio).
+	TLSCacheDir string
+	// TLSCertFile y TLSKeyFile son un certificado propio en PEM. Excluyentes con TLSDomain.
+	TLSCertFile string
+	TLSKeyFile  string
+	// TLSRedirectAddr es el listener HTTP que atiende el reto HTTP-01 y redirige a HTTPS.
+	// Solo tiene sentido con TLS; vacío lo desactiva (`none` en el entorno).
+	TLSRedirectAddr string
+	// SecureCookiesDesactivadas es true cuando hay TLS integrado pero la persona puso
+	// SPLITSTREAM_SECURE_COOKIES=false a mano. Se respeta —quizá prueba con IP y sin
+	// nombre— pero se avisa en el log al arrancar.
+	SecureCookiesDesactivadas bool
+	// TrustedProxies son las redes desde las que se cree X-Forwarded-For. Vacía por
+	// defecto: la cabecera la puede inventar quien llega directo, y el limitador del
+	// login y el «local» del asistente dejarían de significar nada.
+	TrustedProxies []netip.Prefix
+	// UpdateCheck consulta la última release de GitHub al arrancar y cada 24 h. Solo el
+	// aviso: nunca se actualiza solo. `SPLITSTREAM_UPDATE_CHECK=false` lo apaga.
+	UpdateCheck bool
 }
 
 // LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente. Receptor por
@@ -68,6 +92,11 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("retention_days", c.RetentionDays),
 		slog.Int("retention_max_events", c.RetentionMaxEvents),
 		slog.String("recordings_dir", c.RecordingsDir),
+		slog.String("tls_domain", c.TLSDomain),
+		slog.String("tls_cert_file", c.TLSCertFile),
+		slog.String("tls_redirect_addr", c.TLSRedirectAddr),
+		slog.String("trusted_proxies", prefijos(c.TrustedProxies)),
+		slog.Bool("update_check", c.UpdateCheck),
 	)
 }
 
@@ -91,6 +120,11 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		LogLevel: c.LogLevel.String(),
 	})
 }
+
+// TLS dice si el binario termina TLS él mismo, sea con Let's Encrypt o con certificado
+// propio. Es lo que decide el puerto por defecto, la cookie Secure y el listener de
+// redirección.
+func (c *Config) TLS() bool { return c.TLSDomain != "" || c.TLSCertFile != "" }
 
 // Load lee la configuración del entorno del proceso.
 func Load() (*Config, error) {
@@ -152,6 +186,9 @@ func claveDelArchivo(ruta string) (string, bool, error) {
 // LoadFrom lee la configuración de una función de consulta arbitraria, para poder
 // testear sin tocar el entorno del proceso.
 func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
+	var err error
+	var level slog.Level
+
 	get := func(name, def string) string {
 		if v, ok := lookup(name); ok && v != "" {
 			return v
@@ -159,17 +196,55 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return def
 	}
 
+	// El TLS se lee antes que el resto porque cambia dos valores por defecto: el puerto
+	// (:443 en vez de :8080) y la cookie Secure.
+	tlsDomain := strings.TrimSpace(get("SPLITSTREAM_TLS_DOMAIN", ""))
+	tlsCert := get("SPLITSTREAM_TLS_CERT_FILE", "")
+	tlsKey := get("SPLITSTREAM_TLS_KEY_FILE", "")
+	if err = validarTLS(tlsDomain, tlsCert, tlsKey); err != nil {
+		return nil, err
+	}
+	conTLS := tlsDomain != "" || tlsCert != ""
+
+	httpDef := ":8080"
+	if conTLS {
+		httpDef = ":443"
+	}
+
 	cfg := &Config{
-		HTTPAddr: get("SPLITSTREAM_HTTP_ADDR", ":8080"),
+		HTTPAddr: get("SPLITSTREAM_HTTP_ADDR", httpDef),
 		RTMPAddr: get("SPLITSTREAM_RTMP_ADDR", ":1935"),
 		DBPath:   get("SPLITSTREAM_DB_PATH", "splitstream.db"),
 
-		SecureCookies: get("SPLITSTREAM_SECURE_COOKIES", "false") == "true",
-		MetricsToken:  get("SPLITSTREAM_METRICS_TOKEN", ""),
+		MetricsToken: get("SPLITSTREAM_METRICS_TOKEN", ""),
+		TLSDomain:    tlsDomain,
+		TLSCertFile:  tlsCert,
+		TLSKeyFile:   tlsKey,
+		UpdateCheck:  get("SPLITSTREAM_UPDATE_CHECK", "true") != "false",
 	}
 	cfg.RecordingsDir = get("SPLITSTREAM_RECORDINGS_DIR", filepath.Join(filepath.Dir(cfg.DBPath), "recordings"))
+	cfg.TLSCacheDir = get("SPLITSTREAM_TLS_CACHE_DIR", filepath.Join(filepath.Dir(cfg.DBPath), "tls-cache"))
+	if conTLS {
+		if v := get("SPLITSTREAM_TLS_REDIRECT_ADDR", ":80"); v != "none" {
+			cfg.TLSRedirectAddr = v
+		}
+	}
 
-	level, err := parseLevel(get("SPLITSTREAM_LOG_LEVEL", "info"))
+	// Secure por defecto solo cuando el propio binario termina TLS; con proxy delante no
+	// se puede adivinar y sigue siendo una decisión de quien despliega. Un `false`
+	// explícito con TLS se respeta y se marca para avisar.
+	if v, ok := lookup("SPLITSTREAM_SECURE_COOKIES"); ok && v != "" {
+		cfg.SecureCookies = v == "true"
+		cfg.SecureCookiesDesactivadas = conTLS && !cfg.SecureCookies
+	} else {
+		cfg.SecureCookies = conTLS
+	}
+
+	if cfg.TrustedProxies, err = parseProxies(get("SPLITSTREAM_TRUSTED_PROXIES", "")); err != nil {
+		return nil, err
+	}
+
+	level, err = parseLevel(get("SPLITSTREAM_LOG_LEVEL", "info"))
 	if err != nil {
 		return nil, err
 	}
@@ -206,6 +281,55 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	copy(cfg.MasterKey[:], decoded)
 
 	return cfg, nil
+}
+
+// prefijos imprime la lista para el log; vacía se ve como "" y no como "[]".
+func prefijos(ps []netip.Prefix) string {
+	partes := make([]string, len(ps))
+	for i, p := range ps {
+		partes[i] = p.String()
+	}
+	return strings.Join(partes, ",")
+}
+
+// validarTLS rechaza las combinaciones que no pueden querer decir nada: o Let's Encrypt
+// o certificado propio, y el certificado siempre con su clave. El dominio va sin
+// esquema ni puerto porque autocert lo compara con el SNI tal cual.
+func validarTLS(dominio, cert, key string) error {
+	if dominio != "" && (cert != "" || key != "") {
+		return errors.New("SPLITSTREAM_TLS_DOMAIN y SPLITSTREAM_TLS_CERT_FILE/SPLITSTREAM_TLS_KEY_FILE son excluyentes: " +
+			"o Let's Encrypt o certificado propio")
+	}
+	if (cert == "") != (key == "") {
+		return errors.New("SPLITSTREAM_TLS_CERT_FILE y SPLITSTREAM_TLS_KEY_FILE van juntas")
+	}
+	if dominio != "" && (strings.ContainsAny(dominio, " /:@") || !strings.Contains(dominio, ".")) {
+		return fmt.Errorf("SPLITSTREAM_TLS_DOMAIN inválido %q: solo el nombre, sin esquema ni puerto "+
+			"(por ejemplo relay.ejemplo.com)", dominio)
+	}
+	return nil
+}
+
+// parseProxies lee una lista separada por comas de CIDR o IP sueltas. Una IP suelta es
+// su /32 (o /128): es lo que quiere decir quien escribe "127.0.0.1".
+func parseProxies(s string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, campo := range strings.Split(s, ",") {
+		campo = strings.TrimSpace(campo)
+		if campo == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(campo); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		if a, err := netip.ParseAddr(campo); err == nil {
+			out = append(out, netip.PrefixFrom(a, a.BitLen()))
+			continue
+		}
+		return nil, fmt.Errorf("SPLITSTREAM_TRUSTED_PROXIES: %q no es una IP ni un CIDR", campo)
+	}
+	return out, nil
 }
 
 func parseLevel(s string) (slog.Level, error) {
