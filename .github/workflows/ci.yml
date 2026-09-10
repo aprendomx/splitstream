@@ -46,8 +46,8 @@ jobs:
       # Es una propiedad de la arquitectura, y sin esto se rompe sin que nadie se entere.
       - name: internal/relay sigue aislado
         run: |
-          if go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql|internal/store|internal/events'; then
-            echo "::error::internal/relay importa go-rtmp, database/sql, store o events"
+          if go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql|internal/store|internal/events|internal/record'; then
+            echo "::error::internal/relay importa go-rtmp, database/sql, store, events o record"
             exit 1
           fi
 

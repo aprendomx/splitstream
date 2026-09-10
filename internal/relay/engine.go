@@ -27,11 +27,13 @@ type EngineEvent struct {
 	Message       string
 }
 
-// SinkProvider construye los sinks de una sesión. Se llama al aceptar a un publisher, no
-// al arrancar el proceso: cada sesión de ingesta abre su propia conexión con cada destino
-// (spec §6.5). Arrancarlos una sola vez al inicio hacía que la segunda transmisión
-// reutilizara el timebase de la primera, con lo que su sequence header nunca llegaba.
-type SinkProvider func() ([]*Sink, error)
+// SinkProvider construye los sinks de una sesión. Recibe el id de la sesión que arranca
+// porque la grabación necesita saber a qué sesión pertenece cada archivo. Se llama al
+// aceptar a un publisher, no al arrancar el proceso: cada sesión de ingesta abre su propia
+// conexión con cada destino (spec §6.5). Arrancarlos una sola vez al inicio hacía que la
+// segunda transmisión reutilizara el timebase de la primera, con lo que su sequence header
+// nunca llegaba.
+type SinkProvider func(sessionID int64) ([]*Sink, error)
 
 // ErrSessionInProgress se devuelve cuando ya hay una publicación en curso. Aceptar una
 // segunda intercalaría frames de dos codificadores en el mismo stream de salida.
@@ -84,7 +86,7 @@ func NewEngine(cfg EngineConfig) *Engine {
 		log:      log,
 		baseCtx:  baseCtx,
 		validate: func(string, string) error { return errors.New("ingesta sin configurar") },
-		newSinks: func() ([]*Sink, error) { return nil, nil },
+		newSinks: func(int64) ([]*Sink, error) { return nil, nil },
 	}
 }
 
@@ -164,7 +166,7 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 	e.mu.Unlock()
 
 	// Los destinos se conectan al empezar la sesión, no al arrancar el proceso.
-	sinks, err := provider()
+	sinks, err := provider(id)
 	if err != nil {
 		// Un fallo construyendo destinos no debe rechazar al publisher: es preferible
 		// ingestar sin retransmitir que cortarle la transmisión al usuario.

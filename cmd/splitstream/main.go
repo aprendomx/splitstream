@@ -294,7 +294,7 @@ func run(ctx context.Context, out io.Writer) error {
 	// ingesta abre su propia conexión con cada destino (spec §6.5). Arrancarlos una sola
 	// vez aquí hacía que la segunda transmisión reutilizara el timebase de la primera.
 	factory := sinks.NewFactory(db, cipher, logger)
-	engine.SetSinkProvider(func() ([]*relay.Sink, error) {
+	engine.SetSinkProvider(func(sessionID int64) ([]*relay.Sink, error) {
 		return factory.BuildEnabled(ctx)
 	})
 
