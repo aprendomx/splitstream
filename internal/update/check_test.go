@@ -149,6 +149,24 @@ func TestRunDoesNothingForAnUnversionedBinary(t *testing.T) {
 	}
 }
 
+// Con interval 0 el Reset del bucle dispararía sin pausa y este es el único componente
+// que sale a internet solo: se cae al día, así que en 300 ms solo cabe la consulta
+// inicial.
+func TestRunFallsBackToADailyIntervalWhenItIsZero(t *testing.T) {
+	var n atomic.Int32
+	srv := servidorDeReleases(t, `{"tag_name":"v0.10.0","html_url":"https://ejemplo/r"}`, 200, &n, nil)
+	defer srv.Close()
+	chk := &update.Checker{Current: "v0.9.0", URL: srv.URL, Client: srv.Client(), Logger: slog.Default()}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	chk.Run(ctx, 0, 0, nil)
+
+	if n.Load() != 1 {
+		t.Errorf("peticiones = %d, quería exactamente 1: con interval 0 el bucle giraba sin pausa", n.Load())
+	}
+}
+
 func TestRunNotifiesOncePerNewVersionAndRespectsTheContext(t *testing.T) {
 	var n atomic.Int32
 	srv := servidorDeReleases(t, `{"tag_name":"v0.10.0","html_url":"https://ejemplo/r/v0.10.0"}`, 200, &n, nil)

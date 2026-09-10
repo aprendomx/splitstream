@@ -59,6 +59,12 @@ func (c *Checker) Run(ctx context.Context, initialDelay, interval time.Duration,
 		logger.Debug("aviso de versión desactivado: el binario no lleva versión", "version", c.Current)
 		return
 	}
+	// Un interval de 0 o negativo dejaría el Reset del bucle disparando sin pausa: este es
+	// el único componente que sale a internet por su cuenta, y girar así sería martillear
+	// la API de GitHub hasta agotar su cuota (60 por hora e IP). Se cae al día.
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
 
 	t := time.NewTimer(initialDelay)
 	defer t.Stop()
