@@ -64,6 +64,12 @@ type EngineView interface {
 	VideoConfig() []byte
 }
 
+// WebhookSender manda un evento a un webhook. Lo cumple *alerts.WebhookDispatcher; la API
+// lo usa para el botón «Probar».
+type WebhookSender interface {
+	Send(ctx context.Context, w store.Webhook, ev store.Event) error
+}
+
 // Config son las dependencias del servidor. DB y Cipher son obligatorias; el resto puede
 // ser nil en los tests que no las ejercitan.
 type Config struct {
@@ -73,6 +79,9 @@ type Config struct {
 	Ingest Disconnecter
 	Sinks  SinkBuilder
 	Tester DestinationTester
+	// Webhooks manda el evento sintético del botón «Probar». Nil en los tests que no lo
+	// ejercitan: handleTestWebhook responde 409 en vez de entrar en pánico.
+	Webhooks WebhookSender
 	// MasterKey solo se usa para derivar la clave de firma de la cookie; no se guarda.
 	MasterKey [32]byte
 	Logger    *slog.Logger
@@ -109,6 +118,7 @@ type Server struct {
 	ingest       Disconnecter
 	sinks        SinkBuilder
 	tester       DestinationTester
+	webhooks     WebhookSender
 	signer       *sessionSigner
 	limiter      *loginLimiter
 	logger       *slog.Logger
@@ -140,7 +150,7 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
-		ingest: cfg.Ingest, sinks: cfg.Sinks, tester: cfg.Tester,
+		ingest: cfg.Ingest, sinks: cfg.Sinks, tester: cfg.Tester, webhooks: cfg.Webhooks,
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
 		setupCode: cfg.SetupCode, version: cfg.Version, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
@@ -194,6 +204,11 @@ func (s *Server) routes() {
 	protegida("PUT /api/destinations/{id}/logo", s.handlePutDestinationLogo)
 	protegida("GET /api/destinations/{id}/logo", s.handleGetDestinationLogo)
 	protegida("DELETE /api/destinations/{id}/logo", s.handleDeleteDestinationLogo)
+	protegida("GET /api/webhooks", s.handleListWebhooks)
+	protegida("POST /api/webhooks", s.handleCreateWebhook)
+	protegida("PATCH /api/webhooks/{id}", s.handlePatchWebhook)
+	protegida("DELETE /api/webhooks/{id}", s.handleDeleteWebhook)
+	protegida("POST /api/webhooks/{id}/test", s.handleTestWebhook)
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
 	protegida("GET /api/sessions", s.handleSessions)

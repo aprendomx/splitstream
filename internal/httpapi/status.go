@@ -6,6 +6,10 @@ import (
 	"strconv"
 )
 
+// recentEventsInStatus es cuántos eventos viajan dentro del estado: lo que cabe en el
+// registro del panel sin desplazarse.
+const recentEventsInStatus = 20
+
 // status compone el estado completo del servicio.
 //
 // Lo usan GET /api/status y el WebSocket, y es el MISMO método a propósito: el spec §10
@@ -62,6 +66,17 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 	out.Destinations = make([]destinationDTO, 0, len(dests))
 	for _, d := range dests {
 		out.Destinations = append(out.Destinations, newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID]))
+	}
+
+	// Los últimos eventos viajan con el estado: el panel los pinta y avisa de los nuevos
+	// sin sondear. 20 es lo que cabe en el registro sin desplazarse.
+	recientes, err := s.db.RecentEvents(ctx, recentEventsInStatus)
+	if err != nil {
+		return out, err
+	}
+	out.RecentEvents = make([]eventDTO, 0, len(recientes))
+	for _, e := range recientes {
+		out.RecentEvents = append(out.RecentEvents, newEventDTO(e))
 	}
 	return out, nil
 }
