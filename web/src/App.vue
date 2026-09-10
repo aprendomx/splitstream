@@ -21,7 +21,12 @@ function leerAvisoCerrado() {
 }
 const avisoVersion = computed(() => {
   const u = panel.actualizacion
-  return panel.autenticado && u?.available && avisoCerrado.value !== u.latest ? u : null
+  if (!panel.autenticado || !u?.available || avisoCerrado.value === u.latest) return null
+  // La URL viene de la respuesta de GitHub a través de la API: se acepta solo si es una
+  // cadena y empieza por https://. Cualquier otra cosa (un javascript:, un http:// o un
+  // null) se queda sin botón «Ver» en vez de convertirse en un enlace del panel.
+  const url = typeof u.url === 'string' && u.url.startsWith('https://') ? u.url : null
+  return { ...u, url }
 })
 function cerrarAviso() {
   avisoCerrado.value = panel.actualizacion?.latest ?? null
@@ -65,7 +70,7 @@ async function entrar() {
       <q-banner v-if="avisoVersion" dense class="bg-primary text-white" role="status">
         Hay una versión nueva de Splitstream ({{ avisoVersion.latest }}).
         <template #action>
-          <q-btn flat no-caps label="Ver" :href="avisoVersion.url" target="_blank" rel="noopener" />
+          <q-btn v-if="avisoVersion.url" flat no-caps label="Ver" :href="avisoVersion.url" target="_blank" rel="noopener" />
           <q-btn flat no-caps label="Cerrar" @click="cerrarAviso" />
         </template>
       </q-banner>

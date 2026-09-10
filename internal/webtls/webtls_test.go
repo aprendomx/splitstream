@@ -247,8 +247,8 @@ func TestAvisadorLimitaLaCadencia(t *testing.T) {
 	if len(avisos) != 1 {
 		t.Fatalf("avisos tras dos fallos seguidos = %d, quería 1", len(avisos))
 	}
-	if errors.Is(avisos[0], nil) || avisos[0].Error() == "" {
-		t.Error("el aviso debería llevar el error de ACME")
+	if !errors.Is(avisos[0], errACME) {
+		t.Errorf("el aviso llevó %v, quería el error de ACME que se le pasó", avisos[0])
 	}
 
 	ahora = ahora.Add(webtls.AvisoCadaMax)

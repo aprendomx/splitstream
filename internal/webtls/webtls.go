@@ -82,6 +82,12 @@ func conLetsEncrypt(cfg *config.Config, onError func(error)) (*Setup, error) {
 	tc := m.TLSConfig() // trae GetCertificate y acme-tls/1 en NextProtos
 	tc.MinVersion = tls.VersionTLS12
 
+	// OJO CON LOS TESTS: llamar a tc.GetCertificate con un ClientHello cuyo ServerName sea
+	// el dominio configurado SALE A INTERNET de verdad —autocert registra la cuenta ACME y
+	// pide el certificado a Let's Encrypt, contra el cupo de 5 por semana y por dominio—.
+	// Ningún test debe hacerlo. Un nombre ajeno sí es seguro: HostWhitelist lo rechaza sin
+	// tocar la red.
+
 	if onError != nil {
 		interno := tc.GetCertificate
 		avisar := avisador(onError, time.Now)
