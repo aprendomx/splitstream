@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +160,48 @@ func TestDomainConfiguresAutocertWithoutTalkingToAnyone(t *testing.T) {
 	s.Redirect.ServeHTTP(w, r)
 	if w.Code != http.StatusMovedPermanently || w.Header().Get("Location") != "https://relay.ejemplo.com/panel" {
 		t.Errorf("redirección: %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// Una caché no escribible tiene que abortar el arranque: autocert la trata como opcional
+// y sin ella pediría certificado en cada arranque, con el cupo de 5 por semana de por
+// medio. Se apunta a un archivo regular, que no es un directorio y nunca lo será.
+func TestUnwritableCacheDirFailsTheBuild(t *testing.T) {
+	archivo := filepath.Join(t.TempDir(), "no-soy-un-directorio")
+	if err := os.WriteFile(archivo, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := webtls.Build(&config.Config{HTTPAddr: ":443", TLSDomain: "relay.ejemplo.com",
+		TLSCacheDir: archivo}, nil)
+	if err == nil {
+		t.Fatal("Build con una caché no escribible = nil, quería error")
+	}
+	if !strings.Contains(err.Error(), "SPLITSTREAM_TLS_CACHE_DIR") {
+		t.Errorf("el error no dice qué variable revisar: %v", err)
+	}
+}
+
+// El caso normal: el directorio no existe todavía y Build lo crea.
+func TestCacheDirIsCreatedWhenMissing(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "nuevo", "tls-cache")
+	if _, err := webtls.Build(&config.Config{HTTPAddr: ":443", TLSDomain: "relay.ejemplo.com",
+		TLSCacheDir: cache}, nil); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	info, err := os.Stat(cache)
+	if err != nil {
+		t.Fatalf("la caché no se creó: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("%s no es un directorio", cache)
+	}
+	// La sonda no deja rastro.
+	entradas, err := os.ReadDir(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entradas) != 0 {
+		t.Errorf("la sonda dejó archivos en la caché: %v", entradas)
 	}
 }
 

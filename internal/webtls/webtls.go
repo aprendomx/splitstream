@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +41,7 @@ func Build(cfg *config.Config, onError func(error)) (*Setup, error) {
 	case cfg.TLSDomain != "" && cfg.TLSCertFile != "":
 		return nil, errors.New("webtls: dominio y certificado propio a la vez")
 	case cfg.TLSDomain != "":
-		return conLetsEncrypt(cfg, onError), nil
+		return conLetsEncrypt(cfg, onError)
 	case cfg.TLSCertFile != "":
 		return conCertificadoPropio(cfg)
 	default:
@@ -48,7 +49,29 @@ func Build(cfg *config.Config, onError func(error)) (*Setup, error) {
 	}
 }
 
-func conLetsEncrypt(cfg *config.Config, onError func(error)) *Setup {
+func conLetsEncrypt(cfg *config.Config, onError func(error)) (*Setup, error) {
+	// La caché se comprueba aquí, al arrancar, porque autocert la trata como opcional: si
+	// no puede escribir en ella no falla, sirve el certificado y lo olvida. Cada arranque
+	// —y cada renovación— pediría uno nuevo, y Let's Encrypt corta a los 5 por semana y
+	// por dominio. Mejor no arrancar que quedarse sin cupo el día que haga falta.
+	if err := os.MkdirAll(cfg.TLSCacheDir, 0o700); err != nil {
+		return nil, fmt.Errorf("SPLITSTREAM_TLS_CACHE_DIR %s no es escribible: %w", cfg.TLSCacheDir, err)
+	}
+	// MkdirAll pasa si el directorio ya existe aunque sea de otro dueño o de solo lectura,
+	// así que además se escribe de verdad un archivo y se borra.
+	sonda, err := os.CreateTemp(cfg.TLSCacheDir, ".sonda-*")
+	if err != nil {
+		return nil, fmt.Errorf("SPLITSTREAM_TLS_CACHE_DIR %s no es escribible: %w", cfg.TLSCacheDir, err)
+	}
+	nombre := sonda.Name()
+	if err := sonda.Close(); err != nil {
+		os.Remove(nombre)
+		return nil, fmt.Errorf("SPLITSTREAM_TLS_CACHE_DIR %s no es escribible: %w", cfg.TLSCacheDir, err)
+	}
+	if err := os.Remove(nombre); err != nil {
+		return nil, fmt.Errorf("SPLITSTREAM_TLS_CACHE_DIR %s no es escribible: %w", cfg.TLSCacheDir, err)
+	}
+
 	m := &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
 		// Solo este nombre: sin lista blanca, cualquiera que apunte un dominio a esta IP
@@ -80,7 +103,7 @@ func conLetsEncrypt(cfg *config.Config, onError func(error)) *Setup {
 		// redirector, que sabe el puerto HTTPS (el de autocert supone 443).
 		Redirect:  m.HTTPHandler(redirigirAHTTPS(puertoDe(cfg.HTTPAddr))),
 		PublicURL: "https://" + cfg.TLSDomain,
-	}
+	}, nil
 }
 
 func conCertificadoPropio(cfg *config.Config) (*Setup, error) {
