@@ -349,9 +349,11 @@ docker compose logs | grep -A2 "te pedirá este código"
 o pon la IP del host de Docker en `SPLITSTREAM_TRUSTED_PROXIES` si hay un proxy delante
 que manda `X-Forwarded-For`.
 
-El panel se publica solo en `127.0.0.1:8080` a propósito. Si quieres alcanzarlo desde
-fuera, ponlo detrás de un proxy con HTTPS en lugar de abrir el puerto: sin TLS, tu
-contraseña viaja en claro.
+El panel se publica solo en `127.0.0.1:8080` a propósito: sin TLS, tu contraseña viaja
+en claro. Para alcanzarlo desde fuera tienes las mismas dos vías que sin Docker: el TLS
+integrado (pon `SPLITSTREAM_TLS_DOMAIN` en `.env` y descomenta `80:80` y `443:443` en el
+compose; ver «Ponerlo en internet») o un proxy con HTTPS delante (ver «Detrás de un
+proxy»).
 
 ## Actualizar
 

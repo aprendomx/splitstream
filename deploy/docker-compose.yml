@@ -1,10 +1,11 @@
 # Despliegue de Splitstream con Docker.
 #
-#   1. cp deploy/env.example deploy/.env
-#   2. docker compose -f deploy/docker-compose.yml run --rm splitstream -genkey
-#      y pega el resultado en deploy/.env
-#   3. docker compose -f deploy/docker-compose.yml up -d
-#   4. docker compose -f deploy/docker-compose.yml logs | grep -A2 "te pedirá este código"
+#   1. Descarga este archivo y env.example (como .env) en una carpeta vacía:
+#        curl -fsSLO https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/docker-compose.yml
+#        curl -fsSL  https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/env.example -o .env
+#   2. docker compose run --rm splitstream -genkey   y pega el resultado en .env
+#   3. docker compose up -d
+#   4. docker compose logs | grep -A2 "te pedirá este código"
 #
 # `docker compose pull` trae la última imagen publicada antes de recrear el contenedor.
 #
