@@ -182,8 +182,15 @@ func (d *WebhookDispatcher) Send(ctx context.Context, w store.Webhook, ev store.
 }
 
 // intento hace un POST. Devuelve el código HTTP (0 si no hubo respuesta) y el error.
+//
+// El plazo NO cuelga del contexto que recibe: un POST ya lanzado sobrevive a que se cancele
+// el del despachador. Justo el aviso que más le importa a quien opera esto —«el servicio se
+// está apagando»— sale mientras el proceso se cierra, y heredar la cancelación lo perdía
+// siempre, de forma determinista, a mitad de vuelo. Se sigue acotando por Timeout, y los
+// REINTENTOS sí miran el contexto (en Send), así que tras cancelar termina un intento y
+// nada más.
 func (d *WebhookDispatcher) intento(ctx context.Context, destino, kind, firma string, body []byte) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, d.Timeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, destino, bytes.NewReader(body))
 	if err != nil {

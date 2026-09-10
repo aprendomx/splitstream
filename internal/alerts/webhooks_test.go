@@ -254,15 +254,17 @@ func TestSendDoesNotLeakTheURLOnANetworkError(t *testing.T) {
 	}
 }
 
-// Run no puede volver mientras quede un envío en vuelo: main espera a que vuelva justo
+// Run no puede volver mientras quede un envío en vuelo, y ese envío tiene que llegar: el
+// aviso de apagado sale justo cuando se cancela el contexto. main espera a que Run vuelva
 // antes de que corra su `defer db.Close()`, y todo envío apunta su resultado con
-// RecordWebhookDelivery. Si Run se adelantara, esa escritura caería sobre una base cerrada.
+// RecordWebhookDelivery.
 func TestRunWaitsForInFlightSends(t *testing.T) {
 	db, c, bus := setup(t)
 	recibida := make(chan struct{})
 	var unaVez sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		unaVez.Do(func() { close(recibida) })
+		// Lo bastante lento para que la cancelación le pille en vuelo.
 		time.Sleep(300 * time.Millisecond)
 	}))
 	defer srv.Close()
@@ -293,16 +295,20 @@ func TestRunWaitsForInFlightSends(t *testing.T) {
 	}
 
 	// Sin esperas ni reintentos a propósito: lo que main necesita es que esto ya esté
-	// hecho en el instante en que Run vuelve.
+	// hecho en el instante en que Run vuelve. Y ok, no failed: cancelar el contexto corta
+	// los reintentos, no el intento que ya estaba en el aire.
 	ok, failed := d.Stats()
-	if ok+failed != 1 {
-		t.Errorf("Stats = %d ok, %d failed al volver Run; quería el envío ya contabilizado", ok, failed)
+	if ok != 1 || failed != 0 {
+		t.Errorf("Stats = %d ok, %d failed al volver Run; quería 1 ok, 0 failed", ok, failed)
 	}
 	hooks, err := db.ListWebhooks(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hooks[0].LastStatus == nil && hooks[0].LastError == "" {
-		t.Error("Run volvió antes de que el envío registrara su resultado en la base")
+	if hooks[0].LastStatus == nil {
+		t.Fatalf("Run volvió sin que el envío registrara su resultado: %+v", hooks[0])
+	}
+	if *hooks[0].LastStatus != 200 || hooks[0].LastError != "" {
+		t.Errorf("last_status = %d, last_error = %q; quería 200 y sin error", *hooks[0].LastStatus, hooks[0].LastError)
 	}
 }

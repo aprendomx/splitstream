@@ -480,12 +480,18 @@ func run(ctx context.Context, out io.Writer) error {
 	// base. WebhookDispatcher.Run espera a sus envíos en vuelo antes de volver, así que
 	// verlo volver es lo que garantiza que ningún RecordWebhookDelivery —ni el del aviso
 	// de apagado— llegue tarde, cuando la base ya no acepta escrituras.
+	//
+	// Diez segundos, que es el plazo por intento del despachador: un envío que se lanzó
+	// justo antes de cancelar sobrevive a la cancelación y hay que dejarle terminar, o el
+	// aviso de apagado —el que más le importa a quien opera esto— se pierde siempre. El
+	// peor caso del cierre entero suma HTTP 5 s + WaitIdle 5 s + hub 3 s + fondo 10 s +
+	// ingesta 3 s = 26 s, por debajo del TimeoutStopSec=30 de la unidad de systemd.
 	finFondo := make(chan struct{})
 	go func() { fondo.Wait(); close(finFondo) }()
 	select {
 	case <-finFondo:
-	case <-time.After(5 * time.Second):
-		logger.Warn("los avisos y el mantenimiento no terminaron en 5s; se sigue adelante")
+	case <-time.After(10 * time.Second):
+		logger.Warn("los avisos y el mantenimiento no terminaron en 10s; se sigue adelante")
 	}
 	return nil
 }
