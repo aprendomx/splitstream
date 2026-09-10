@@ -155,6 +155,7 @@ func (s *Server) routes() {
 	// Públicas: son el camino para conseguir una sesión.
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
+	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 
 	// La configuración inicial también es pública, por definición: existe justo cuando
 	// todavía no hay contraseña con la que autenticarse. Se protege de otra forma —solo

@@ -49,6 +49,16 @@ func (d *DB) SQL() *sql.DB { return d.db }
 // Close cierra la base de datos.
 func (d *DB) Close() error { return d.db.Close() }
 
+// Ping comprueba que la base responde. Lo usa /healthz; un SELECT y no solo PingContext
+// porque este último puede dar por buena una conexión que ya no puede leer el archivo.
+func (d *DB) Ping(ctx context.Context) error {
+	var uno int
+	if err := d.ex.QueryRowContext(ctx, `SELECT 1`).Scan(&uno); err != nil {
+		return fmt.Errorf("ping: %w", err)
+	}
+	return nil
+}
+
 // InTx ejecuta fn dentro de una transacción. El *DB que recibe fn enruta todas sus
 // consultas por esa transacción, así que llamar a los repositorios dentro es seguro.
 // Si fn devuelve error se hace rollback y se propaga; si no, se comitea.
