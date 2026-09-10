@@ -295,6 +295,16 @@ func run(ctx context.Context, out io.Writer) error {
 	// vez aquí hacía que la segunda transmisión reutilizara el timebase de la primera.
 	factory := sinks.NewFactory(db, cipher, logger)
 	factory.SetRecordingsDir(cfg.RecordingsDir)
+	// Antes de que el motor pueda abrir una sesión: las filas que quedaron «en curso» de
+	// un arranque anterior (kill -9, corte de luz) se cierran con lo que diga el archivo,
+	// o se borran si el archivo no está. Si no, esas filas no se pueden descargar ni
+	// borrar, la poda las salta y la cuota las cuenta como 0 bytes. Un fallo aquí no
+	// impide arrancar: se graba igual, solo que con la contabilidad vieja sucia.
+	if cerradas, borradas, err := factory.ReconcileRecordings(ctx); err != nil {
+		logger.Error("no se pudieron reconciliar las grabaciones del arranque anterior", "err", err)
+	} else if cerradas+borradas > 0 {
+		logger.Warn("grabaciones reconciliadas", "cerradas", cerradas, "borradas", borradas)
+	}
 	// Los destinos y, si está encendida, la grabación: un sink más de la misma sesión.
 	// Un fallo construyendo la grabación no puede impedir la sesión: se registra y se
 	// sigue sin grabar.

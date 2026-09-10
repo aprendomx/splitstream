@@ -161,7 +161,32 @@ func (f *Factory) recordingQuota(ctx context.Context, st *store.RecordingSetting
 	if err != nil {
 		return record.Quota{}, err
 	}
-	return record.Quota{MaxBytes: int64(st.MaxGB * float64(1<<30)), UsedBytes: used}, nil
+	return record.Quota{MaxBytes: st.MaxBytes(), UsedBytes: used}, nil
+}
+
+// ReconcileRecordings cierra o borra las filas que quedaron en curso de un arranque
+// anterior. Se llama UNA vez al arrancar, antes de que el motor pueda abrir una sesión:
+// después habría filas en curso legítimas y se cerrarían por la espalda.
+//
+// El archivo manda: si está, la fila se cierra con su tamaño y su fecha; si no, se borra.
+func (f *Factory) ReconcileRecordings(ctx context.Context) (closed, removed int, err error) {
+	if f.recDir == "" {
+		return 0, 0, nil
+	}
+	stat := func(rel string) (int64, time.Time, bool) {
+		info, err := os.Stat(filepath.Join(f.recDir, filepath.FromSlash(rel)))
+		if err != nil {
+			return 0, time.Time{}, false
+		}
+		return info.Size(), info.ModTime(), true
+	}
+	closed, removed, err = f.db.CloseDanglingRecordings(ctx, stat)
+	if closed+removed > 0 {
+		f.logEvent(store.LevelWarn, "recording_reconciled", fmt.Sprintf(
+			"grabación: %d segmentos cerrados y %d filas sin archivo borradas tras un arranque sin cierre limpio",
+			closed, removed))
+	}
+	return closed, removed, err
 }
 
 // relPath vuelve un path absoluto de una grabación relativo al directorio raíz, que es
@@ -188,7 +213,7 @@ func (f *Factory) PruneRecordings(ctx context.Context) (deleted int, freed int64
 	remove := func(rel string) error {
 		return os.Remove(filepath.Join(f.recDir, filepath.FromSlash(rel)))
 	}
-	return f.db.PruneRecordings(ctx, corte, int64(st.MaxGB*float64(1<<30)), remove)
+	return f.db.PruneRecordings(ctx, corte, st.MaxBytes(), remove)
 }
 
 // BuildRecorder construye el sink de grabación de una sesión (spec v0.9 §6): nil, nil si
@@ -232,16 +257,27 @@ func (f *Factory) BuildRecorder(ctx context.Context, sessionID int64) (*relay.Si
 
 	dir := filepath.Join(f.recDir, fmt.Sprintf("sesion-%d", sessionID))
 	bg := context.Background()
-	// Una vez por sesión: el sink reintenta con backoff y cada intento volvería a decirlo.
-	var discoLlenoAvisado bool
+	// Una vez por sesión, los dos: el sink reintenta con backoff y cada intento
+	// construye un writer NUEVO, que trae su propio «ya avisé». Sin esto, el aviso del
+	// 80 % se repetía una vez por reconexión y llenaba el registro de eventos.
+	var discoLlenoAvisado, avisoDiscoDado bool
 
 	newPub := func() (relay.Publisher, error) {
 		q, err := f.recordingQuota(bg, st)
 		if err != nil {
 			return nil, err
 		}
+		// La numeración sigue donde la dejó la sesión: un apagado y encendido en caliente
+		// crea otro writer, y volver a empezar en 1 daba dos «segmento 1» y podía chocar
+		// con el archivo anterior si los dos caían en el mismo segundo (O_EXCL).
+		n, err := f.db.CountSessionRecordings(bg, sessionID)
+		if err != nil {
+			f.logger.Warn("no se pudieron contar los segmentos de la sesión", "err", err)
+			n = 0
+		}
 		return record.NewFLVWriter(record.Options{
-			Dir: dir, SessionID: sessionID, SegmentMinutes: st.SegmentMin, Quota: q, Logger: f.logger,
+			Dir: dir, SessionID: sessionID, SegmentMinutes: st.SegmentMin, Quota: q,
+			FirstIndex: n + 1, Logger: f.logger,
 			OnOpen: func(path string, index int, startedAt time.Time) {
 				if _, err := f.db.OpenRecording(bg, sessionID, f.relPath(path), index, startedAt); err != nil {
 					f.logger.Error("no se pudo registrar el segmento", "err", err)
@@ -253,9 +289,13 @@ func (f *Factory) BuildRecorder(ctx context.Context, sessionID int64) (*relay.Si
 				}
 				f.logEvent(store.LevelInfo, "recording_segment", fmt.Sprintf(
 					"grabación: segmento %d cerrado, %.1f MB y %s", s.Index,
-					float64(s.Bytes)/(1<<20), (time.Duration(s.DurationMS) * time.Millisecond).Round(time.Second)))
+					float64(s.Bytes)/(1<<20), (time.Duration(s.DurationMS)*time.Millisecond).Round(time.Second)))
 			},
 			OnDiskWarning: func(used, max int64) {
+				if avisoDiscoDado {
+					return
+				}
+				avisoDiscoDado = true
 				f.logEvent(store.LevelWarn, "recording_disk_warning", fmt.Sprintf(
 					"grabación: las grabaciones ocupan el %d %% del tope; se borrarán las más antiguas al llegar", used*100/max))
 			},

@@ -56,6 +56,42 @@ func (d *DB) FinishRecording(ctx context.Context, path string, endedAt time.Time
 	return nil
 }
 
+// CloseDanglingRecordings cierra las filas que quedaron en curso de un arranque anterior.
+//
+// Existe porque un `kill -9` —o un corte de luz— no llama a OnSegment: la fila se queda
+// con `ended_at NULL` y `bytes 0` para siempre. Y una fila así envenena todo lo demás:
+// no se puede descargar ni borrar (409), la poda la salta, la cuota la cuenta como 0
+// bytes y PruneSessions nunca puede reciclar su sesión.
+//
+// stat responde por el path relativo: si el archivo está, la fila se cierra con SU tamaño
+// y SU fecha de modificación —lo escrito hasta el último flush es reproducible, spec v0.9
+// §4—; si no está, la fila se borra porque no describe nada. `duration_ms` se deja como
+// está (0 si nunca se supo): la duración real exigiría releer el FLV entero, y para lo
+// que sirve la columna —informar en el listado— no lo vale.
+func (d *DB) CloseDanglingRecordings(ctx context.Context, stat func(rel string) (bytes int64, mtime time.Time, exists bool)) (closed, removed int, err error) {
+	abiertas, err := d.recordingsWhere(ctx, `ended_at IS NULL ORDER BY id`)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, r := range abiertas {
+		bytes, mtime, exists := stat(r.Path)
+		if !exists {
+			if _, err := d.ex.ExecContext(ctx, `DELETE FROM recordings WHERE id = ?`, r.ID); err != nil {
+				return closed, removed, fmt.Errorf("borrar la grabación sin archivo %s: %w", r.Path, err)
+			}
+			removed++
+			continue
+		}
+		if _, err := d.ex.ExecContext(ctx,
+			`UPDATE recordings SET ended_at = ?, bytes = ? WHERE id = ?`,
+			formatTime(mtime), bytes, r.ID); err != nil {
+			return closed, removed, fmt.Errorf("cerrar la grabación %s: %w", r.Path, err)
+		}
+		closed++
+	}
+	return closed, removed, nil
+}
+
 const (
 	defaultRecordingLimit = 50
 	maxRecordingLimit     = 500

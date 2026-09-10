@@ -182,3 +182,74 @@ func TestPruneSessionsKeepsSessionsWithRecordings(t *testing.T) {
 		t.Errorf("borró la sesión con grabaciones: n=%d err=%v", n, err)
 	}
 }
+
+// Un kill -9 no llama a OnSegment: la fila se queda «en curso» para siempre, y así no se
+// puede descargar ni borrar (409), la poda la salta y la cuota la cuenta como 0 bytes.
+// Al arrancar se cierra con lo que diga el archivo, o se borra si el archivo no está.
+func TestCloseDanglingRecordingsUsesTheFileOrDropsTheRow(t *testing.T) {
+	db := openTemp(t)
+	ctx := context.Background()
+	sesion, _ := db.StartSession(ctx)
+
+	cerrada := abrirYcerrar(t, db, sesion, "sesion-1/cerrada.flv", 1, 123, 4567)
+	conArchivo, err := db.OpenRecording(ctx, sesion, "sesion-1/con-archivo.flv", 2, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sinArchivo, err := db.OpenRecording(ctx, sesion, "sesion-1/sin-archivo.flv", 3, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// El archivo manda: tamaño y fecha de modificación salen de él.
+	fin := time.Now().Add(-30 * time.Minute).UTC().Truncate(time.Second)
+	stat := func(rel string) (int64, time.Time, bool) {
+		if rel == "sesion-1/con-archivo.flv" {
+			return 777, fin, true
+		}
+		return 0, time.Time{}, false
+	}
+
+	closed, removed, err := db.CloseDanglingRecordings(ctx, stat)
+	if err != nil {
+		t.Fatalf("CloseDanglingRecordings: %v", err)
+	}
+	if closed != 1 || removed != 1 {
+		t.Fatalf("closed=%d removed=%d, quería 1 y 1", closed, removed)
+	}
+
+	r, err := db.RecordingByID(ctx, conArchivo)
+	if err != nil {
+		t.Fatalf("la fila con archivo desapareció: %v", err)
+	}
+	if r.EndedAt == nil || !r.EndedAt.Equal(fin) || r.Bytes != 777 {
+		t.Errorf("fila cerrada = %+v; quería ended_at %v y bytes 777", r, fin)
+	}
+	if r.DurationMS != 0 {
+		t.Errorf("duration_ms = %d, quería que se dejara como estaba", r.DurationMS)
+	}
+
+	if _, err := db.RecordingByID(ctx, sinArchivo); !errors.Is(err, store.ErrRecordingNotFound) {
+		t.Errorf("la fila sin archivo sigue: %v", err)
+	}
+
+	// Las ya cerradas no se tocan.
+	antes, err := db.RecordingByID(ctx, cerrada)
+	if err != nil || antes.Bytes != 123 || antes.DurationMS != 4567 {
+		t.Errorf("una fila cerrada cambió: %+v, %v", antes, err)
+	}
+}
+
+// Sin filas en curso no hay nada que hacer y no es un error.
+func TestCloseDanglingRecordingsWithNothingOpen(t *testing.T) {
+	db := openTemp(t)
+	abrirYcerrar(t, db, 0, "a.flv", 1, 10, 10)
+	closed, removed, err := db.CloseDanglingRecordings(context.Background(),
+		func(string) (int64, time.Time, bool) {
+			t.Error("no había filas en curso: stat no debería llamarse")
+			return 0, time.Time{}, false
+		})
+	if closed != 0 || removed != 0 || err != nil {
+		t.Errorf("closed=%d removed=%d err=%v", closed, removed, err)
+	}
+}

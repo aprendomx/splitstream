@@ -15,6 +15,11 @@ type RecordingSettings struct {
 	UpdatedAt  time.Time
 }
 
+// MaxBytes es el tope en bytes. Vive aquí y no en cada llamante porque la conversión
+// —GB decimales a bytes binarios— estaba copiada en tres sitios, y basta con que una
+// copia use 1e9 para que la cuota y lo que enseña el panel dejen de cuadrar.
+func (s RecordingSettings) MaxBytes() int64 { return int64(s.MaxGB * float64(1<<30)) }
+
 // RecordingSettingsPatch es una modificación parcial: los campos nil no se tocan.
 type RecordingSettingsPatch struct {
 	Enabled    *bool

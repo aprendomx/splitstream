@@ -498,3 +498,109 @@ func esperar(t *testing.T, plazo time.Duration, cond func() bool, msg string) {
 	}
 	t.Fatalf("tiempo agotado: %s", msg)
 }
+
+// Un kill -9 deja filas «en curso» que nadie cerrará jamás. Al arrancar, la fábrica las
+// cierra con el tamaño y la fecha del archivo, borra las que ya no tienen archivo y lo
+// cuenta en un evento.
+func TestReconcileRecordingsClosesRowsFromACrashedSession(t *testing.T) {
+	db, _, f := setup(t)
+	ctx := context.Background()
+	dir := encenderGrabacion(t, db, f, 20)
+
+	contenido := make([]byte, 4096)
+	abs := filepath.Join(dir, "sesion-1", "20260910-120000-01.flv")
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, contenido, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conArchivo, err := db.OpenRecording(ctx, 0, "sesion-1/20260910-120000-01.flv", 1, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sinArchivo, err := db.OpenRecording(ctx, 0, "sesion-1/20260910-120000-02.flv", 2, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closed, removed, err := f.ReconcileRecordings(ctx)
+	if err != nil || closed != 1 || removed != 1 {
+		t.Fatalf("ReconcileRecordings: closed=%d removed=%d err=%v; quería 1, 1, nil", closed, removed, err)
+	}
+
+	r, err := db.RecordingByID(ctx, conArchivo)
+	if err != nil {
+		t.Fatalf("la fila con archivo desapareció: %v", err)
+	}
+	if r.EndedAt == nil || r.Bytes != int64(len(contenido)) {
+		t.Errorf("fila cerrada = %+v; quería ended_at y bytes = %d", r, len(contenido))
+	}
+	if _, err := db.RecordingByID(ctx, sinArchivo); err == nil {
+		t.Error("la fila sin archivo sigue")
+	}
+
+	eventos, _ := db.RecentEvents(ctx, 10)
+	var visto bool
+	for _, e := range eventos {
+		if e.Kind == "recording_reconciled" {
+			visto = true
+			if e.Level != store.LevelWarn || e.DestinationID != nil {
+				t.Errorf("evento = %+v", e)
+			}
+		}
+	}
+	if !visto {
+		t.Errorf("no hubo recording_reconciled; eventos: %+v", eventos)
+	}
+
+	// Segunda pasada: ya no queda nada en curso, así que no hay evento nuevo.
+	closed, removed, err = f.ReconcileRecordings(ctx)
+	if err != nil || closed != 0 || removed != 0 {
+		t.Errorf("segunda pasada: closed=%d removed=%d err=%v", closed, removed, err)
+	}
+}
+
+// La numeración de segmentos continúa donde la dejó la sesión: apagar y encender la
+// grabación en caliente construye otro writer, y volver a empezar en 1 daba dos «segmento
+// 1» y podía chocar con el archivo anterior dentro del mismo segundo (O_EXCL).
+func TestBuildRecorderContinuesSegmentNumbering(t *testing.T) {
+	db, _, f := setup(t)
+	ctx := context.Background()
+	encenderGrabacion(t, db, f, 20)
+	sesion, _ := db.StartSession(ctx)
+
+	for i := 1; i <= 2; i++ {
+		path := "sesion-" + strconv.FormatInt(sesion, 10) + "/anterior-0" + strconv.Itoa(i) + ".flv"
+		if _, err := db.OpenRecording(ctx, sesion, path, i, time.Now().Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.FinishRecording(ctx, path, time.Now().Add(-time.Hour), 10, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, err := f.BuildRecorder(ctx, sesion)
+	if err != nil || s == nil {
+		t.Fatalf("BuildRecorder: sink=%v err=%v", s, err)
+	}
+	hub := relay.NewHub(nil)
+	s.Start(ctx, hub.Preamble())
+	esperar(t, 5*time.Second, func() bool { return s.State() == relay.StateLive }, "el recorder conectó")
+	s.Stop()
+
+	grabaciones, err := db.ListRecordings(ctx, sesion, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grabaciones) != 3 {
+		t.Fatalf("grabaciones = %d, quería 3 (las dos previas y la nueva)", len(grabaciones))
+	}
+	nueva := grabaciones[0] // ListRecordings va de la más reciente a la más antigua
+	if nueva.Segment != 3 {
+		t.Errorf("segmento de la nueva = %d, quería 3", nueva.Segment)
+	}
+	if !strings.HasSuffix(nueva.Path, "-03.flv") {
+		t.Errorf("archivo = %q, quería que terminara en -03.flv", nueva.Path)
+	}
+}
