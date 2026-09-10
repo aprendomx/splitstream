@@ -49,6 +49,10 @@ type Config struct {
 	// RetentionMaxEvents es el tope de filas en la tabla events, sin importar su edad: lo
 	// que protege el disco de un destino que aletea toda la noche.
 	RetentionMaxEvents int
+	// RecordingsDir es donde se escriben las grabaciones. Por defecto junto a la base,
+	// por la misma razón que el archivo de clave: lo que hay que respaldar o mover va
+	// junto.
+	RecordingsDir string
 }
 
 // LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente. Receptor por
@@ -63,6 +67,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("log_level", c.LogLevel.String()),
 		slog.Int("retention_days", c.RetentionDays),
 		slog.Int("retention_max_events", c.RetentionMaxEvents),
+		slog.String("recordings_dir", c.RecordingsDir),
 	)
 }
 
@@ -162,6 +167,7 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		SecureCookies: get("SPLITSTREAM_SECURE_COOKIES", "false") == "true",
 		MetricsToken:  get("SPLITSTREAM_METRICS_TOKEN", ""),
 	}
+	cfg.RecordingsDir = get("SPLITSTREAM_RECORDINGS_DIR", filepath.Join(filepath.Dir(cfg.DBPath), "recordings"))
 
 	level, err := parseLevel(get("SPLITSTREAM_LOG_LEVEL", "info"))
 	if err != nil {

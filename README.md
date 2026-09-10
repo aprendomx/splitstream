@@ -150,6 +150,7 @@ Todo se controla con variables de entorno:
 | `SPLITSTREAM_METRICS_TOKEN` | vacío | Con valor, `/metrics` acepta `Authorization: Bearer`. Vacío: solo cookie de sesión |
 | `SPLITSTREAM_RETENTION_DAYS` | `90` | Eventos y sesiones cerradas más viejos se borran. `0` desactiva |
 | `SPLITSTREAM_RETENTION_MAX_EVENTS` | `50000` | Tope de filas en `events`. `0` desactiva |
+| `SPLITSTREAM_RECORDINGS_DIR` | `recordings/` junto a la base | Dónde se escriben los archivos de grabación |
 
 Comandos:
 
@@ -182,6 +183,34 @@ scrape_configs:
     authorization: { credentials: TU_TOKEN }
     static_configs: [{ targets: ['127.0.0.1:8080'] }]
 ```
+
+---
+
+### Grabar las emisiones
+
+Se activa desde **Ajustes → Grabación**. En cuanto se activa, cada sesión que llega por
+RTMP se graba en `SPLITSTREAM_RECORDINGS_DIR` (por defecto `recordings/` junto a la
+base), un directorio `sesion-<id>/` por sesión con uno o más archivos `.flv`. No hay
+transcodificación: es el mismo mux que llega de OBS, así que grabar no le cuesta CPU al
+resto de destinos.
+
+- **Segmentos:** con «Minutos por segmento» en más de 0, la sesión se corta a archivos de
+  ese tamaño; un corte de luz o un `kill -9` no cuesta más que el segmento en curso, los
+  anteriores ya están cerrados y son reproducibles. Con 0 minutos, un solo archivo por
+  sesión.
+- **Tope y retención:** «Tope en GB» pone un límite duro; al llegar, el job diario
+  `grabaciones` borra las grabaciones más antiguas hasta volver a estar debajo. «Días de
+  retención» borra por fecha, pero si compiten los dos límites manda el de gigas.
+- **El disco lento nunca frena el directo:** si el disco no da abasto para escribir al
+  ritmo que entra, la grabación empieza a descartar vídeo (igual que un destino con la
+  subida corta) y el chip «Grabando» del panel se pone en ámbar; los destinos que sí
+  llegan a tiempo no se enteran.
+- **Descargar y borrar:** desde la página «Grabaciones» del panel, por segmento.
+- **Pasar a MP4** para editar o subir a otro sitio:
+
+  ```bash
+  ffmpeg -i x.flv -c copy x.mp4
+  ```
 
 ---
 
@@ -299,9 +328,11 @@ cada fase, incluidos los errores que cometimos y cómo se corrigieron.
 
 ## Alcance
 
-Solo retransmisión. Sin transcodificación, sin grabación, sin chat unificado y sin
-multi-tenant. Si necesitas cambiar la resolución o el bitrate por destino, esto no es la
-herramienta: hace falta transcodificar, y eso es otro producto.
+Retransmisión y grabación local. Graba en FLV, sin transcodificar: lo que entra por RTMP
+se muxea tal cual a disco, igual que se reenvía tal cual a cada destino. Sin
+transcodificación, sin chat unificado y sin multi-tenant. Si necesitas cambiar la
+resolución o el bitrate por destino, esto no es la herramienta: hace falta
+transcodificar, y eso es otro producto.
 
 ## Licencia
 

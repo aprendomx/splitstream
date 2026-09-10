@@ -232,7 +232,54 @@ alguien entra en tu panel, quieres poder verlo.
 
 ---
 
-## 9. Avisos
+## 9. Grabar
+
+Además de reenviar tu emisión a tus canales, Splitstream puede guardar una copia en el
+servidor. En **Ajustes → Grabación**, activa **Grabar las emisiones**: desde ese momento,
+cada sesión que llegue por RTMP se graba en el disco del servidor, en FLV y sin
+transcodificar — el mismo vídeo que reenvía a tus canales, tal cual.
+
+### Segmentos, y por qué existen
+
+Con «Minutos por segmento» en más de 0, la grabación se corta a archivos de ese tamaño en
+vez de un único archivo por sesión. La razón es la resiliencia: si se va la luz o el
+proceso muere a mitad de una emisión de una hora, los segmentos ya cerrados están
+completos y se pueden reproducir — lo que se pierde es, como mucho, el segmento que
+estaba en curso. Con 0 minutos queda un solo archivo, que solo tiene sentido para
+emisiones cortas.
+
+### El tope y la retención
+
+Dos límites, y **manda el de gigas**:
+
+- **Tope en GB** — al llegar, se borran las grabaciones más antiguas hasta volver a estar
+  por debajo.
+- **Días de retención** — borra por fecha. Con 0, solo manda el tope en GB.
+
+Si los dos están puestos y compiten, gana el tope en GB: nunca vas a llenar el disco por
+haber puesto una retención larga.
+
+### Cuando el disco no da abasto
+
+Si el disco no escribe tan rápido como llega la emisión, la grabación empieza a descartar
+vídeo para no atrasarse — igual que le pasaría a un canal con la subida corta, pero solo
+en el archivo. El chip **Grabando** del panel se pone en ámbar y su aviso dice que el
+disco no da abasto. **Tus canales no se enteran**: la regla es que el directo nunca se
+degrada por culpa de la grabación.
+
+### Descargar, borrar y pasar a MP4
+
+Desde la página **Grabaciones** del panel ves cada segmento con su duración y su peso, y
+puedes **descargarlo** o **borrarlo** uno por uno. Los archivos son FLV; para editarlos o
+subirlos a otro sitio, conviértelos sin volver a codificar:
+
+```bash
+ffmpeg -i x.flv -c copy x.mp4
+```
+
+---
+
+## 10. Avisos
 
 Splitstream puede avisarte cuando un canal falla o se corta la emisión, sin que tengas que
 tener el panel abierto: en **Ajustes → Avisos**, pulsa **Nuevo aviso** y dale una URL de
@@ -277,7 +324,7 @@ Discord y Slack no llevan firma: su propia URL ya funciona como el secreto.
 
 ---
 
-## 10. Respaldo
+## 11. Respaldo
 
 En **Ajustes → Respaldo**, el botón **Descargar respaldo** te da una copia de la base de
 datos completa: canales, claves cifradas y la contraseña del panel.
@@ -292,7 +339,7 @@ respaldo es sobrevivir a que pierdas el original.
 
 ---
 
-## 11. Preguntas frecuentes
+## 12. Preguntas frecuentes
 
 **¿Puedo cambiar la calidad por canal?**
 No. Splitstream reenvía el vídeo tal cual, sin tocarlo — por eso apenas consume CPU. Emitir

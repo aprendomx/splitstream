@@ -216,7 +216,7 @@ func TestEngineRestartsSinksBetweenSessions(t *testing.T) {
 
 	var pubs []*fakePublisher
 	var mu sync.Mutex
-	e.SetSinkProvider(func() ([]*Sink, error) {
+	e.SetSinkProvider(func(int64) ([]*Sink, error) {
 		p := &fakePublisher{}
 		mu.Lock()
 		pubs = append(pubs, p)
@@ -480,7 +480,7 @@ func TestEngineAddSinkStartsIt(t *testing.T) {
 	defer h.Close()
 	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
 	e.SetValidator(func(string, string) error { return nil })
-	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+	e.SetSinkProvider(func(int64) ([]*Sink, error) { return nil, nil })
 
 	if err := e.OnPublishStart("live", "ok"); err != nil {
 		t.Fatalf("OnPublishStart: %v", err)
@@ -516,7 +516,7 @@ func TestEngineAddSinkSurvivesTheRequestThatCreatedIt(t *testing.T) {
 	defer h.Close()
 	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
 	e.SetValidator(func(string, string) error { return nil })
-	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+	e.SetSinkProvider(func(int64) ([]*Sink, error) { return nil, nil })
 
 	if err := e.OnPublishStart("live", "ok"); err != nil {
 		t.Fatalf("OnPublishStart: %v", err)
@@ -544,7 +544,7 @@ func TestEngineRemoveSinkStopsIt(t *testing.T) {
 	defer h.Close()
 	e := NewEngine(EngineConfig{Hub: h, Store: &fakeStore{}, BaseContext: context.Background()})
 	e.SetValidator(func(string, string) error { return nil })
-	e.SetSinkProvider(func() ([]*Sink, error) { return nil, nil })
+	e.SetSinkProvider(func(int64) ([]*Sink, error) { return nil, nil })
 
 	if err := e.OnPublishStart("live", "ok"); err != nil {
 		t.Fatalf("OnPublishStart: %v", err)
@@ -564,5 +564,35 @@ func TestEngineRemoveSinkStopsIt(t *testing.T) {
 	pub.mu.Unlock()
 	if closes == 0 {
 		t.Error("quitar un destino debe cerrar su Publisher")
+	}
+}
+
+// El provider recibe el id de la sesión que arranca: la grabación necesita saber a qué
+// sesión pertenece cada archivo, y el motor es el único que lo sabe en ese momento.
+func TestEngineSinkProviderReceivesTheSessionID(t *testing.T) {
+	st := &fakeStore{}
+	hub := NewHub(nil)
+	defer hub.Close()
+	e := NewEngine(EngineConfig{Hub: hub, Store: st})
+	e.SetValidator(func(string, string) error { return nil })
+
+	var recibido int64
+	e.SetSinkProvider(func(sessionID int64) ([]*Sink, error) {
+		recibido = sessionID
+		return nil, nil
+	})
+	if err := e.OnPublishStart("live", "k"); err != nil {
+		t.Fatalf("OnPublishStart: %v", err)
+	}
+	defer e.OnPublishEnd()
+
+	if recibido == 0 || recibido != e.SessionID() {
+		t.Errorf("el provider recibió %d, la sesión es %d", recibido, e.SessionID())
+	}
+}
+
+func TestRecorderSinkIDIsNegative(t *testing.T) {
+	if RecorderSinkID >= 0 {
+		t.Fatalf("RecorderSinkID = %d: debe ser negativo para no chocar con AUTOINCREMENT", RecorderSinkID)
 	}
 }

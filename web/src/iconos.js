@@ -39,4 +39,7 @@ export {
   mdiWebhook as iWebhook,
   mdiDownload as iDescargar,
   mdiHistory as iRegistro,
+  mdiRecordRec as iGrabar,
+  mdiFolderPlay as iGrabaciones,
+  mdiHarddisk as iDisco,
 } from '@quasar/extras/mdi-v7'

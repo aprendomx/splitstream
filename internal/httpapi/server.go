@@ -36,6 +36,12 @@ type DestinationTester interface {
 	Test(ctx context.Context, d store.Destination) (probe.Result, error)
 }
 
+// RecorderBuilder construye el sink de grabación de una sesión (nil si está apagada o no
+// hay sitio). Lo cumple *sinks.Factory. La API lo usa al encender la grabación en caliente.
+type RecorderBuilder interface {
+	BuildRecorder(ctx context.Context, sessionID int64) (*relay.Sink, error)
+}
+
 // EngineView es lo que la API necesita saber del motor: si hay sesión y cómo va cada
 // destino. Lo cumple *relay.Engine.
 //
@@ -79,6 +85,12 @@ type Config struct {
 	Ingest Disconnecter
 	Sinks  SinkBuilder
 	Tester DestinationTester
+	// Recorder construye el sink de grabación al encenderla en caliente. Nil en los tests
+	// que no la ejercitan.
+	Recorder RecorderBuilder
+	// RecordingsDir es el directorio raíz de las grabaciones: de ahí sale lo que enseña
+	// GET /api/recording/settings y lo que sirve la descarga.
+	RecordingsDir string
 	// Webhooks manda el evento sintético del botón «Probar». Nil en los tests que no lo
 	// ejercitan: handleTestWebhook responde 409 en vez de entrar en pánico.
 	Webhooks WebhookSender
@@ -118,6 +130,8 @@ type Server struct {
 	ingest       Disconnecter
 	sinks        SinkBuilder
 	tester       DestinationTester
+	recorder     RecorderBuilder
+	recDir       string
 	webhooks     WebhookSender
 	signer       *sessionSigner
 	limiter      *loginLimiter
@@ -151,6 +165,7 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
 		ingest: cfg.Ingest, sinks: cfg.Sinks, tester: cfg.Tester, webhooks: cfg.Webhooks,
+		recorder: cfg.Recorder, recDir: cfg.RecordingsDir,
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
 		setupCode: cfg.SetupCode, version: cfg.Version, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
@@ -213,6 +228,11 @@ func (s *Server) routes() {
 	protegida("GET /api/events", s.handleEvents)
 	protegida("GET /api/sessions", s.handleSessions)
 	protegida("POST /api/backup", s.handleBackup)
+	protegida("GET /api/recording/settings", s.handleGetRecordingSettings)
+	protegida("PATCH /api/recording/settings", s.handlePatchRecordingSettings)
+	protegida("GET /api/recordings", s.handleListRecordings)
+	protegida("GET /api/recordings/{id}/download", s.handleDownloadRecording)
+	protegida("DELETE /api/recordings/{id}", s.handleDeleteRecording)
 	protegida("GET /ws", s.handleWS)
 	protegida("GET /api/preview/ws", s.handlePreviewWS)
 

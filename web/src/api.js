@@ -124,6 +124,15 @@ export const api = {
   borrarWebhook: (id) => pedir('DELETE', `/api/webhooks/${id}`),
   probarWebhook: (id) => pedir('POST', `/api/webhooks/${id}/test`),
   sesiones: (limit = 50, before = 0) => pedir('GET', `/api/sessions?limit=${limit}&before=${before}`),
+
+  ajustesGrabacion: () => pedir('GET', '/api/recording/settings'),
+  editarAjustesGrabacion: (patch) => pedir('PATCH', '/api/recording/settings', patch),
+  grabaciones: (sessionId = 0, limit = 50, before = 0) =>
+    pedir('GET', `/api/recordings?session_id=${sessionId}&limit=${limit}&before=${before}`),
+  borrarGrabacion: (id) => pedir('DELETE', `/api/recordings/${id}`),
+  // La descarga es un enlace normal: el navegador manda la cookie y el backend responde
+  // con attachment. No hace falta pasar por un blob como en el respaldo.
+  urlDescargaGrabacion: (id) => `/api/recordings/${id}/download`,
   // El respaldo es una descarga, no JSON: se pide con fetch y se entrega como blob.
   descargarRespaldo: async () => {
     const res = await fetch('/api/backup', { method: 'POST', credentials: 'same-origin' })

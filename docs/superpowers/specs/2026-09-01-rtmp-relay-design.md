@@ -15,6 +15,12 @@ multi-tenant. Un binario, un usuario, un stream de entrada.
 Fuera de alcance de forma explícita y permanente: transcodificar, generar ABR, grabar a
 disco, agregar chats, cuentas múltiples, y cualquier ingesta que no sea RTMP.
 
+> **Enmienda 2026-09-10 (v0.9):** grabar a disco deja de estar fuera de alcance. Grabar
+> sin transcodificar es muxear: entra como un `Publisher` más detrás de la misma cola y
+> la misma política de descarte que cualquier destino, con la regla de que si el disco
+> se atrasa se degrada la grabación, nunca el directo. Siguen fuera: transcodificar,
+> ABR, chat de escritura, multi-tenant.
+
 ## 2. Decisiones tomadas
 
 | Decisión | Elegido | Por qué |
@@ -200,6 +206,10 @@ sink que se registre o reconecte a mitad de sesión los obtiene al engancharse.
 Alta y baja de sinks en caliente: activar un destino desde la UI lo registra sin tocar
 la sesión en curso.
 
+*(v0.9)* El hub admite un sink con `ID = relay.RecorderSinkID (-1)` que no corresponde a
+ninguna fila de `destinations`; sus eventos van sin `destination_id` y con `kind`
+`recording_*`.
+
 ### 6.3 Sink
 
 Una goroutine por destino. Posee su conexión saliente, su máquina de estados, su
@@ -252,6 +262,8 @@ Cuando el publisher (OBS) se desconecta, la sesión se cierra y todos los sinks 
 SIGTERM: dejar de aceptar conexiones nuevas, cerrar los sinks con 3 s de gracia, cerrar
 la base de datos.
 
+*(v0.9)* El `SinkProvider` recibe el id de la sesión: `func(sessionID int64) ([]*Sink, error)`.
+
 ### 6.6 Métricas por destino
 
 En memoria, sin persistir: bytes enviados, bitrate (media móvil de 5 s), frames de video
@@ -272,6 +284,13 @@ descartados, uptime de la conexión actual, número de reconexiones, último err
   del ingest.
 - **`events`** — log persistente de conexiones, desconexiones y errores por destino y
   sesión.
+- *(v0.9)* **`recording_settings`** — fila única (migración 0006): `enabled`,
+  `segment_min` (0 = sin segmentar), `max_gb`, `keep_days`, `updated_at`.
+- *(v0.9)* **`recordings`** — una fila por segmento: `id`, `session_id` (NULL si la
+  sesión se borra), `path` (relativo al directorio de grabaciones, así que mover la
+  carpeta o cambiar `SPLITSTREAM_RECORDINGS_DIR` no rompe el listado), `segment`,
+  `started_at`, `ended_at` (NULL mientras el segmento sigue abierto), `bytes`,
+  `duration_ms`.
 
 Migraciones versionadas en `internal/store/migrations/*.sql`, embebidas y aplicadas al
 arranque por un runner propio que lleva la versión en `PRAGMA user_version`. SQLite en
@@ -328,6 +347,12 @@ POST   /api/webhooks/:id/test         → manda un evento sintético            
 POST   /api/backup                    → descarga un .db consistente              (v0.8)
 GET    /api/sessions?limit=50&before= → sesiones, de la más reciente a la
                                          más antigua                             (v0.8)
+
+GET    /api/recording/settings        → ajustes de grabación                    (v0.9)
+PATCH  /api/recording/settings                                                  (v0.9)
+GET    /api/recordings?limit=&before= → listado de segmentos grabados           (v0.9)
+GET    /api/recordings/:id/download   → descarga el FLV del segmento            (v0.9)
+DELETE /api/recordings/:id                                                      (v0.9)
 ```
 
 Errores siempre con la forma `{"error": {"code": "...", "message": "..."}}`.
@@ -393,6 +418,9 @@ porque la imagen `scratch` no tiene `curl`).
 
 `Dockerfile` multi-etapa (build de la SPA + build de Go + imagen final distroless),
 `docker-compose.yml`, y unidad de systemd como alternativa.
+
+**Desde la v0.9 (2026-09-10):** una variable más — `SPLITSTREAM_RECORDINGS_DIR` (por
+defecto `recordings/` junto a la base).
 
 README con instalación, configuración de OBS, y la nota de ancho de banda: **el subida
 necesario es bitrate × número de destinos**. Sin transcodificación no hay nada que hacer

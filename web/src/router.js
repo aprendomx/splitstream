@@ -8,6 +8,7 @@ export const router = createRouter({
     { path: '/', name: 'panel', component: () => import('@/pages/Panel.vue') },
     { path: '/creditos', name: 'creditos', component: () => import('@/pages/Creditos.vue') },
     { path: '/ajustes', name: 'ajustes', component: () => import('@/pages/Ajustes.vue') },
+    { path: '/grabaciones', name: 'grabaciones', component: () => import('@/pages/Grabaciones.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

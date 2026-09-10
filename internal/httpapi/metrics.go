@@ -105,6 +105,19 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		add("splitstream_destination_queued_bytes", "Bytes encolados hacia el destino.", "gauge", base, float64(m.QueuedBytes))
 	}
 
+	// Grabación: el sink con el id reservado, si está en la sesión, más el disco.
+	var recActiva, recBytes, recDrops float64
+	if m, ok := snap[relay.RecorderSinkID]; ok {
+		if m.State == relay.StateLive.String() {
+			recActiva = 1
+		}
+		recBytes, recDrops = float64(m.BytesSent), float64(m.DroppedFrames)
+	}
+	add("splitstream_recording_active", "1 si la sesión se está grabando.", "gauge", nil, recActiva)
+	add("splitstream_recording_bytes_total", "Bytes escritos por la grabación en esta sesión.", "counter", nil, recBytes)
+	add("splitstream_recording_dropped_frames_total", "Mensajes que la grabación descartó por disco lento.", "counter", nil, recDrops)
+	add("splitstream_recording_free_bytes", "Espacio libre en el directorio de grabaciones.", "gauge", nil, float64(s.freeBytes()))
+
 	for _, extra := range s.extra {
 		ms = append(ms, extra()...)
 	}

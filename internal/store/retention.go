@@ -35,13 +35,16 @@ func (d *DB) PruneEvents(ctx context.Context, olderThan time.Time, keepAtMost in
 
 // PruneSessions borra sesiones cerradas que empezaron antes de olderThan y a las que ya
 // no apunta ningún evento. Una sesión abierta nunca se toca, por vieja que parezca: puede
-// ser la de ahora mismo tras un reloj mal puesto.
+// ser la de ahora mismo tras un reloj mal puesto. Tampoco se toca una sesión con
+// grabaciones colgadas: la vista de historial cuelga los archivos de ella, así que
+// borrarla dejaría grabaciones huérfanas en el historial.
 func (d *DB) PruneSessions(ctx context.Context, olderThan time.Time) (int64, error) {
 	res, err := d.ex.ExecContext(ctx,
 		`DELETE FROM sessions
 		  WHERE ended_at IS NOT NULL
 		    AND started_at < ?
-		    AND id NOT IN (SELECT session_id FROM events WHERE session_id IS NOT NULL)`,
+		    AND id NOT IN (SELECT session_id FROM events WHERE session_id IS NOT NULL)
+		    AND id NOT IN (SELECT session_id FROM recordings WHERE session_id IS NOT NULL)`,
 		formatTime(olderThan))
 	if err != nil {
 		return 0, fmt.Errorf("podar sesiones: %w", err)

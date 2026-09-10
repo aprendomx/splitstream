@@ -72,6 +72,11 @@ const minHealthySession = 30 * time.Second
 // destino aletea. Como suspectThreshold, no deja de reintentar (spec §6.5): deja constancia.
 const flapThreshold = 3
 
+// RecorderSinkID es el id del sink de grabación en el hub (spec v0.9 §2). Es negativo
+// para no chocar nunca con un id de destino (AUTOINCREMENT arranca en 1). No corresponde
+// a ninguna fila de destinations: sus eventos van sin destination_id.
+const RecorderSinkID int64 = -1
+
 // Umbrales de suspensión (spec base §6.5, enmendado). Antes los reintentos eran
 // indefinidos; con una clave mal pegada eso era un bucle silencioso, y contra una
 // plataforma que cuenta cada intento como emisión activa, un cupo agotado.

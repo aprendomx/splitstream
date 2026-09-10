@@ -78,6 +78,10 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 	for _, e := range recientes {
 		out.RecentEvents = append(out.RecentEvents, newEventDTO(e))
 	}
+
+	if out.Recording, err = s.recordingStatus(ctx); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
