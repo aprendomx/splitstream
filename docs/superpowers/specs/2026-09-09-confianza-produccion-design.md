@@ -97,6 +97,7 @@ Cuatro resultados, con la etapa en la que se decidió:
 | Resultado | Significa | Etapas posibles |
 | --- | --- | --- |
 | `unreachable` | No se llegó a hablar RTMP | `dns`, `tcp`, `tls` |
+| `unreachable` (etapa `cancelled`) | El llamante canceló antes de que terminara la gracia: la sonda no concluyó | `cancelled` |
 | `rejected` | La plataforma rechazó el handshake, o la URL no vale | `url`, `connect`, `createStream`, `publish` |
 | `closed_early` | Aceptó `publish` y cerró dentro de la gracia | `grace` |
 | `plausible` | Aceptó `publish` y seguía abierta al terminar la gracia | `grace` |

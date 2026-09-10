@@ -15,6 +15,10 @@ import (
 // clave mala solo se ve si la plataforma cierra el socket dentro de la gracia. Por eso el
 // resultado bueno es "plausible" y no "correcta".
 //
+// Si el contexto del llamante se cancela mientras se espera la gracia, la sonda no llegó a
+// ninguna conclusión sobre el destino: no es que la plataforma rechazara nada, así que se
+// devuelve `Unreachable` con etapa "cancelled" en vez de "rejected" (spec v0.8 §3).
+//
 // Ningún error reproduce la URL ni la clave: se heredan las reglas de parseTarget.
 func Probe(ctx context.Context, cfg PublisherConfig, grace time.Duration) probe.Result {
 	inicio := time.Now()
@@ -42,10 +46,13 @@ func Probe(ctx context.Context, cfg PublisherConfig, grace time.Duration) probe.
 		}
 	}
 
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return done(probe.Rejected, "grace", ctx.Err())
-	case <-time.After(grace):
+		// El llamante se rindió, no la plataforma: la sonda no concluyó nada.
+		return done(probe.Unreachable, "cancelled", ctx.Err())
+	case <-timer.C:
 	}
 
 	if err := p.lastError(); err != nil {

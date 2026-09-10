@@ -157,6 +157,21 @@ func TestProbeRejectsABadURLWithoutLeakingIt(t *testing.T) {
 	}
 }
 
+// Si el llamante se cancela durante la gracia, la sonda no concluyó nada sobre el destino:
+// no es un rechazo de la plataforma. El contexto tiene un plazo corto (300ms) frente a una
+// gracia larga (5s) para que el contexto expire mientras Probe sigue esperando.
+func TestProbeCancelledDuringGraceIsInconclusive(t *testing.T) {
+	addr := servidorDeSonda(t, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	res := Probe(ctx, PublisherConfig{URL: "rtmp://" + addr + "/live", StreamKey: crypto.Secret("clave-de-prueba")}, 5*time.Second)
+	if res.Outcome != probe.Unreachable || res.Stage != "cancelled" {
+		t.Fatalf("outcome = %v etapa %q, quería unreachable/cancelled (err %v)", res.Outcome, res.Stage, res.Err)
+	}
+}
+
 func certificadoAutofirmado(t *testing.T) tls.Certificate {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
