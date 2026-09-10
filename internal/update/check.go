@@ -121,12 +121,13 @@ func (c *Checker) Check(ctx context.Context) (Info, error) {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&cuerpo); err != nil {
 		return Info{}, fmt.Errorf("respuesta inesperada: %w", err)
 	}
-	ultima, ok := ParseVersion(cuerpo.TagName)
-	if !ok {
-		// Una pre-release o una etiqueta rara no es una versión que anunciar: la ignoramos.
-		return Info{Latest: cuerpo.TagName, URL: cuerpo.HTMLURL, Available: false}, nil
+	// Una pre-release o una etiqueta rara no es una versión que anunciar: no es un
+	// error (la consulta salió bien) pero tampoco hay nada disponible. Se guarda igual,
+	// para que Latest() refleje siempre la última consulta y no una anterior ya vieja.
+	info := Info{Latest: cuerpo.TagName, URL: cuerpo.HTMLURL}
+	if ultima, ok := ParseVersion(cuerpo.TagName); ok {
+		info.Available = newer(ultima, actual)
 	}
-	info := Info{Latest: cuerpo.TagName, URL: cuerpo.HTMLURL, Available: newer(ultima, actual)}
 	c.mu.Lock()
 	c.info = info
 	c.mu.Unlock()
