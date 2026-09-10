@@ -69,4 +69,8 @@ ENV SPLITSTREAM_DB_PATH=/data/splitstream.db \
 
 EXPOSE 1935 8080
 
+# La imagen es scratch: no hay curl ni wget. El propio binario hace la comprobación.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD ["/splitstream", "-healthcheck"]
+
 ENTRYPOINT ["/splitstream"]

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -47,10 +48,26 @@ func main() {
 	setpw := flag.Bool("setpassword", false,
 		"lee una contraseña de stdin y la fija como la del panel; "+
 			"invócalo como: read -rs PW && printf '%s' \"$PW\" | splitstream -setpassword")
+	hc := flag.Bool("healthcheck", false,
+		"consulta /healthz del servicio local y sale 0 si responde; para el HEALTHCHECK de Docker")
 	flag.Parse()
 
 	if *showVersion {
 		printVersion(os.Stdout)
+		return
+	}
+
+	if *hc {
+		// Solo el puerto: config.Load crearía un archivo de clave si no lo hubiera, y un
+		// healthcheck no debe tener efectos secundarios.
+		addr := os.Getenv("SPLITSTREAM_HTTP_ADDR")
+		if addr == "" {
+			addr = ":8080"
+		}
+		if err := healthcheck(addr); err != nil {
+			fmt.Fprintln(os.Stderr, "healthcheck:", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -455,4 +472,27 @@ func (a storeAdapter) LogEvent(ctx context.Context, e relay.EngineEvent) error {
 		Message:       e.Message,
 	})
 	return err
+}
+
+// healthcheckURL apunta siempre a la propia máquina: el addr de escucha puede ser ":8080"
+// o "0.0.0.0:8080", que no son direcciones a las que conectar.
+func healthcheckURL(addr string) string {
+	_, puerto, err := net.SplitHostPort(addr)
+	if err != nil || puerto == "" {
+		puerto = "8080"
+	}
+	return "http://127.0.0.1:" + puerto + "/healthz"
+}
+
+func healthcheck(addr string) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(healthcheckURL(addr))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("/healthz respondió %d", resp.StatusCode)
+	}
+	return nil
 }

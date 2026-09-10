@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -506,4 +507,45 @@ func TestRunShutsDownTheHTTPServerOnSignal(t *testing.T) {
 		t.Fatalf("el puerto sigue ocupado tras el apagado: %v", err)
 	}
 	ln.Close()
+}
+
+// -healthcheck existe porque la imagen es scratch y no tiene curl. Sale 0 si /healthz da
+// 200 y 1 si no; no toca la configuración ni crea archivos de clave.
+func TestHealthcheckFollowsHealthz(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ok.Close()
+	if err := healthcheck(strings.TrimPrefix(ok.URL, "http://")); err != nil {
+		t.Errorf("healthcheck contra un servidor sano = %v", err)
+	}
+
+	malo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer malo.Close()
+	if err := healthcheck(strings.TrimPrefix(malo.URL, "http://")); err == nil {
+		t.Error("healthcheck contra un 503 = nil, quería error")
+	}
+
+	if err := healthcheck(freeAddr(t)); err == nil {
+		t.Error("healthcheck contra nadie = nil, quería error")
+	}
+}
+
+// Un addr como ":8080" —el valor por defecto— apunta a la propia máquina.
+func TestHealthcheckURLFor(t *testing.T) {
+	for addr, want := range map[string]string{
+		":8080":          "http://127.0.0.1:8080/healthz",
+		"0.0.0.0:9000":   "http://127.0.0.1:9000/healthz",
+		"127.0.0.1:8081": "http://127.0.0.1:8081/healthz",
+	} {
+		if got := healthcheckURL(addr); got != want {
+			t.Errorf("healthcheckURL(%q) = %q, quería %q", addr, got, want)
+		}
+	}
 }
