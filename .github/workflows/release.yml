@@ -76,7 +76,9 @@ jobs:
             cp splitstream.exe "$NOMBRE"/
             zip -r "$NOMBRE.zip" "$NOMBRE"
           else
-            cp splitstream "$NOMBRE"/
+            # La unidad de systemd viaja dentro del tar.gz: install.sh la usa si la persona
+            # decide instalar el servicio, sin tener que descargarla aparte del repo.
+            cp splitstream deploy/splitstream.service "$NOMBRE"/
             tar czf "$NOMBRE.tar.gz" "$NOMBRE"
           fi
           ls -la splitstream-*

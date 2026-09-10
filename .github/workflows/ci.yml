@@ -154,6 +154,22 @@ jobs:
           sudo install -m 755 /bin/true /usr/local/bin/splitstream
           systemd-analyze verify deploy/splitstream.service
 
+  # Los instaladores son scripts: sin esto, un error de sintaxis en install.sh solo se
+  # vería cuando alguien lo ejecutara con `curl | sh` en su servidor.
+  instaladores:
+    name: instaladores
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: shellcheck
+        run: shellcheck deploy/*.sh
+      - name: install.sh en ubuntu y alpine contra una release local
+        run: sh deploy/install_test.sh
+
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:
     name: integración contra mediamtx
