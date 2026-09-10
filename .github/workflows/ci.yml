@@ -195,8 +195,8 @@ jobs:
             exit 1
           fi
           passed=$(grep -c -- '--- PASS' integration.log || true)
-          if [ "$passed" -lt 3 ]; then
-            echo "::error::se esperaban 3 tests de integración, pasaron $passed"
+          if [ "$passed" -lt 4 ]; then
+            echo "::error::se esperaban 4 tests de integración, pasaron $passed"
             exit 1
           fi
           echo "$passed tests de integración pasaron"
