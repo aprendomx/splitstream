@@ -30,7 +30,9 @@ seguidos— y el producto se instala descargando un archivo.
 ### Mac (Homebrew)
 
 ```bash
-brew install aprendomx/tap/splitstream
+brew tap aprendomx/tap
+brew trust aprendomx/tap      # Homebrew 6 lo exige para taps de terceros; en versiones anteriores no existe
+brew install splitstream
 splitstream
 ```
 

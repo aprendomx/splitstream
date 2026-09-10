@@ -184,7 +184,10 @@ jobs:
       # exactamente lo que verá quien haga `brew install aprendomx/tap/splitstream`.
       - name: instalar la fórmula de verdad
         run: |
+          # Homebrew 6 exige `brew trust` para cargar fórmulas de un tap de terceros; en
+          # versiones anteriores el comando no existe y se ignora.
           brew tap aprendomx/tap
+          brew trust aprendomx/tap || true
           cp splitstream.rb "$(brew --repository aprendomx/tap)/Formula/splitstream.rb"
           brew install aprendomx/tap/splitstream
           splitstream -version | grep -F "${GITHUB_REF_NAME}"
