@@ -117,6 +117,10 @@ type Config struct {
 	SecureCookies bool
 	// TrustedProxies son las redes desde las que se cree X-Forwarded-For (ver clientip.go).
 	TrustedProxies []netip.Prefix
+	// TLS y PublicURL describen cómo se sirve el panel (ver panelDTO). Son datos: este
+	// paquete no termina TLS ni importa webtls.
+	TLS       bool
+	PublicURL string
 	// MetricsToken autoriza GET /metrics con `Authorization: Bearer` sin cookie de sesión,
 	// para que Prometheus pueda scrapearlo. Vacío: solo la cookie.
 	MetricsToken string
@@ -148,6 +152,8 @@ type Server struct {
 	metricsToken string
 	extra        []ExtraMetrics
 	proxies      []netip.Prefix
+	tls          bool
+	publicURL    string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -175,6 +181,7 @@ func New(cfg Config) (*Server, error) {
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
 		metricsToken: cfg.MetricsToken, extra: cfg.ExtraMetrics,
 		proxies: cfg.TrustedProxies,
+		tls: cfg.TLS, publicURL: cfg.PublicURL,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto

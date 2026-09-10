@@ -139,6 +139,17 @@ type statusDTO struct {
 	RecentEvents []eventDTO `json:"recent_events"`
 	// Recording es el estado de la grabación de la sesión (spec v0.9 §6).
 	Recording recordingStatusDTO `json:"recording"`
+	// Panel es cómo se sirve el panel (ver panelDTO).
+	Panel panelDTO `json:"panel"`
+}
+
+// panelDTO dice cómo se sirve el panel: si el propio binario termina TLS y con qué URL
+// pública. Lo necesita el chat de Kick (v0.12) para saber si hay dirección HTTPS que dar
+// a un webhook. Con un proxy delante `tls` es false aunque el navegador vea HTTPS: es el
+// TLS del binario, no el del proxy.
+type panelDTO struct {
+	TLS       bool   `json:"tls"`
+	PublicURL string `json:"public_url"`
 }
 
 // sessionSummaryDTO es una fila del historial: la sesión y cuántos eventos dejó por nivel.

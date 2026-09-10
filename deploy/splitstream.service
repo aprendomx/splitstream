@@ -11,6 +11,9 @@
 #
 # El código del primer arranque se lee con:
 #   journalctl -u splitstream | grep -A2 "te pedirá este código"
+#
+# Con TLS integrado, descomenta AmbientCapabilities y pon SPLITSTREAM_TLS_DOMAIN en
+# /etc/splitstream/env.
 
 [Unit]
 Description=Splitstream — retransmisión RTMP a varias plataformas
@@ -54,6 +57,10 @@ ReadWritePaths=/var/lib/splitstream
 
 # Solo hacen falta sockets de red normales.
 RestrictAddressFamilies=AF_INET AF_INET6
+
+# Para el TLS integrado (SPLITSTREAM_TLS_DOMAIN) el servicio escucha en 443 y 80, que un
+# usuario sin privilegios no puede abrir. Esta capacidad se lo permite sin darle root:
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target

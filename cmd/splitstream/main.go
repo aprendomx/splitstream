@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -34,6 +35,7 @@ import (
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
 	"github.com/aprendomx/splitstream/internal/store"
+	"github.com/aprendomx/splitstream/internal/webtls"
 	"github.com/aprendomx/splitstream/web"
 )
 
@@ -61,13 +63,11 @@ func main() {
 	}
 
 	if *hc {
-		// Solo el puerto: config.Load crearía un archivo de clave si no lo hubiera, y un
-		// healthcheck no debe tener efectos secundarios.
+		// Solo el puerto y si hay TLS: config.Load crearía un archivo de clave si no lo
+		// hubiera, y un healthcheck no debe tener efectos secundarios.
 		addr := os.Getenv("SPLITSTREAM_HTTP_ADDR")
-		if addr == "" {
-			addr = ":8080"
-		}
-		if err := healthcheck(addr); err != nil {
+		conTLS := os.Getenv("SPLITSTREAM_TLS_DOMAIN") != "" || os.Getenv("SPLITSTREAM_TLS_CERT_FILE") != ""
+		if err := healthcheck(addr, conTLS); err != nil {
 			fmt.Fprintln(os.Stderr, "healthcheck:", err)
 			os.Exit(1)
 		}
@@ -400,24 +400,49 @@ func run(ctx context.Context, out io.Writer) error {
 		panelFS = nil
 	}
 
+	// El TLS integrado se construye ANTES de la Config de httpapi: PublicURL sale de aquí
+	// y ese paquete no sabe nada de webtls (la CI lo comprueba).
+	tlsSetup, err := webtls.Build(cfg, func(err error) {
+		// Sin secretos: el dominio y el texto de ACME. Cadencia acotada por webtls.
+		if _, e := db.LogEvent(context.Background(), store.Event{
+			Level: store.LevelError, Kind: "tls_certificate_error",
+			Message: "no se pudo obtener el certificado de " + cfg.TLSDomain + ": " + err.Error(),
+		}); e != nil {
+			logger.Error("no se pudo registrar el fallo de certificado", "err", e)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if cfg.SecureCookiesDesactivadas {
+		logger.Warn("SPLITSTREAM_SECURE_COOKIES=false con TLS integrado: la cookie de sesión viaja sin Secure")
+	}
+	publicURL := ""
+	if tlsSetup != nil {
+		publicURL = tlsSetup.PublicURL
+	}
+
 	api, err := httpapi.New(httpapi.Config{
-		DB:            db,
-		Cipher:        cipher,
-		Engine:        engine,
-		Ingest:        ingest,
-		Sinks:         factory,
-		Tester:        factory,
-		Recorder:      factory,
-		RecordingsDir: cfg.RecordingsDir,
-		Webhooks:      webhooks,
-		MasterKey:     cfg.MasterKey,
-		RTMPAddr:      cfg.RTMPAddr,
-		Version:       version,
-		SetupCode:     setupCode,
-		SPA:           panelFS,
-		Logger:        logger,
-		SecureCookies: cfg.SecureCookies,
-		MetricsToken:  cfg.MetricsToken,
+		DB:             db,
+		Cipher:         cipher,
+		Engine:         engine,
+		Ingest:         ingest,
+		Sinks:          factory,
+		Tester:         factory,
+		Recorder:       factory,
+		RecordingsDir:  cfg.RecordingsDir,
+		Webhooks:       webhooks,
+		MasterKey:      cfg.MasterKey,
+		RTMPAddr:       cfg.RTMPAddr,
+		Version:        version,
+		SetupCode:      setupCode,
+		SPA:            panelFS,
+		Logger:         logger,
+		SecureCookies:  cfg.SecureCookies,
+		TrustedProxies: cfg.TrustedProxies,
+		TLS:            cfg.TLS(),
+		PublicURL:      publicURL,
+		MetricsToken:   cfg.MetricsToken,
 		ExtraMetrics: []httpapi.ExtraMetrics{func() []httpapi.Metric {
 			ok, failed := webhooks.Stats()
 			return []httpapi.Metric{
@@ -441,16 +466,42 @@ func run(ctx context.Context, out io.Writer) error {
 		// horas. El plazo de escritura del WS va por mensaje, dentro de su handler.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	var redirSrv *http.Server
+	if tlsSetup != nil {
+		httpSrv.TLSConfig = tlsSetup.TLSConfig
+		if cfg.TLSRedirectAddr != "" {
+			// Mínimo: atiende el reto HTTP-01 y redirige. Sin Handler propio no hay nada
+			// más que pueda hacer, así que el plazo es corto.
+			redirSrv = &http.Server{Addr: cfg.TLSRedirectAddr, Handler: tlsSetup.Redirect, ReadHeaderTimeout: 5 * time.Second}
+		}
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		var err error
+		if tlsSetup != nil {
+			// Con TLSConfig puesto, los archivos vacíos son correctos: el certificado
+			// sale de GetCertificate (autocert) o de Certificates (propio).
+			err = httpSrv.ListenAndServeTLS("", "")
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
 		// ErrServerClosed es lo que devuelve SIEMPRE tras un Shutdown: no es un fallo.
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("el servidor HTTP dejó de atender", "err", err)
 		}
 	}()
+	if redirSrv != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := redirSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("el listener de redirección a HTTPS dejó de atender", "err", err)
+			}
+		}()
+	}
 
 	wg.Add(1)
 	go func() {
@@ -465,8 +516,11 @@ func run(ctx context.Context, out io.Writer) error {
 	// matices, y eso incluye la máscara con los últimos 4 caracteres, que es para la
 	// interfaz —otra superficie, con otro control de acceso—. `ingest_app` no es secreto
 	// y se queda.
-	logger.Info("splitstream arrancado", "config", cfg,
-		"ingest_app", settings.IngestApp, "http_addr", cfg.HTTPAddr)
+	logArgs := []any{"config", cfg, "ingest_app", settings.IngestApp, "http_addr", cfg.HTTPAddr, "tls", cfg.TLS()}
+	if publicURL != "" {
+		logArgs = append(logArgs, "public_url", publicURL)
+	}
+	logger.Info("splitstream arrancado", logArgs...)
 
 	<-ctx.Done()
 	logger.Info("apagando")
@@ -478,6 +532,14 @@ func run(ctx context.Context, out io.Writer) error {
 		logger.Warn("el servidor HTTP no cerró limpiamente", "err", err)
 	}
 	cancelHTTP()
+
+	if redirSrv != nil {
+		redirCtx, cancelRedir := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := redirSrv.Shutdown(redirCtx); err != nil {
+			logger.Warn("el listener de redirección no cerró limpiamente", "err", err)
+		}
+		cancelRedir()
+	}
 
 	if err := ingest.Close(); err != nil {
 		logger.Error("cerrar la ingesta", "err", err)
@@ -602,18 +664,28 @@ func (a storeAdapter) LogEvent(ctx context.Context, e relay.EngineEvent) error {
 }
 
 // healthcheckURL apunta siempre a la propia máquina: el addr de escucha puede ser ":8080"
-// o "0.0.0.0:8080", que no son direcciones a las que conectar.
-func healthcheckURL(addr string) string {
+// o "0.0.0.0:8080", que no son direcciones a las que conectar. Con TLS integrado el
+// esquema y el puerto por defecto cambian a https y 443.
+func healthcheckURL(addr string, conTLS bool) string {
+	esquema, puertoDef := "http", "8080"
+	if conTLS {
+		esquema, puertoDef = "https", "443"
+	}
 	_, puerto, err := net.SplitHostPort(addr)
 	if err != nil || puerto == "" {
-		puerto = "8080"
+		puerto = puertoDef
 	}
-	return "http://127.0.0.1:" + puerto + "/healthz"
+	return esquema + "://127.0.0.1:" + puerto + "/healthz"
 }
 
-func healthcheck(addr string) error {
+func healthcheck(addr string, conTLS bool) error {
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(healthcheckURL(addr))
+	if conTLS {
+		// Es loopback y solo mide vida: el certificado es del dominio, nunca de
+		// 127.0.0.1, así que validarlo fallaría siempre.
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
+	resp, err := client.Get(healthcheckURL(addr, conTLS))
 	if err != nil {
 		return err
 	}

@@ -29,6 +29,11 @@ services:
       # detrás de un proxy con HTTPS en vez de abrir este puerto al mundo. La contraseña
       # viajaría en claro.
       - "127.0.0.1:8080:8080"
+      # TLS integrado: descomenta estos dos, pon SPLITSTREAM_TLS_DOMAIN en .env y quita
+      # la línea de 127.0.0.1:8080. Dentro del contenedor no hace falta root para 80 y
+      # 443: Docker permite puertos bajos a cualquier usuario desde la 20.10.
+      #- "80:80"
+      #- "443:443"
 
     volumes:
       # La base de datos: las claves de tus canales y la contraseña del panel. Sin este

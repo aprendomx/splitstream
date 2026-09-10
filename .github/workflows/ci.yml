@@ -51,12 +51,14 @@ jobs:
             exit 1
           fi
 
-      # La simétrica: la capa HTTP no debe conocer la librería RTMP. Habla con la ingesta
-      # a través de interfaces estrechas, no del tipo concreto.
-      - name: internal/httpapi no conoce go-rtmp
+      # La simétrica: la capa HTTP no debe conocer la librería RTMP ni cómo se termina el
+      # TLS. Habla con la ingesta a través de interfaces estrechas, no del tipo concreto,
+      # y el panel.tls que expone es un dato que le pasa main.go, no algo que calcule
+      # importando webtls.
+      - name: internal/httpapi no conoce go-rtmp ni el TLS
         run: |
-          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio'; then
-            echo "::error::internal/httpapi importa go-rtmp o internal/rtmpio"
+          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio|internal/webtls'; then
+            echo "::error::internal/httpapi importa go-rtmp, internal/rtmpio o internal/webtls"
             exit 1
           fi
 
