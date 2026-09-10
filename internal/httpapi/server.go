@@ -168,6 +168,7 @@ func (s *Server) routes() {
 	// más específico, así que no compite con PATCH/DELETE /api/destinations/{id}.
 	protegida("POST /api/destinations/toggle-all", s.handleToggleAllDestinations)
 	protegida("GET /api/destinations/{id}/key", s.handleRevealDestinationKey)
+	protegida("POST /api/destinations/{id}/retry", s.handleRetryDestination)
 	protegida("PUT /api/destinations/{id}/logo", s.handlePutDestinationLogo)
 	protegida("GET /api/destinations/{id}/logo", s.handleGetDestinationLogo)
 	protegida("DELETE /api/destinations/{id}/logo", s.handleDeleteDestinationLogo)

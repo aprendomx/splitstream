@@ -384,6 +384,11 @@ func (d *DB) RevealDestinationKey(ctx context.Context, c *crypto.Cipher, id int6
 	return key, nil
 }
 
+// DestinationByID devuelve un destino por su id, sin la clave.
+func (d *DB) DestinationByID(ctx context.Context, id int64) (*Destination, error) {
+	return d.destination(ctx, id)
+}
+
 func (d *DB) destination(ctx context.Context, id int64) (*Destination, error) {
 	row := d.ex.QueryRowContext(ctx,
 		`SELECT id, name, platform, rtmp_url, stream_key_last4, enabled, sort_order, created_at, updated_at
