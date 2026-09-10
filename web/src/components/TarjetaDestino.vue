@@ -1,5 +1,5 @@
 <script setup>
-import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar } from '@/iconos'
+import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar } from '@/iconos'
 import { computed } from 'vue'
 import { porId } from '@/plataformas'
 import { api } from '@/api'
@@ -9,12 +9,13 @@ const props = defineProps({
   destino: { type: Object, required: true },
   haySesion: Boolean,
 })
-defineEmits(['editar', 'alternar', 'borrar', 'revelar'])
+defineEmits(['editar', 'alternar', 'borrar', 'revelar', 'reintentar'])
 
 const plat = computed(() => porId(props.destino.platform))
 const diag = computed(() => diagnosticar(props.destino, props.haySesion))
 const tono = computed(() => TONOS[diag.value.tono])
 const m = computed(() => props.destino.metrics)
+const suspendido = computed(() => m.value?.state === 'suspended')
 const conCifras = computed(() => m.value && props.haySesion && props.destino.enabled)
 const logo = computed(() => (props.destino.logo_etag ? api.urlLogo(props.destino) : null))
 </script>
@@ -81,6 +82,10 @@ const logo = computed(() => (props.destino.logo_etag ? api.urlLogo(props.destino
     </div>
     <div v-if="diag.consejo" class="consejo q-px-md q-pt-xs">
       <q-icon :name="iConsejo" size="14px" class="q-mr-xs" />{{ diag.consejo }}
+    </div>
+    <div v-if="suspendido" class="q-px-md q-pt-sm">
+      <q-btn dense no-caps unelevated color="primary" size="sm" :icon="iRotar"
+             label="Reintentar" @click="$emit('reintentar')" />
     </div>
 
     <!-- El detalle técnico va al final y en gris: importa cuando algo falla, no antes. -->

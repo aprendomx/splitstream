@@ -124,6 +124,16 @@ async function alternar(d) {
   }
 }
 
+async function reintentar(d) {
+  try {
+    await api.reintentarDestino(d.id)
+    await panel.cargar()
+    $q.notify({ type: 'info', message: `Reintentando ${d.name}` })
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  }
+}
+
 function borrar(d) {
   // Confirmación antes de una acción irreversible, nombrando lo que se va a borrar.
   $q.dialog({
@@ -360,6 +370,7 @@ async function rotarClave() {
             @alternar="alternar(element)"
             @borrar="borrar(element)"
             @revelar="revelar(element)"
+            @reintentar="reintentar(element)"
           />
         </div>
       </template>
