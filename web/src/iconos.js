@@ -35,4 +35,8 @@ export {
   mdiMusicNote as iTiktok,
   mdiServerNetwork as iServidor,
   mdiConnection as iProbar,
+  mdiCog as iAjustes,
+  mdiWebhook as iWebhook,
+  mdiDownload as iDescargar,
+  mdiHistory as iRegistro,
 } from '@quasar/extras/mdi-v7'

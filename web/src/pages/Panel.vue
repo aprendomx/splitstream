@@ -9,6 +9,7 @@ import { bitrateLegible, duracionLegible } from '@/diagnostico'
 import DialogoDestino from '@/components/DialogoDestino.vue'
 import TarjetaDestino from '@/components/TarjetaDestino.vue'
 import VistaPrevia from '@/components/VistaPrevia.vue'
+import RegistroEventos from '@/components/RegistroEventos.vue'
 
 const $q = useQuasar()
 const panel = usePanel()
@@ -414,6 +415,8 @@ async function rotarClave() {
         </div>
       </template>
     </draggable>
+
+    <RegistroEventos class="q-mt-md" />
 
     <DialogoDestino v-model="dialogo" :destino="editando" @guardado="trasGuardar" />
   </q-page>
