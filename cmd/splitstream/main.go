@@ -294,8 +294,24 @@ func run(ctx context.Context, out io.Writer) error {
 	// ingesta abre su propia conexión con cada destino (spec §6.5). Arrancarlos una sola
 	// vez aquí hacía que la segunda transmisión reutilizara el timebase de la primera.
 	factory := sinks.NewFactory(db, cipher, logger)
+	factory.SetRecordingsDir(cfg.RecordingsDir)
+	// Los destinos y, si está encendida, la grabación: un sink más de la misma sesión.
+	// Un fallo construyendo la grabación no puede impedir la sesión: se registra y se
+	// sigue sin grabar.
 	engine.SetSinkProvider(func(sessionID int64) ([]*relay.Sink, error) {
-		return factory.BuildEnabled(ctx)
+		sinks, err := factory.BuildEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rec, err := factory.BuildRecorder(ctx, sessionID)
+		if err != nil {
+			logger.Error("no se pudo construir la grabación", "err", err)
+			return sinks, nil
+		}
+		if rec != nil {
+			sinks = append(sinks, rec)
+		}
+		return sinks, nil
 	})
 
 	// Mantenimiento diario: poda de eventos y sesiones. Nunca con sesión viva.
@@ -317,6 +333,10 @@ func run(ctx context.Context, out io.Writer) error {
 				}
 				n, err := db.PruneSessions(ctx, time.Now().Add(-time.Duration(cfg.RetentionDays)*24*time.Hour))
 				return fmt.Sprintf("sesiones: %d borradas", n), err
+			}},
+			{Name: "grabaciones", Run: func(ctx context.Context) (string, error) {
+				n, freed, err := factory.PruneRecordings(ctx)
+				return fmt.Sprintf("grabaciones: %d borradas, %.1f MB liberados", n, float64(freed)/(1<<20)), err
 			}},
 		},
 		OnDone: func(resumen string, err error) {
