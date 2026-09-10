@@ -60,6 +60,19 @@ jobs:
             exit 1
           fi
 
+      # La grabación solo conoce el motor y el inspector de FLV: ni store, ni red, ni HTTP.
+      - name: internal/record sigue aislado
+        run: |
+          if go list -deps ./internal/record | grep 'splitstream/internal/' | grep -vE 'internal/(relay|flv|record)$'; then
+            echo "::error::internal/record importa algo más que relay y flv"
+            exit 1
+          fi
+
+      # disk_windows.go es el primer archivo con build tag del repo: sin esto, una rotura
+      # solo en Windows se vería al etiquetar la release.
+      - name: compila para Windows
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/splitstream
+
   # El panel se compila aparte del binario. Sin este job, un fallo del frontend no se
   # notaría hasta que alguien ejecutara `make build` a mano: el job de Go compila igual,
   # porque go:embed se conforma con el .gitkeep de un clon limpio.
