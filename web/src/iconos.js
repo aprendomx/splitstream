@@ -34,4 +34,5 @@ export {
   mdiAlphaXBox as iX,
   mdiMusicNote as iTiktok,
   mdiServerNetwork as iServidor,
+  mdiConnection as iProbar,
 } from '@quasar/extras/mdi-v7'

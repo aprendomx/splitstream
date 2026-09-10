@@ -106,6 +106,7 @@ export const api = {
   reordenarDestinos: (ids) => pedir('POST', '/api/destinations/reorder', { ids }),
   revelarClave: (id) => pedir('GET', `/api/destinations/${id}/key`),
   reintentarDestino: (id) => pedir('POST', `/api/destinations/${id}/retry`),
+  probarDestino: (id) => pedir('POST', `/api/destinations/${id}/test`),
 
   // El interruptor maestro manda el estado deseado, no una orden de invertir: si unos
   // canales están encendidos y otros no, invertir dejaría la mitad al revés de lo que el

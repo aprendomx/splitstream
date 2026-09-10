@@ -1,5 +1,5 @@
 <script setup>
-import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar } from '@/iconos'
+import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar, iProbar } from '@/iconos'
 import { computed } from 'vue'
 import { porId } from '@/plataformas'
 import { api } from '@/api'
@@ -9,7 +9,7 @@ const props = defineProps({
   destino: { type: Object, required: true },
   haySesion: Boolean,
 })
-defineEmits(['editar', 'alternar', 'borrar', 'revelar', 'reintentar'])
+defineEmits(['editar', 'alternar', 'borrar', 'revelar', 'reintentar', 'probar'])
 
 const plat = computed(() => porId(props.destino.platform))
 const diag = computed(() => diagnosticar(props.destino, props.haySesion))
@@ -56,6 +56,13 @@ const logo = computed(() => (props.destino.logo_etag ? api.urlLogo(props.destino
               <q-item-section>
                 Ver la clave
                 <q-item-label caption>Queda registrado</q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-item clickable v-close-popup @click="$emit('probar')">
+              <q-item-section avatar><q-icon :name="iProbar" /></q-item-section>
+              <q-item-section>
+                Probar
+                <q-item-label caption>Conecta sin emitir</q-item-label>
               </q-item-section>
             </q-item>
             <q-separator />
