@@ -1,11 +1,11 @@
 <script setup>
-import { iArrastrar, iBroadcast, iCopiar, iMas, iRotar } from '@/iconos'
+import { iArrastrar, iBroadcast, iCopiar, iGrabar, iMas, iRotar } from '@/iconos'
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useQuasar } from 'quasar'
 import draggable from 'vuedraggable'
 import { usePanel } from '@/stores/panel'
 import { api, ApiError } from '@/api'
-import { bitrateLegible, duracionLegible } from '@/diagnostico'
+import { bitrateLegible, bytesLegibles, duracionLegible } from '@/diagnostico'
 import DialogoDestino from '@/components/DialogoDestino.vue'
 import TarjetaDestino from '@/components/TarjetaDestino.vue'
 import VistaPrevia from '@/components/VistaPrevia.vue'
@@ -58,6 +58,14 @@ const tiempoEmitiendo = computed(() => {
   const t = panel.sesion.started_at
   if (!panel.haySesion || !t) return null
   return duracionLegible((Date.now() - new Date(t).getTime()) / 1000)
+})
+
+// Porcentaje del tope de grabaciones que ya está ocupado; es lo que decide cuándo la
+// retención empezará a borrar.
+const porcentajeGrabacion = computed(() => {
+  const g = panel.grabacion
+  if (!g || !g.max_bytes) return 0
+  return Math.min(100, Math.round((100 * g.used_bytes) / g.max_bytes))
 })
 
 let tic
@@ -324,6 +332,18 @@ async function rotarClave() {
             <template v-else>Arranca la transmisión en OBS para empezar</template>
           </div>
         </div>
+        <q-chip
+          v-if="panel.grabacion?.active"
+          dense square :icon="iGrabar" text-color="white"
+          :color="panel.grabacion.degraded ? 'warning' : 'negative'"
+        >
+          Grabando · {{ bytesLegibles(panel.grabacion.bytes) }} · disco {{ porcentajeGrabacion }} %
+          <q-tooltip>
+            {{ panel.grabacion.degraded
+              ? 'El disco no da abasto: la grabación descarta vídeo, el directo no.'
+              : `Segmento ${panel.grabacion.segments} · ${bytesLegibles(panel.grabacion.free_bytes)} libres` }}
+          </q-tooltip>
+        </q-chip>
         <q-btn v-if="panel.haySesion && !verPrevia" flat dense no-caps size="sm"
                label="Vista previa" @click="verPrevia = true" />
       </q-card-section>

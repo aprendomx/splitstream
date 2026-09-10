@@ -1,13 +1,16 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
-import { iMas, iEditar, iBorrar, iWebhook, iDescargar, iProbar } from '@/iconos'
+import { iMas, iEditar, iBorrar, iWebhook, iDescargar, iProbar, iGrabaciones, iDisco } from '@/iconos'
 import { api } from '@/api'
+import { bytesLegibles } from '@/diagnostico'
+import { usePanel } from '@/stores/panel'
 import DialogoWebhook from '@/components/DialogoWebhook.vue'
 
 // Ajustes que no caben en el panel principal: avisos por webhook y respaldo. En la v0.9
 // gana la grabación.
 const $q = useQuasar()
+const panel = usePanel()
 const webhooks = ref([])
 const dialogo = ref(false)
 const editando = ref(null)
@@ -17,7 +20,7 @@ const respaldando = ref(false)
 async function cargar() {
   try { webhooks.value = await api.webhooks() } catch (e) { $q.notify({ type: 'negative', message: e.message }) }
 }
-onMounted(cargar)
+onMounted(() => { cargar(); cargarGrabacion() })
 
 function abrirAlta() { editando.value = null; dialogo.value = true }
 function abrirEdicion(w) { editando.value = w; dialogo.value = true }
@@ -73,6 +76,69 @@ async function respaldar() {
   }
 }
 
+// Ajustes de grabación. El interruptor se aplica al momento (con sesión viva arranca o
+// para la grabación); los demás campos se guardan con el botón y valen para la siguiente
+// emisión.
+const grabacion = ref(null)
+const formGrab = ref({ segment_min: 10, max_gb: 20, keep_days: 30 })
+const guardandoGrab = ref(false)
+
+async function cargarGrabacion() {
+  try {
+    grabacion.value = await api.ajustesGrabacion()
+    formGrab.value = {
+      segment_min: grabacion.value.segment_min,
+      max_gb: grabacion.value.max_gb,
+      keep_days: grabacion.value.keep_days,
+    }
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  }
+}
+
+async function aplicarGrabacion(patch) {
+  guardandoGrab.value = true
+  try {
+    grabacion.value = await api.editarAjustesGrabacion(patch)
+    $q.notify({ type: 'positive', message: 'Ajustes de grabación guardados' })
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  } finally {
+    guardandoGrab.value = false
+  }
+}
+
+function alternarGrabacion(encender) {
+  // Apagar a mitad de emisión cierra el archivo en curso: se avisa. Encender no destruye
+  // nada.
+  if (!encender && panel.haySesion && panel.grabacion?.active) {
+    $q.dialog({
+      title: 'Parar la grabación',
+      message: 'Estás emitiendo. Se cerrará el segmento en curso y no se grabará el resto.',
+      cancel: { flat: true, noCaps: true, label: 'Cancelar' },
+      ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Parar' },
+      persistent: true,
+    }).onOk(() => aplicarGrabacion({ enabled: false }))
+    return
+  }
+  aplicarGrabacion({ enabled: encender })
+}
+
+function guardarGrabacion() {
+  aplicarGrabacion({
+    segment_min: Number(formGrab.value.segment_min),
+    max_gb: Number(formGrab.value.max_gb),
+    keep_days: Number(formGrab.value.keep_days),
+  })
+}
+
+const usoGrabacion = computed(() => {
+  const g = grabacion.value
+  if (!g) return ''
+  const tope = g.max_gb * 2 ** 30
+  return `${bytesLegibles(g.used_bytes)} de ${g.max_gb} GB · ${bytesLegibles(g.free_bytes)} libres en el disco`
+})
+
 // El error manda sobre el código. Un fallo de red no obtiene respuesta y se guarda con
 // last_status en null, así que mirar el null primero pintaba «sin enviar aún» un aviso que
 // llevaba días sin llegar a su destino.
@@ -120,6 +186,36 @@ const estadoEntrega = (w) => {
         </q-item>
       </q-list>
 
+      <div class="text-h6 q-mt-xl q-mb-sm">Grabación</div>
+      <q-card flat bordered>
+        <q-card-section v-if="grabacion" class="q-gutter-y-md">
+          <p class="text-body2 text-grey-5 q-mb-none">
+            Guarda una copia de cada emisión en el servidor, en FLV y por segmentos, sin
+            transcodificar. Si el disco no da abasto, se degrada la grabación, nunca el directo.
+          </p>
+          <q-toggle
+            :model-value="grabacion.enabled" label="Grabar las emisiones"
+            :disable="guardandoGrab" @update:model-value="alternarGrabacion"
+          />
+          <div class="row q-col-gutter-md">
+            <q-input v-model.number="formGrab.segment_min" type="number" min="0" max="240" outlined dense
+                     label="Minutos por segmento" hint="0 = un solo archivo" class="col-12 col-sm-4" />
+            <q-input v-model.number="formGrab.max_gb" type="number" min="0.1" step="0.5" outlined dense
+                     label="Tope en GB" hint="Al llegar, se borran las más antiguas" class="col-12 col-sm-4" />
+            <q-input v-model.number="formGrab.keep_days" type="number" min="0" outlined dense
+                     label="Días de retención" hint="0 = solo manda el tope en GB" class="col-12 col-sm-4" />
+          </div>
+          <div class="row items-center q-gutter-sm">
+            <q-btn unelevated no-caps color="primary" label="Guardar" :loading="guardandoGrab" @click="guardarGrabacion" />
+            <q-btn flat no-caps :icon="iGrabaciones" label="Ver grabaciones" :to="{ name: 'grabaciones' }" />
+          </div>
+          <div class="text-caption text-grey-5">
+            <q-icon :name="iDisco" size="14px" class="q-mr-xs" />{{ usoGrabacion }}
+            <br />Carpeta: <span class="mono">{{ grabacion.dir }}</span>
+          </div>
+        </q-card-section>
+      </q-card>
+
       <div class="text-h6 q-mt-xl q-mb-sm">Respaldo</div>
       <q-card flat bordered>
         <q-card-section>
@@ -142,4 +238,5 @@ const estadoEntrega = (w) => {
 
 <style scoped>
 .contenido { max-width: 760px; margin: 0 auto; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 </style>

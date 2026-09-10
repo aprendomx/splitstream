@@ -32,6 +32,7 @@ export const usePanel = defineStore('panel', {
       return ses?.width && ses?.height ? `${ses.width}×${ses.height}` : null
     },
     eventosRecientes: (s) => s.estado?.recent_events ?? [],
+    grabacion: (s) => s.estado?.recording ?? null,
   },
 
   actions: {
