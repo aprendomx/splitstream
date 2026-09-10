@@ -13,8 +13,10 @@ package sinks
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/probe"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/store"
@@ -115,4 +117,21 @@ func (f *Factory) BuildEnabled(ctx context.Context) ([]*relay.Sink, error) {
 	}
 	f.logger.Info("destinos de la sesión", "n", len(out))
 	return out, nil
+}
+
+// probeGrace es lo que se espera tras publish antes de dar la configuración por
+// plausible. Twitch corta una clave mala en menos de un segundo; tres da margen a
+// plataformas más lentas sin que el botón parezca colgado.
+const probeGrace = 3 * time.Second
+
+// Test sondea un destino sin emitir (spec v0.8 §3). Como Build, lee la clave con
+// DestinationKeyForRelay: no es una divulgación y no se audita como tal.
+func (f *Factory) Test(ctx context.Context, d store.Destination) (probe.Result, error) {
+	key, err := f.db.DestinationKeyForRelay(ctx, f.cipher, d.ID)
+	if err != nil {
+		return probe.Result{}, err
+	}
+	return rtmpio.Probe(ctx, rtmpio.PublisherConfig{
+		URL: d.RTMPURL, StreamKey: key, Logger: f.logger,
+	}, probeGrace), nil
 }
