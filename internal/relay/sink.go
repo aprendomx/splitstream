@@ -350,7 +350,7 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 		// que el intento que acaba de fallar es attempts()+1.
 		intentos := s.bo.attempts() + 1
 		if (!transmitted && intentos >= s.suspendAttempts) || flaps >= s.suspendFlaps {
-			s.suspend(ctx, intentos, flaps)
+			s.suspend(ctx, intentos, flaps, flaps >= s.suspendFlaps)
 			return
 		}
 
@@ -374,12 +374,22 @@ func (s *Sink) run(ctx context.Context, pre *Preamble) {
 // entregándole mensajes y la política de descarte de la cola —que se aplica en push— evita
 // que crezca. Se sale solo por Stop (que llegará con «Reintentar» o con el fin de sesión)
 // o por el contexto del proceso.
-func (s *Sink) suspend(ctx context.Context, intentos, flaps int) {
+// porAleteo distingue cuál de los dos umbrales saltó, porque lo que hay que revisar es
+// distinto: aletear es conectar y que te corten —emisión cerrada o cupo agotado—, mientras
+// que no llegar a transmitir nunca huele a URL o clave mal pegadas.
+func (s *Sink) suspend(ctx context.Context, intentos, flaps int, porAleteo bool) {
 	s.setState(StateSuspended)
-	s.emit("error", "destination_suspended", fmt.Sprintf(
-		"el destino queda suspendido en esta sesión tras %d intentos sin transmitir y %d cortes "+
-			"seguidos; revisa la URL y la clave y pulsa «Reintentar»", intentos, flaps))
-	s.log.Error("destino suspendido", "intentos", intentos, "cortes", flaps)
+	msg := fmt.Sprintf(
+		"el destino queda suspendido en esta sesión tras %d intentos sin transmitir; "+
+			"revisa la URL y la clave y pulsa «Reintentar»", intentos)
+	if porAleteo {
+		msg = fmt.Sprintf(
+			"el destino queda suspendido en esta sesión tras %d cortes seguidos: conecta, "+
+				"transmite poco y la plataforma corta; revisa si la emisión sigue abierta o si "+
+				"alcanzaste su límite y pulsa «Reintentar»", flaps)
+	}
+	s.emit("error", "destination_suspended", msg)
+	s.log.Error("destino suspendido", "intentos", intentos, "cortes", flaps, "por_aleteo", porAleteo)
 
 	select {
 	case <-s.quit:

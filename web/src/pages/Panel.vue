@@ -166,7 +166,6 @@ async function probar(d) {
       html: true,
       ok: { flat: true, noCaps: true, label: 'Cerrar' },
     })
-    panel.refrescarEventos()
   } catch (e) {
     aviso()
     $q.notify({ type: 'negative', message: e.message })
@@ -201,8 +200,6 @@ async function revelar(d) {
       html: true,
       ok: { flat: true, noCaps: true, label: 'Cerrar' },
     })
-    // El backend deja constancia de cada revelado; refrescamos para que se vea en el log.
-    panel.refrescarEventos()
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   }
@@ -282,7 +279,6 @@ async function rotarClave() {
   try {
     const { key } = await api.rotarClave(false)
     await panel.cargar()
-    panel.refrescarEventos()
 
     // La clave se enseña UNA sola vez: es la única ocasión de copiarla. Por eso el diálogo
     // no se puede cerrar por accidente pulsando fuera.

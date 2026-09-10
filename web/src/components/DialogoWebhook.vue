@@ -55,7 +55,8 @@ async function guardar() {
   try {
     const datos = { name: nombre.value, url: url.value, format: formato.value, min_level: nivel.value, enabled: habilitado.value }
     if (editando.value) {
-      // Secreto vacío al editar = "no lo toques". Quitarlo se hace desde el botón aparte.
+      // Secreto vacío al editar = "no lo toques". Quitar un secreto existente no tiene
+      // botón todavía: se hace con un PATCH con secret vacío.
       if (secreto.value) datos.secret = secreto.value
       await api.editarWebhook(props.webhook.id, datos)
     } else {

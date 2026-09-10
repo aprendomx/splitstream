@@ -14,7 +14,6 @@ export const usePanel = defineStore('panel', {
     esLocal: true,
     cargando: true,
     estado: null,      // statusDTO
-    eventos: [],
     errorConexion: null,
     ws: null,
     reintentoWs: 0,
@@ -59,7 +58,6 @@ export const usePanel = defineStore('panel', {
         this.marcarVistos(this.estado.recent_events ?? [])
         this.autenticado = true
         this.errorConexion = null
-        this.refrescarEventos()
         // Al recargar la página la cookie sigue siendo válida, así que se entra por aquí
         // y no por entrar(). Sin esto el panel se quedaba con la foto del GET inicial y
         // no volvía a actualizarse nunca.
@@ -94,10 +92,6 @@ export const usePanel = defineStore('panel', {
     async trasSetup() {
       this.necesitaSetup = false
       await this.cargar()
-    },
-
-    async refrescarEventos() {
-      try { this.eventos = await api.eventos(50) } catch { /* el log no es crítico */ }
     },
 
     /** El primer estado no avisa: son eventos de antes de abrir el panel. */

@@ -57,10 +57,15 @@ async function respaldar() {
   try {
     const { blob, nombre } = await api.descargarRespaldo()
     const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
+    const href = URL.createObjectURL(blob)
+    a.href = href
     a.download = nombre
+    // Firefox ignora el click de un enlace que no está en el documento, y revocar el blob
+    // en el acto le corta la descarga a Safari: se limpia un minuto después.
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(a.href)
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(href), 60_000)
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   } finally {
@@ -68,10 +73,14 @@ async function respaldar() {
   }
 }
 
+// El error manda sobre el código. Un fallo de red no obtiene respuesta y se guarda con
+// last_status en null, así que mirar el null primero pintaba «sin enviar aún» un aviso que
+// llevaba días sin llegar a su destino.
 const estadoEntrega = (w) => {
+  if (w.last_error) return { texto: `último envío falló (${w.last_status ?? 'sin respuesta'}): ${w.last_error}`, color: 'negative' }
   if (w.last_status === null) return { texto: 'sin enviar aún', color: 'grey-6' }
   if (w.last_status >= 200 && w.last_status < 300) return { texto: `último envío: ${w.last_status}`, color: 'positive' }
-  return { texto: `último envío falló (${w.last_status || 'sin respuesta'}): ${w.last_error}`, color: 'negative' }
+  return { texto: `último envío falló (${w.last_status})`, color: 'negative' }
 }
 </script>
 
@@ -117,6 +126,10 @@ const estadoEntrega = (w) => {
           <p class="text-body2 text-grey-5 q-mb-md">
             Descarga una copia de la base de datos: canales, claves cifradas y contraseña del
             panel. <b>Sin tu clave maestra el archivo no sirve</b>: guárdala aparte.
+          </p>
+          <p class="text-body2 text-grey-5 q-mb-md">
+            Con una emisión en curso no se puede: la copia retiene la base y frenaría a tus
+            canales. Descárgalo al terminar.
           </p>
           <q-btn unelevated no-caps color="primary" :icon="iDescargar" label="Descargar respaldo"
                  :loading="respaldando" @click="respaldar" />

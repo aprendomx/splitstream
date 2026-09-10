@@ -92,7 +92,6 @@ export const api = {
   logout: () => pedir('POST', '/api/auth/logout'),
 
   estado: () => pedir('GET', '/api/status'),
-  eventos: (limit = 50) => pedir('GET', `/api/events?limit=${limit}`),
 
   ingesta: () => pedir('GET', '/api/ingest'),
   rotarClave: (desconectarAhora) =>

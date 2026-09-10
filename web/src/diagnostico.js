@@ -100,7 +100,7 @@ export function diagnosticar(destino, haySesion) {
     return {
       tono: 'fallo',
       titulo: 'Suspendido',
-      detalle: `Tras ${m.reconnections} intentos sin conseguirlo, dejó de reintentar en esta emisión.`,
+      detalle: 'Dejó de reintentar en esta emisión.',
       consejo: 'Revisa la URL y la clave y pulsa «Reintentar». Si no haces nada, volverá a intentarlo en la próxima emisión.',
     }
   }
