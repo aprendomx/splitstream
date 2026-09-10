@@ -42,6 +42,35 @@ const (
 // timeout en vez de confiar en el ajeno.
 const connectTimeout = 15 * time.Second
 
+// stageError dice en qué paso falló Connect. Lo usa Probe para explicar al usuario si el
+// problema fue la red, el TLS o el handshake. El texto del error no cambia: Error()
+// delega en el error envuelto.
+type stageError struct {
+	stage string
+	err   error
+}
+
+func (e *stageError) Error() string { return e.err.Error() }
+func (e *stageError) Unwrap() error { return e.err }
+
+// dialStage clasifica un fallo del dial. Un certificado que no verifica es "tls", un
+// nombre que no resuelve es "dns", y lo demás —conexión rechazada, timeout— es "tcp".
+func dialStage(err error) string {
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return "tls"
+	}
+	var recErr tls.RecordHeaderError
+	if errors.As(err, &recErr) {
+		return "tls"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "dns"
+	}
+	return "tcp"
+}
+
 // target es una URL de destino ya descompuesta en lo que necesita go-rtmp.
 //
 // `app` y `logApp` son dos valores distintos a propósito, y no son intercambiables:
@@ -245,10 +274,10 @@ func (p *Publisher) Connect(ctx context.Context) error {
 				r.conn.Close()
 			}
 		}()
-		return fmt.Errorf("conectar a %s: %w", p.tgt.addr, ctx.Err())
+		return &stageError{stage: "tcp", err: fmt.Errorf("conectar a %s: %w", p.tgt.addr, ctx.Err())}
 	case r := <-results:
 		if r.err != nil {
-			return fmt.Errorf("conectar a %s: %w", p.tgt.addr, r.err)
+			return &stageError{stage: dialStage(r.err), err: fmt.Errorf("conectar a %s: %w", p.tgt.addr, r.err)}
 		}
 		conn = r.conn
 	}
@@ -266,12 +295,12 @@ func (p *Publisher) Connect(ctx context.Context) error {
 			TCURL:    tcURL,
 		},
 	}); err != nil {
-		return fmt.Errorf("handshake connect con %s: %w", p.tgt.addr, err)
+		return &stageError{stage: "connect", err: fmt.Errorf("handshake connect con %s: %w", p.tgt.addr, err)}
 	}
 
 	stream, err := conn.CreateStream(&message.NetConnectionCreateStream{}, p.chunkSize)
 	if err != nil {
-		return fmt.Errorf("createStream con %s: %w", p.tgt.addr, err)
+		return &stageError{stage: "createStream", err: fmt.Errorf("createStream con %s: %w", p.tgt.addr, err)}
 	}
 
 	// Algunas plataformas exigen releaseStream y FCPublish antes de publish. go-rtmp no
@@ -301,7 +330,7 @@ func (p *Publisher) Connect(ctx context.Context) error {
 		PublishingName: p.key.Reveal(),
 		PublishingType: "live",
 	}); err != nil {
-		return fmt.Errorf("publish en %s: %w", p.tgt.addr, err)
+		return &stageError{stage: "publish", err: fmt.Errorf("publish en %s: %w", p.tgt.addr, err)}
 	}
 
 	if err := stream.WriteSetChunkSize(p.chunkSize); err != nil {
@@ -379,6 +408,18 @@ func (p *Publisher) liveStream() (*rtmp.Stream, error) {
 		return nil, errors.New("el publisher no está conectado")
 	}
 	return p.stream, nil
+}
+
+// lastError devuelve el error con el que murió el bucle de lectura de go-rtmp, o nil si la
+// conexión sigue viva. Es la única señal de que el peer colgó: go-rtmp no avisa de otra
+// forma, y Publish no espera el onStatus.
+func (p *Publisher) lastError() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.conn == nil {
+		return errors.New("sin conexión")
+	}
+	return p.conn.LastError()
 }
 
 // Close cierra el stream y la conexión. Es idempotente y tolera que Connect nunca se
