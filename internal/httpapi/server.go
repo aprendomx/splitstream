@@ -196,6 +196,8 @@ func (s *Server) routes() {
 	protegida("DELETE /api/destinations/{id}/logo", s.handleDeleteDestinationLogo)
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
+	protegida("GET /api/sessions", s.handleSessions)
+	protegida("POST /api/backup", s.handleBackup)
 	protegida("GET /ws", s.handleWS)
 	protegida("GET /api/preview/ws", s.handlePreviewWS)
 

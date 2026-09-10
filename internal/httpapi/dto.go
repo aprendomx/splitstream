@@ -136,3 +136,31 @@ type statusDTO struct {
 	Session      sessionDTO       `json:"session"`
 	Destinations []destinationDTO `json:"destinations"`
 }
+
+// sessionSummaryDTO es una fila del historial: la sesión y cuántos eventos dejó por nivel.
+type sessionSummaryDTO struct {
+	ID         int64      `json:"id"`
+	StartedAt  time.Time  `json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at"`
+	Width      *int       `json:"width"`
+	Height     *int       `json:"height"`
+	BitrateBPS *int       `json:"bitrate_bps"`
+	Events     struct {
+		Info  int `json:"info"`
+		Warn  int `json:"warn"`
+		Error int `json:"error"`
+	} `json:"events"`
+}
+
+func newSessionSummaryDTO(s store.SessionSummary) sessionSummaryDTO {
+	dto := sessionSummaryDTO{
+		ID: s.ID, StartedAt: s.StartedAt.UTC(),
+		Width: s.Width, Height: s.Height, BitrateBPS: s.BitrateBPS,
+	}
+	if s.EndedAt != nil {
+		e := s.EndedAt.UTC()
+		dto.EndedAt = &e
+	}
+	dto.Events.Info, dto.Events.Warn, dto.Events.Error = s.Info, s.Warn, s.Error
+	return dto
+}
