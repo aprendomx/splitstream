@@ -7,6 +7,14 @@ SUMAS=$2
 DEST=$3
 DIR=$(dirname "$0")
 
+# La etiqueta entra en las URLs de descarga y en el nombre de los archivos: si llega
+# vacía o con cualquier otra cosa, el render saldría con URLs inventadas y nadie lo
+# notaría hasta que alguien intentara instalar. Se exige la forma vX.Y.Z.
+case "$TAG" in
+  v[0-9]*) ;;
+  *) echo "render.sh: etiqueta inválida $TAG" >&2; exit 1 ;;
+esac
+
 SUMA=$(awk -v f="splitstream-$TAG-windows-x86_64.zip" '$2 == f { print $1 }' "$SUMAS")
 [ -n "$SUMA" ] || { echo "render.sh: falta windows-x86_64.zip en $SUMAS" >&2; exit 1; }
 

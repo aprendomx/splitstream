@@ -6,6 +6,14 @@ TAG=$1
 SUMAS=$2
 DIR=$(dirname "$0")
 
+# La etiqueta entra en las URLs de descarga y en el nombre de los archivos: si llega
+# vacía o con cualquier otra cosa, el render saldría con URLs inventadas y nadie lo
+# notaría hasta que alguien intentara instalar. Se exige la forma vX.Y.Z.
+case "$TAG" in
+  v[0-9]*) ;;
+  *) echo "render.sh: etiqueta inválida $TAG" >&2; exit 1 ;;
+esac
+
 suma() { awk -v f="splitstream-$TAG-$1.tar.gz" '$2 == f { print $1 }' "$SUMAS"; }
 
 EXPR="s/{{VERSION_SIN_V}}/${TAG#v}/g; s/{{VERSION}}/$TAG/g"

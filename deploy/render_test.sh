@@ -27,4 +27,12 @@ grep -rq '{{' "$T/winget" && exit 1
 # Sin el checksum de una plataforma, se niega.
 head -n 2 "$T/SHA256SUMS.txt" > "$T/parcial.txt"
 deploy/homebrew/render.sh "$TAG" "$T/parcial.txt" > /dev/null 2>&1 && exit 1
+
+# Una etiqueta que no es una versión se niega antes de tocar nada: iría a parar a las
+# URLs de descarga de la fórmula y de los manifiestos.
+for malo in "" "main" "1.2.3" "../../etc"; do
+  deploy/homebrew/render.sh "$malo" "$T/SHA256SUMS.txt" > /dev/null 2>&1 && exit 1
+  deploy/winget/render.sh "$malo" "$T/SHA256SUMS.txt" "$T/malo" > /dev/null 2>&1 && exit 1
+done
+
 echo "render_test: ok"

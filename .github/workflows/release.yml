@@ -5,8 +5,10 @@ on:
   push:
     tags: ['v*']
 
+# Mínimo en el workflow; cada job pide lo suyo. Sin esto, un paso comprometido de
+# cualquier job podría empujar al repo con el token del runner.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   binarios:
@@ -94,6 +96,9 @@ jobs:
     name: publicar la release
     needs: binarios
     runs-on: ubuntu-latest
+    # Crea la release y sube los artefactos.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -122,6 +127,12 @@ jobs:
   # paralelo con los binarios: construye desde el Dockerfile, no desde los artefactos.
   ghcr:
     name: imagen en GHCR
+    # needs: :latest no se puede deshacer. Que no se publique la imagen de una release
+    # cuyos binarios ni siquiera compilaron.
+    needs: binarios
+    # Una pre-release (vX.Y.Z-rc1) no debe quedarse con :latest. El `!` del principio
+    # obliga a la forma ${{ }}: sin ella, YAML no acepta que el escalar empiece por `!`.
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -151,7 +162,12 @@ jobs:
   tap:
     name: fórmula de Homebrew
     needs: publicar
+    # Una pre-release no va al tap: brew install splitstream daría un candidato.
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: macos-latest
+    # Adjunta la fórmula a la release.
+    permissions:
+      contents: write
     env:
       TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
     steps:
@@ -189,7 +205,12 @@ jobs:
   winget:
     name: manifiestos de winget
     needs: publicar
+    # Una pre-release no se envía a winget-pkgs: la revisa una persona y no se retira.
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: windows-latest
+    # Adjunta los manifiestos a la release.
+    permissions:
+      contents: write
     env:
       WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
     steps:
