@@ -67,8 +67,22 @@ func TestMetricsRequiresSessionOrToken(t *testing.T) {
 func TestMetricsWithoutATokenOnlyAcceptsTheCookie(t *testing.T) {
 	srv, _, _, _, _ := newDestServer(t)
 	srv.metricsToken = ""
-	if rec := getMetrics(t, srv, nil, ""); rec.Code != http.StatusUnauthorized {
+
+	// getMetrics(..., "") no manda cabecera Authorization en absoluto: para probar de
+	// verdad un Bearer vacío hay que construir la petición a mano y fijar la cabecera con
+	// el espacio final, que es lo que hace que `strings.HasPrefix(auth, "Bearer ")` case y
+	// el token quede en cadena vacía.
+	r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	r.Header.Set("Authorization", "Bearer ")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, r)
+	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("Bearer vacío sin token configurado: %d, quería 401", rec.Code)
+	}
+
+	// Y tampoco vale un Bearer con contenido: sin token configurado, NINGÚN Bearer pasa.
+	if rec := getMetrics(t, srv, nil, "cualquiera"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("Bearer con contenido sin token configurado: %d, quería 401", rec.Code)
 	}
 }
 
