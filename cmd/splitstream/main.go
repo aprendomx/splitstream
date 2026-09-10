@@ -25,6 +25,7 @@ import (
 
 	"github.com/aprendomx/splitstream/internal/config"
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/events"
 	"github.com/aprendomx/splitstream/internal/httpapi"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
@@ -210,6 +211,13 @@ func run(ctx context.Context, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+
+	// El bus de eventos: todo lo que se persiste en `events` sale también por aquí, para
+	// las alertas del panel y los webhooks. Se cablea antes que el motor y la API para que
+	// ningún evento del arranque se quede sin anunciar.
+	bus := events.NewBus()
+	db.SetEventHook(bus.Publish)
+	_ = bus // se consume en las tareas siguientes
 
 	// Los sinks NO heredan el contexto de señales: si lo hicieran, un SIGTERM los mataría
 	// antes de que el cierre ordenado del spec §6.5 pudiera mandar su FCUnpublish. Este
