@@ -46,8 +46,8 @@ jobs:
       # Es una propiedad de la arquitectura, y sin esto se rompe sin que nadie se entere.
       - name: internal/relay sigue aislado
         run: |
-          if go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql'; then
-            echo "::error::internal/relay importa go-rtmp o database/sql"
+          if go list -deps ./internal/relay | grep -E 'go-rtmp|database/sql|internal/store|internal/events'; then
+            echo "::error::internal/relay importa go-rtmp, database/sql, store o events"
             exit 1
           fi
 
@@ -55,8 +55,8 @@ jobs:
       # a través de interfaces estrechas, no del tipo concreto.
       - name: internal/httpapi no conoce go-rtmp
         run: |
-          if go list -deps ./internal/httpapi | grep go-rtmp; then
-            echo "::error::internal/httpapi importa go-rtmp"
+          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio'; then
+            echo "::error::internal/httpapi importa go-rtmp o internal/rtmpio"
             exit 1
           fi
 

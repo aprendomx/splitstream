@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/probe"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/store"
 )
@@ -26,6 +27,13 @@ type Disconnecter interface {
 // *sinks.Factory (Task 8).
 type SinkBuilder interface {
 	Build(ctx context.Context, d store.Destination) (*relay.Sink, error)
+}
+
+// DestinationTester sondea un destino sin emitir. Lo cumple *sinks.Factory. Devuelve
+// probe.Result y no un tipo de rtmpio para que este paquete no importe go-rtmp ni de
+// forma transitiva.
+type DestinationTester interface {
+	Test(ctx context.Context, d store.Destination) (probe.Result, error)
 }
 
 // EngineView es lo que la API necesita saber del motor: si hay sesión y cómo va cada
@@ -64,6 +72,7 @@ type Config struct {
 	Engine EngineView
 	Ingest Disconnecter
 	Sinks  SinkBuilder
+	Tester DestinationTester
 	// MasterKey solo se usa para derivar la clave de firma de la cookie; no se guarda.
 	MasterKey [32]byte
 	Logger    *slog.Logger
@@ -93,6 +102,7 @@ type Server struct {
 	engine    EngineView
 	ingest    Disconnecter
 	sinks     SinkBuilder
+	tester    DestinationTester
 	signer    *sessionSigner
 	limiter   *loginLimiter
 	logger    *slog.Logger
@@ -122,7 +132,7 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
-		ingest: cfg.Ingest, sinks: cfg.Sinks,
+		ingest: cfg.Ingest, sinks: cfg.Sinks, tester: cfg.Tester,
 		signer: signer, limiter: newLoginLimiter(), logger: logger,
 		setupCode: cfg.SetupCode, version: cfg.Version, spa: cfg.SPA,
 		secure: cfg.SecureCookies, mux: http.NewServeMux(),
@@ -169,6 +179,7 @@ func (s *Server) routes() {
 	protegida("POST /api/destinations/toggle-all", s.handleToggleAllDestinations)
 	protegida("GET /api/destinations/{id}/key", s.handleRevealDestinationKey)
 	protegida("POST /api/destinations/{id}/retry", s.handleRetryDestination)
+	protegida("POST /api/destinations/{id}/test", s.handleTestDestination)
 	protegida("PUT /api/destinations/{id}/logo", s.handlePutDestinationLogo)
 	protegida("GET /api/destinations/{id}/logo", s.handleGetDestinationLogo)
 	protegida("DELETE /api/destinations/{id}/logo", s.handleDeleteDestinationLogo)

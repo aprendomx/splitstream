@@ -296,6 +296,7 @@ func run(ctx context.Context, out io.Writer) error {
 		Engine:        engine,
 		Ingest:        ingest,
 		Sinks:         factory,
+		Tester:        factory,
 		MasterKey:     cfg.MasterKey,
 		RTMPAddr:      cfg.RTMPAddr,
 		Version:       version,
