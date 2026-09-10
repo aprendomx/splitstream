@@ -502,6 +502,30 @@ func run(ctx context.Context, out io.Writer) error {
 		}
 	}
 
+	// El listener se abre AQUÍ y no dentro de la goroutine: si el bind falla, tiene que
+	// morir el proceso. Con TLS integrado los puertos por defecto son :443 y :80, y el
+	// fallo típico es "permission denied" por no tener CAP_NET_BIND_SERVICE; dentro de la
+	// goroutine solo salía una línea de log y el proceso seguía vivo sin panel, así que
+	// systemd lo veía sano y nadie lo reiniciaba.
+	ln, err := net.Listen("tcp", cfg.HTTPAddr)
+	if err != nil {
+		return fmt.Errorf("escuchar el panel en %s: %w", cfg.HTTPAddr, err)
+	}
+	// Serve cierra el listener al terminar; este Close de más devuelve un error que no
+	// importa. Está para los caminos de error de más abajo, antes de arrancar el servidor.
+	defer ln.Close()
+
+	// Lo mismo con el de redirección: si alguien pide el :80 y no puede tenerlo, mejor
+	// enterarse ahora. Quien no lo quiera, lo desactiva con `none`.
+	var lnRedir net.Listener
+	if redirSrv != nil {
+		lnRedir, err = net.Listen("tcp", cfg.TLSRedirectAddr)
+		if err != nil {
+			return fmt.Errorf("escuchar la redirección a HTTPS en %s: %w", cfg.TLSRedirectAddr, err)
+		}
+		defer lnRedir.Close()
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -510,9 +534,9 @@ func run(ctx context.Context, out io.Writer) error {
 		if tlsSetup != nil {
 			// Con TLSConfig puesto, los archivos vacíos son correctos: el certificado
 			// sale de GetCertificate (autocert) o de Certificates (propio).
-			err = httpSrv.ListenAndServeTLS("", "")
+			err = httpSrv.ServeTLS(ln, "", "")
 		} else {
-			err = httpSrv.ListenAndServe()
+			err = httpSrv.Serve(ln)
 		}
 		// ErrServerClosed es lo que devuelve SIEMPRE tras un Shutdown: no es un fallo.
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -523,7 +547,7 @@ func run(ctx context.Context, out io.Writer) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := redirSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := redirSrv.Serve(lnRedir); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("el listener de redirección a HTTPS dejó de atender", "err", err)
 			}
 		}()

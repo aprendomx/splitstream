@@ -440,6 +440,44 @@ func arrancaRun(t *testing.T, out io.Writer) (string, context.CancelFunc, <-chan
 	return addr, cancel, hecho
 }
 
+// Un bind que falla tiene que matar el proceso, no dejarlo vivo sin panel: con TLS
+// integrado los puertos por defecto son :443 y :80, y el "permission denied" de no tener
+// CAP_NET_BIND_SERVICE solo dejaba una línea en el log mientras systemd veía el servicio
+// sano. Aquí se ocupa el puerto a mano para provocar el "address already in use".
+func TestRunFailsWhenThePanelPortIsTaken(t *testing.T) {
+	ocupado, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ocupado.Close()
+
+	master, err := generateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SPLITSTREAM_MASTER_KEY", master)
+	t.Setenv("SPLITSTREAM_DB_PATH", filepath.Join(t.TempDir(), "run.db"))
+	t.Setenv("SPLITSTREAM_RTMP_ADDR", "127.0.0.1:0")
+	t.Setenv("SPLITSTREAM_HTTP_ADDR", ocupado.Addr().String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hecho := make(chan error, 1)
+	go func() { hecho <- run(ctx, io.Discard) }()
+
+	select {
+	case err := <-hecho:
+		if err == nil {
+			t.Fatal("run() con el puerto del panel ocupado = nil, quería error")
+		}
+		if !strings.Contains(err.Error(), "escuchar el panel") {
+			t.Errorf("run() = %v, el error debería decir que no pudo escuchar el panel", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run() no volvió: se quedó vivo sin panel")
+	}
+}
+
 // TestRunServesTheAPI: el binario levanta la API donde dice la configuración.
 //
 // Se comprueba contra /api/auth/login porque es el único endpoint público: un 409 —no hay
