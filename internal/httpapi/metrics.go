@@ -12,8 +12,10 @@ import (
 	"github.com/aprendomx/splitstream/internal/relay"
 )
 
-// Metric es una muestra en el formato de exposición de Prometheus. Se escribe a mano: son
-// ochenta líneas, y el spec base §5 no quiere una dependencia para esto.
+// Metric es una muestra en el formato de exposición de Prometheus. La exposición se escribe
+// a mano —nombre, HELP, TYPE y valor, que es todo lo que el formato pide— porque el spec
+// base §5 acota las dependencias y el cliente oficial de Prometheus arrastra bastante más
+// de lo que este puñado de contadores necesita.
 type Metric struct {
 	Name   string
 	Help   string

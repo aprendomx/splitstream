@@ -843,6 +843,25 @@ func TestRetryRefusesADestinationThatIsNotSuspended(t *testing.T) {
 	}
 }
 
+// Un destino apagado no tiene sink, así que no sale en Snapshot(): sin comprobarlo antes,
+// el usuario recibía «el destino no está suspendido», que no le dice qué hacer.
+func TestRetryRefusesADisabledDestination(t *testing.T) {
+	srv, db, eng, _, cookies := newDestServer(t)
+	d := crearDest(t, db, srv, "yt", "k1", false)
+	eng.setLive(7)
+
+	rec := do(t, srv, cookies, http.MethodPost, destPath(d.ID)+"/retry", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("código = %d, quería 409: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "apagado") {
+		t.Errorf("el mensaje no menciona que está apagado: %s", rec.Body.String())
+	}
+	if added, _ := eng.snapshotSinks(); len(added) != 0 {
+		t.Errorf("se reconstruyó un destino apagado: %v", added)
+	}
+}
+
 func TestRetryWithoutASessionIsAConflict(t *testing.T) {
 	srv, db, _, _, cookies := newDestServer(t)
 	d := crearDest(t, db, srv, "yt", "k1", true)

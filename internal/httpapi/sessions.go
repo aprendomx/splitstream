@@ -39,5 +39,11 @@ func queryInt(w http.ResponseWriter, r *http.Request, name string) (int, bool) {
 		writeError(w, http.StatusBadRequest, codeInvalidInput, name+" debe ser un número")
 		return 0, false
 	}
+	// Un negativo no es "sin valor": `before=-1` pediría una página que no existe y el
+	// store lo interpretaría como un id. Se rechaza aquí, que es donde se lee.
+	if n < 0 {
+		writeError(w, http.StatusBadRequest, codeInvalidInput, name+" debe ser un número mayor o igual que 0")
+		return 0, false
+	}
 	return n, true
 }

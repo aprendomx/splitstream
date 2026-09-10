@@ -102,7 +102,9 @@ func (s *Server) handleTestDestination(w http.ResponseWriter, r *http.Request) {
 	if res.Outcome == probe.Plausible {
 		level = store.LevelInfo
 	}
-	if _, err := s.db.LogEvent(r.Context(), store.Event{
+	// context.Background() y no el de la petición: la sonda dura hasta 30 s y quien la
+	// lanzó puede haberse ido; la constancia de que se probó un destino no se pierde por eso.
+	if _, err := s.db.LogEvent(context.Background(), store.Event{
 		DestinationID: &id, Level: level, Kind: "destination_tested",
 		Message: "se probó el destino: " + dto.Message,
 	}); err != nil {

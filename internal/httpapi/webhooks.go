@@ -133,7 +133,7 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := s.webhooks.Send(r.Context(), *hook, ev); err != nil {
-		writeError(w, http.StatusBadGateway, codeConflict, "no se pudo entregar: "+err.Error())
+		writeError(w, http.StatusBadGateway, codeInternal, "no se pudo entregar: "+err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

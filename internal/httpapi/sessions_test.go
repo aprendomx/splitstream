@@ -42,7 +42,14 @@ func TestSessionsListNewestFirst(t *testing.T) {
 
 func TestSessionsRejectsNonNumericParams(t *testing.T) {
 	srv, _, _, _, cookies := newDestServer(t)
-	if rec := do(t, srv, cookies, http.MethodGet, "/api/sessions?before=ayer", ""); rec.Code != http.StatusBadRequest {
-		t.Errorf("código = %d, quería 400", rec.Code)
+	for _, q := range []string{"before=ayer", "before=-1", "limit=-3"} {
+		rec := do(t, srv, cookies, http.MethodGet, "/api/sessions?"+q, "")
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: código = %d, quería 400", q, rec.Code)
+			continue
+		}
+		if got := errorCodeDe(t, rec); got != codeInvalidInput {
+			t.Errorf("%s: code = %q, quería %q", q, got, codeInvalidInput)
+		}
 	}
 }

@@ -103,4 +103,9 @@ func TestWebhookTestReportsAFailedDelivery(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("código = %d, quería 502: %s", rec.Code, rec.Body.String())
 	}
+	// No es un conflicto de estado: el webhook está bien configurado y quien falló fue el
+	// otro extremo.
+	if got := errorCodeDe(t, rec); got != codeInternal {
+		t.Errorf("code = %q, quería %q", got, codeInternal)
+	}
 }

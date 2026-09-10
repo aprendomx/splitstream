@@ -14,6 +14,16 @@ import (
 // Es POST y no GET a propósito: produce un archivo con todas las claves —cifradas, pero
 // todas— y deja un evento. Un GET lo prefetchearía cualquier extensión del navegador.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	// Con sesión viva, no. VACUUM INTO corre sobre la única conexión de la base y la
+	// retiene mientras copia; los sinks que van a escribir su evento se quedan detrás.
+	// Es la misma razón por la que el mantenimiento espera a que no haya emisión.
+	if s.liveSession() {
+		writeError(w, http.StatusConflict, codeConflict,
+			"hay una emisión en curso: el respaldo retiene la base y frenaría a los destinos; "+
+				"espera a terminar")
+		return
+	}
+
 	dir, err := os.MkdirTemp("", "splitstream-backup-")
 	if err != nil {
 		s.logger.Error("no se pudo crear el temporal del respaldo", "err", err)

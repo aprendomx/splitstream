@@ -312,12 +312,14 @@ func (s *Server) handleRetryDestination(w http.ResponseWriter, r *http.Request) 
 		s.writeStoreError(w, err)
 		return
 	}
-	if m, ok := s.engine.Snapshot()[id]; !ok || m.State != relay.StateSuspended.String() {
-		writeError(w, http.StatusConflict, codeConflict, "el destino no está suspendido")
-		return
-	}
+	// Apagado primero: un destino apagado no tiene sink, así que no aparece en Snapshot()
+	// y la comprobación de «suspendido» se lo comía con un mensaje que no ayuda a nadie.
 	if !d.Enabled {
 		writeError(w, http.StatusConflict, codeConflict, "el destino está apagado: enciéndelo")
+		return
+	}
+	if m, ok := s.engine.Snapshot()[id]; !ok || m.State != relay.StateSuspended.String() {
+		writeError(w, http.StatusConflict, codeConflict, "el destino no está suspendido")
 		return
 	}
 
