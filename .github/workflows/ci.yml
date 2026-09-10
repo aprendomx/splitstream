@@ -166,7 +166,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: shellcheck
-        run: shellcheck deploy/*.sh
+        run: shellcheck deploy/*.sh deploy/homebrew/*.sh deploy/winget/*.sh
+      - name: render.sh de Homebrew y winget
+        run: sh deploy/render_test.sh
       - name: install.sh en ubuntu y alpine contra una release local
         run: sh deploy/install_test.sh
 

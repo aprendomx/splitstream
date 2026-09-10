@@ -6,6 +6,8 @@
 #   3. docker compose -f deploy/docker-compose.yml up -d
 #   4. docker compose -f deploy/docker-compose.yml logs | grep -A2 "te pedirá este código"
 #
+# `docker compose pull` trae la última imagen publicada antes de recrear el contenedor.
+#
 # El paso 4 hace falta porque desde Docker el panel se ve como si viniera de otra máquina
 # —la petición llega por la red puente, no por loopback— así que el asistente pide el
 # código del primer arranque. Es lo conservador: no hay forma de distinguir Docker en tu
@@ -13,10 +15,12 @@
 
 services:
   splitstream:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    image: splitstream:latest
+    # La imagen publicada; no hace falta clonar el repo. Para construirla tú, comenta
+    # `image` y descomenta `build`.
+    image: ghcr.io/aprendomx/splitstream:latest
+    #build:
+    #  context: ..
+    #  dockerfile: deploy/Dockerfile
     container_name: splitstream
     restart: unless-stopped
 

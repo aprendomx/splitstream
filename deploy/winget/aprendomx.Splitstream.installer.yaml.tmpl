@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: aprendomx.Splitstream
+PackageVersion: {{VERSION_SIN_V}}
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: splitstream-{{VERSION}}-windows-x86_64\splitstream.exe
+    PortableCommandAlias: splitstream
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/aprendomx/splitstream/releases/download/{{VERSION}}/splitstream-{{VERSION}}-windows-x86_64.zip
+    InstallerSha256: {{SHA256_windows}}
+ManifestType: installer
+ManifestVersion: 1.6.0

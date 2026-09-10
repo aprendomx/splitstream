@@ -17,7 +17,10 @@ COPY web/ ./
 RUN npm run build
 
 # ── 2. El binario ─────────────────────────────────────────────────────────────
-FROM golang:1.25-alpine AS binario
+# --platform=$BUILDPLATFORM: la etapa corre en la arquitectura del runner y Go cruza a la
+# de destino. Sin esto, buildx emularía arm64 con QEMU y el build tardaría diez veces más.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS binario
+ARG TARGETOS TARGETARCH
 WORKDIR /src
 
 # tzdata: la imagen de alpine no trae /usr/share/zoneinfo, y la final lo necesita para que
@@ -32,7 +35,7 @@ COPY . .
 COPY --from=panel /web/dist/spa ./web/dist/spa
 
 ARG VERSION=docker
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION}" \
       -o /splitstream ./cmd/splitstream
 
