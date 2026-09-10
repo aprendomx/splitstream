@@ -60,7 +60,7 @@ programa sea correcto. Tienes dos formas de desbloquearlo:
 
 ```bash
 # Quita la marca que el navegador puso al descargar
-xattr -dr com.apple.quarantine splitstream-v0.5.0-macos-apple-silicon
+xattr -dr com.apple.quarantine splitstream-v0.8.0-macos-apple-silicon
 ```
 
 O sin terminal: **Ajustes del Sistema → Privacidad y seguridad**, baja hasta el aviso

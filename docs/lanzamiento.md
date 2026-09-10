@@ -1,8 +1,7 @@
 # Entrada de lanzamiento
 
 Borrador listo para publicar y el trabajo de posicionamiento que lo acompaña.
-Escrito para la v0.6.0. Si cambian las plataformas soportadas o lo que la
-herramienta no hace, hay que revisarlo: son las dos cosas que el texto promete.
+Escrito para la v0.8.0, la primera con `/metrics`, avisos y «probar destino»; si cambian las plataformas soportadas o lo que la herramienta no hace, hay que revisarlo. Son las dos cosas que el texto promete.
 
 ---
 

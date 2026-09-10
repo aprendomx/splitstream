@@ -230,6 +230,11 @@ nocturna) · congelar el contrato de API y la política de migraciones.
 Facebook (verificación de negocio) · X y TikTok (sin vía) · escritura en chat ·
 subida en vivo al almacenamiento · multi-tenant.
 
+> **Renumeración (2026-09-09):** `v0.6.0` y `v0.7.0` ya existían como etiquetas cuando se
+> escribió este roadmap. Las entregas se ejecutan como v0.8 (Confianza), v0.9 (Grabación),
+> v0.10 (Instalación), v0.11 (Twitch), v0.12 (YouTube y Kick), v0.13 (Internacional) y
+> v1.0. Ver `docs/superpowers/plans/2026-09-09-roadmap-ejecucion.md` §0.
+
 ---
 
 ## 8. Dos cosas para decidir antes de escribir código
