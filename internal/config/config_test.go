@@ -404,3 +404,30 @@ func TestKeyPathSitsNextToTheDatabase(t *testing.T) {
 		}
 	}
 }
+
+func TestRetentionDefaultsAndOverrides(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RetentionDays != 90 || cfg.RetentionMaxEvents != 50000 {
+		t.Errorf("defaults = %d días, %d eventos", cfg.RetentionDays, cfg.RetentionMaxEvents)
+	}
+
+	cfg, err = config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_RETENTION_DAYS": "0",
+		"SPLITSTREAM_RETENTION_MAX_EVENTS": "1000",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RetentionDays != 0 || cfg.RetentionMaxEvents != 1000 {
+		t.Errorf("override = %d días, %d eventos", cfg.RetentionDays, cfg.RetentionMaxEvents)
+	}
+
+	if _, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_RETENTION_DAYS": "muchos",
+	})); err == nil {
+		t.Error("un valor no numérico debería ser error")
+	}
+}

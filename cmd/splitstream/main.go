@@ -28,6 +28,7 @@ import (
 	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/events"
 	"github.com/aprendomx/splitstream/internal/httpapi"
+	"github.com/aprendomx/splitstream/internal/maintenance"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
@@ -272,6 +273,41 @@ func run(ctx context.Context, out io.Writer) error {
 	engine.SetSinkProvider(func() ([]*relay.Sink, error) {
 		return factory.BuildEnabled(ctx)
 	})
+
+	// Mantenimiento diario: poda de eventos y sesiones. Nunca con sesión viva.
+	mant := &maintenance.Scheduler{
+		Logger: logger,
+		Busy:   func() bool { return engine.SessionID() != 0 },
+		Jobs: []maintenance.Job{
+			{Name: "eventos", Run: func(ctx context.Context) (string, error) {
+				var corte time.Time
+				if cfg.RetentionDays > 0 {
+					corte = time.Now().Add(-time.Duration(cfg.RetentionDays) * 24 * time.Hour)
+				}
+				n, err := db.PruneEvents(ctx, corte, cfg.RetentionMaxEvents)
+				return fmt.Sprintf("eventos: %d borrados", n), err
+			}},
+			{Name: "sesiones", Run: func(ctx context.Context) (string, error) {
+				if cfg.RetentionDays == 0 {
+					return "sesiones: retención desactivada", nil
+				}
+				n, err := db.PruneSessions(ctx, time.Now().Add(-time.Duration(cfg.RetentionDays)*24*time.Hour))
+				return fmt.Sprintf("sesiones: %d borradas", n), err
+			}},
+		},
+		OnDone: func(resumen string, err error) {
+			level := store.LevelInfo
+			if err != nil {
+				level = store.LevelWarn
+			}
+			if _, e := db.LogEvent(context.Background(), store.Event{
+				Level: level, Kind: "maintenance_ran", Message: "mantenimiento: " + resumen,
+			}); e != nil {
+				logger.Error("no se pudo registrar el mantenimiento", "err", e)
+			}
+		},
+	}
+	go mant.Run(sinkCtx)
 
 	ingest := rtmpio.NewIngest(rtmpio.IngestConfig{
 		Addr:    cfg.RTMPAddr,

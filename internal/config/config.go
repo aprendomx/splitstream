@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 )
 
 // MasterKeyLen es el tamaño exacto, en bytes, de la master key de AES-256.
@@ -42,6 +43,12 @@ type Config struct {
 	// MetricsToken autoriza GET /metrics con `Authorization: Bearer`. Vacío: solo cookie
 	// de sesión. Se omite en LogValue y MarshalJSON como la master key.
 	MetricsToken string
+	// RetentionDays es cuántos días se conservan eventos y sesiones cerradas. 0 desactiva
+	// la poda por edad (pero no la poda por cantidad de RetentionMaxEvents).
+	RetentionDays int
+	// RetentionMaxEvents es el tope de filas en la tabla events, sin importar su edad: lo
+	// que protege el disco de un destino que aletea toda la noche.
+	RetentionMaxEvents int
 }
 
 // LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente. Receptor por
@@ -54,6 +61,8 @@ func (c Config) LogValue() slog.Value {
 		slog.Bool("secure_cookies", c.SecureCookies),
 		slog.String("db_path", c.DBPath),
 		slog.String("log_level", c.LogLevel.String()),
+		slog.Int("retention_days", c.RetentionDays),
+		slog.Int("retention_max_events", c.RetentionMaxEvents),
 	)
 }
 
@@ -160,6 +169,13 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	}
 	cfg.LogLevel = level
 
+	if cfg.RetentionDays, err = parseNonNegative(get("SPLITSTREAM_RETENTION_DAYS", "90"), "SPLITSTREAM_RETENTION_DAYS"); err != nil {
+		return nil, err
+	}
+	if cfg.RetentionMaxEvents, err = parseNonNegative(get("SPLITSTREAM_RETENTION_MAX_EVENTS", "50000"), "SPLITSTREAM_RETENTION_MAX_EVENTS"); err != nil {
+		return nil, err
+	}
+
 	raw, ok := lookup("SPLITSTREAM_MASTER_KEY")
 	if !ok || raw == "" {
 		// Sin variable de entorno: se busca el archivo de clave junto a la base, y si no
@@ -199,4 +215,13 @@ func parseLevel(s string) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("SPLITSTREAM_LOG_LEVEL inválido %q: usa debug, info, warn o error", s)
 	}
+}
+
+// parseNonNegative interpreta s como un entero >= 0, para las variables de retención.
+func parseNonNegative(s, name string) (int, error) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s inválido %q: usa un entero mayor o igual que 0", name, s)
+	}
+	return n, nil
 }
