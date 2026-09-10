@@ -5,7 +5,10 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -335,4 +338,163 @@ func TestTestMissingDestination(t *testing.T) {
 	if _, err := f.Test(context.Background(), store.Destination{ID: 9999}); err == nil {
 		t.Error("quería error para un destino que no existe")
 	}
+}
+
+// encenderGrabacion activa la grabación con un tope en GB dado y devuelve el directorio.
+func encenderGrabacion(t *testing.T, db *store.DB, f *sinks.Factory, maxGB float64) string {
+	t.Helper()
+	dir := t.TempDir()
+	f.SetRecordingsDir(dir)
+	on := true
+	if _, err := db.UpdateRecordingSettings(context.Background(), store.RecordingSettingsPatch{Enabled: &on, MaxGB: &maxGB}); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestBuildRecorderIsNilWhenRecordingIsOff(t *testing.T) {
+	_, _, f := setup(t)
+	f.SetRecordingsDir(t.TempDir())
+	s, err := f.BuildRecorder(context.Background(), 1)
+	if err != nil || s != nil {
+		t.Errorf("con la grabación apagada: sink=%v err=%v, quería nil, nil", s, err)
+	}
+}
+
+// El sink de grabación es un sink normal con el id reservado. Arrancado contra un hub,
+// conecta (abre el archivo), y sus eventos van SIN destination_id con kind recording_*.
+func TestBuildRecorderProducesAWorkingSinkWithRecordingEvents(t *testing.T) {
+	db, _, f := setup(t)
+	ctx := context.Background()
+	dir := encenderGrabacion(t, db, f, 1)
+	sesion, _ := db.StartSession(ctx)
+
+	s, err := f.BuildRecorder(ctx, sesion)
+	if err != nil || s == nil {
+		t.Fatalf("BuildRecorder: sink=%v err=%v", s, err)
+	}
+	if s.ID() != relay.RecorderSinkID {
+		t.Errorf("id = %d, quería %d", s.ID(), relay.RecorderSinkID)
+	}
+
+	hub := relay.NewHub(nil)
+	s.Start(ctx, hub.Preamble())
+	esperar(t, 5*time.Second, func() bool { return s.State() == relay.StateLive }, "el recorder conectó")
+	s.Stop()
+
+	entradas, err := os.ReadDir(filepath.Join(dir, "sesion-"+strconv.FormatInt(sesion, 10)))
+	if err != nil || len(entradas) != 1 {
+		t.Fatalf("archivos de la sesión = %v, %v; quería 1", entradas, err)
+	}
+	grabaciones, _ := db.ListRecordings(ctx, sesion, 10, 0)
+	if len(grabaciones) != 1 || grabaciones[0].EndedAt == nil || filepath.IsAbs(grabaciones[0].Path) {
+		t.Errorf("fila de la grabación = %+v; quería cerrada y con path relativo", grabaciones)
+	}
+
+	eventos, _ := db.RecentEvents(ctx, 20)
+	var visto bool
+	for _, e := range eventos {
+		if e.Kind == "recording_started" {
+			visto = true
+			if e.DestinationID != nil {
+				t.Errorf("recording_started lleva destination_id=%d", *e.DestinationID)
+			}
+		}
+		if strings.HasPrefix(e.Kind, "destination_") {
+			t.Errorf("un evento del recorder salió como %s", e.Kind)
+		}
+	}
+	if !visto {
+		t.Errorf("no hubo recording_started; eventos: %+v", eventos)
+	}
+}
+
+// Sin sitio, la grabación no arranca y lo dice; la sesión ni se entera.
+func TestBuildRecorderSkipsWhenTheQuotaIsExhausted(t *testing.T) {
+	db, _, f := setup(t)
+	ctx := context.Background()
+	encenderGrabacion(t, db, f, 0.000001) // ~1 KB
+	// Un segmento EN CURSO ocupa más que la cuota: la poda no lo puede tocar.
+	if _, err := db.OpenRecording(ctx, 0, "otra/abierta.flv", 1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `UPDATE recordings SET bytes = 100000`); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := f.BuildRecorder(ctx, 7)
+	if err != nil || s != nil {
+		t.Fatalf("sink=%v err=%v, quería nil, nil", s, err)
+	}
+	eventos, _ := db.RecentEvents(ctx, 5)
+	if len(eventos) == 0 || eventos[0].Kind != "recording_skipped_quota" || eventos[0].Level != store.LevelWarn {
+		t.Errorf("evento = %+v, quería recording_skipped_quota warn", eventos)
+	}
+}
+
+// Con la cuota superada por grabaciones VIEJAS, primero se poda y luego se arranca.
+func TestBuildRecorderPrunesBeforeGivingUp(t *testing.T) {
+	db, _, f := setup(t)
+	ctx := context.Background()
+	dir := encenderGrabacion(t, db, f, 0.000001)
+	if err := os.WriteFile(filepath.Join(dir, "vieja.flv"), make([]byte, 100000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.OpenRecording(ctx, 0, "vieja.flv", 1, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishRecording(ctx, "vieja.flv", time.Now().Add(-time.Hour), 100000, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := f.BuildRecorder(ctx, 8)
+	if err != nil || s == nil {
+		t.Fatalf("sink=%v err=%v, quería un sink tras podar", s, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vieja.flv")); !os.IsNotExist(err) {
+		t.Error("la grabación vieja sigue en disco")
+	}
+}
+
+func TestPruneRecordingsRemovesFilesAndRows(t *testing.T) {
+	db, _, f := setup(t)
+	ctx := context.Background()
+	dir := encenderGrabacion(t, db, f, 20)
+	ruta := filepath.Join(dir, "s", "a.flv")
+	if err := os.MkdirAll(filepath.Dir(ruta), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ruta, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vieja := time.Now().Add(-100 * 24 * time.Hour)
+	if _, err := db.OpenRecording(ctx, 0, "s/a.flv", 1, vieja); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishRecording(ctx, "s/a.flv", vieja, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	n, _, err := f.PruneRecordings(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("PruneRecordings: n=%d err=%v", n, err)
+	}
+	if _, err := os.Stat(ruta); !os.IsNotExist(err) {
+		t.Error("el archivo sigue")
+	}
+	if restantes, _ := db.ListRecordings(ctx, 0, 10, 0); len(restantes) != 0 {
+		t.Error("la fila sigue")
+	}
+}
+
+func esperar(t *testing.T, plazo time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	fin := time.Now().Add(plazo)
+	for time.Now().Before(fin) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("tiempo agotado: %s", msg)
 }

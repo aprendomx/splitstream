@@ -431,3 +431,24 @@ func TestRetentionDefaultsAndOverrides(t *testing.T) {
 		t.Error("un valor no numérico debería ser error")
 	}
 }
+
+func TestRecordingsDirDefaultsNextToTheDatabase(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_DB_PATH": "/var/lib/splitstream/splitstream.db",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RecordingsDir != "/var/lib/splitstream/recordings" {
+		t.Errorf("RecordingsDir = %q", cfg.RecordingsDir)
+	}
+	cfg, err = config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_RECORDINGS_DIR": "/mnt/grabaciones",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RecordingsDir != "/mnt/grabaciones" {
+		t.Errorf("override = %q", cfg.RecordingsDir)
+	}
+}

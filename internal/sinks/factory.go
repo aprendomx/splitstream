@@ -12,21 +12,28 @@ package sinks
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/probe"
+	"github.com/aprendomx/splitstream/internal/record"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/store"
 )
 
-// Factory construye sinks. Es seguro compartirlo: no guarda estado propio.
+// Factory construye sinks. Es seguro compartirlo: no guarda estado propio, salvo el
+// directorio de grabaciones, que se fija una sola vez al arrancar.
 type Factory struct {
 	db     *store.DB
 	cipher *crypto.Cipher
 	logger *slog.Logger
+	recDir string
 }
 
 func NewFactory(db *store.DB, c *crypto.Cipher, logger *slog.Logger) *Factory {
@@ -134,4 +141,153 @@ func (f *Factory) Test(ctx context.Context, d store.Destination) (probe.Result, 
 	return rtmpio.Probe(ctx, rtmpio.PublisherConfig{
 		URL: d.RTMPURL, StreamKey: key, Logger: f.logger,
 	}, probeGrace), nil
+}
+
+// SetRecordingsDir fija el directorio raíz de las grabaciones. Sin él, BuildRecorder no
+// construye nada: grabar sin saber dónde no es una opción.
+func (f *Factory) SetRecordingsDir(dir string) { f.recDir = dir }
+
+// logEvent deja un evento del sistema (sin sesión ni destino) con context.Background():
+// son escrituras cortas que interesa que lleguen aunque quien llamó ya se haya ido.
+func (f *Factory) logEvent(level store.Level, kind, msg string) {
+	if _, err := f.db.LogEvent(context.Background(), store.Event{Level: level, Kind: kind, Message: msg}); err != nil {
+		f.logger.Error("no se pudo registrar el evento de grabación", "kind", kind, "err", err)
+	}
+}
+
+// recordingQuota compone la cuota con lo que ya ocupan las grabaciones.
+func (f *Factory) recordingQuota(ctx context.Context, st *store.RecordingSettings) (record.Quota, error) {
+	used, err := f.db.RecordingsTotalBytes(ctx)
+	if err != nil {
+		return record.Quota{}, err
+	}
+	return record.Quota{MaxBytes: int64(st.MaxGB * float64(1<<30)), UsedBytes: used}, nil
+}
+
+// relPath vuelve un path absoluto de una grabación relativo al directorio raíz, que es
+// como se guarda: mover la carpeta entera no rompe el listado.
+func (f *Factory) relPath(abs string) string {
+	rel, err := filepath.Rel(f.recDir, abs)
+	if err != nil {
+		return abs
+	}
+	return filepath.ToSlash(rel)
+}
+
+// PruneRecordings aplica la retención de grabaciones: por días y por gigas, la de gigas
+// manda. Lo usa el job diario y BuildRecorder cuando no hay sitio.
+func (f *Factory) PruneRecordings(ctx context.Context) (deleted int, freed int64, err error) {
+	st, err := f.db.RecordingSettings(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	var corte time.Time
+	if st.KeepDays > 0 {
+		corte = time.Now().Add(-time.Duration(st.KeepDays) * 24 * time.Hour)
+	}
+	remove := func(rel string) error {
+		return os.Remove(filepath.Join(f.recDir, filepath.FromSlash(rel)))
+	}
+	return f.db.PruneRecordings(ctx, corte, int64(st.MaxGB*float64(1<<30)), remove)
+}
+
+// BuildRecorder construye el sink de grabación de una sesión (spec v0.9 §6): nil, nil si
+// la grabación está apagada o no hay sitio. Sin sitio se intenta podar antes de rendirse,
+// porque el planificador puede no haber corrido todavía hoy.
+func (f *Factory) BuildRecorder(ctx context.Context, sessionID int64) (*relay.Sink, error) {
+	if f.recDir == "" {
+		return nil, nil
+	}
+	st, err := f.db.RecordingSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Enabled {
+		return nil, nil
+	}
+	if err := os.MkdirAll(f.recDir, 0o700); err != nil {
+		return nil, fmt.Errorf("crear el directorio de grabaciones: %w", err)
+	}
+
+	q, err := f.recordingQuota(ctx, st)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := q.Check(f.recDir, 0); err != nil {
+		if _, _, perr := f.PruneRecordings(ctx); perr != nil {
+			f.logger.Warn("no se pudo podar antes de grabar", "err", perr)
+		}
+		if q, err = f.recordingQuota(ctx, st); err != nil {
+			return nil, err
+		}
+		if _, err = q.Check(f.recDir, 0); err != nil {
+			kind := "recording_skipped_disk"
+			if q.MaxBytes > 0 && q.UsedBytes >= q.MaxBytes {
+				kind = "recording_skipped_quota"
+			}
+			f.logEvent(store.LevelWarn, kind, "grabación: no arranca, "+err.Error())
+			return nil, nil
+		}
+	}
+
+	dir := filepath.Join(f.recDir, fmt.Sprintf("sesion-%d", sessionID))
+	bg := context.Background()
+	// Una vez por sesión: el sink reintenta con backoff y cada intento volvería a decirlo.
+	var discoLlenoAvisado bool
+
+	newPub := func() (relay.Publisher, error) {
+		q, err := f.recordingQuota(bg, st)
+		if err != nil {
+			return nil, err
+		}
+		return record.NewFLVWriter(record.Options{
+			Dir: dir, SessionID: sessionID, SegmentMinutes: st.SegmentMin, Quota: q, Logger: f.logger,
+			OnOpen: func(path string, index int, startedAt time.Time) {
+				if _, err := f.db.OpenRecording(bg, sessionID, f.relPath(path), index, startedAt); err != nil {
+					f.logger.Error("no se pudo registrar el segmento", "err", err)
+				}
+			},
+			OnSegment: func(s record.Segment) {
+				if err := f.db.FinishRecording(bg, f.relPath(s.Path), s.EndedAt, s.Bytes, int(s.DurationMS)); err != nil {
+					f.logger.Error("no se pudo cerrar el segmento", "err", err)
+				}
+				f.logEvent(store.LevelInfo, "recording_segment", fmt.Sprintf(
+					"grabación: segmento %d cerrado, %.1f MB y %s", s.Index,
+					float64(s.Bytes)/(1<<20), (time.Duration(s.DurationMS) * time.Millisecond).Round(time.Second)))
+			},
+			OnDiskWarning: func(used, max int64) {
+				f.logEvent(store.LevelWarn, "recording_disk_warning", fmt.Sprintf(
+					"grabación: las grabaciones ocupan el %d %% del tope; se borrarán las más antiguas al llegar", used*100/max))
+			},
+		}), nil
+	}
+
+	return relay.NewSink(relay.SinkConfig{
+		ID: relay.RecorderSinkID, Name: "grabación", NewPub: newPub, Logger: f.logger,
+		// Los eventos del sink se traducen: sin destination_id (-1 violaría la clave
+		// ajena) y con kind recording_*. Los de sospecha y aleteo no se pasan: para un
+		// archivo no significan nada y solo harían ruido.
+		OnEvent: func(ev relay.EngineEvent) {
+			level := store.Level(ev.Level)
+			var kind string
+			switch ev.Kind {
+			case "destination_connected":
+				kind, ev.Message = "recording_started", "empezó a escribir"
+			case "destination_disconnected":
+				kind = "recording_stopped"
+				if strings.Contains(ev.Message, record.ErrDiskFull.Error()) {
+					if discoLlenoAvisado {
+						return
+					}
+					discoLlenoAvisado = true
+					kind, level = "recording_stopped_disk_full", store.LevelError
+				}
+			case "destination_suspended":
+				kind = "recording_suspended"
+			default:
+				return
+			}
+			f.logEvent(level, kind, "grabación: "+ev.Message)
+		},
+	}), nil
 }
