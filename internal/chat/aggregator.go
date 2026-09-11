@@ -120,6 +120,9 @@ func (a *Aggregator) arrancar(ctx context.Context, sessionID int64) {
 			continue
 		}
 		acct := c
+		// El evento de conexión se registra ANTES de lanzar el lector: si ReadChat falla al
+		// instante (token revocado), su chat_disconnected no puede adelantarse a este.
+		a.registrar(sctx, sessionID, store.LevelInfo, "chat_connected", "leyendo el chat de "+acct.DisplayName)
 		a.lectores.Add(1)
 		go func() {
 			defer a.lectores.Done()
@@ -134,7 +137,6 @@ func (a *Aggregator) arrancar(ctx context.Context, sessionID int64) {
 				a.registrar(sctx, sessionID, store.LevelWarn, "chat_disconnected", msg)
 			}
 		}()
-		a.registrar(sctx, sessionID, store.LevelInfo, "chat_connected", "leyendo el chat de "+acct.DisplayName)
 	}
 }
 
@@ -196,28 +198,40 @@ func (a *Aggregator) escribir(ctx context.Context, sessionID int64, in <-chan pl
 		lote = lote[:0]
 	}
 	defer vaciar()
+	acumular := func(m platforms.ChatMessage) {
+		// Guard: una plataforma que el registro no conoce (proveedor mal configurado,
+		// o test con un doble) no debe hacer que esto entre en pánico por indexar un
+		// mapa que no la tiene.
+		if c := a.mensajes[m.Platform]; c != nil {
+			c.Add(1)
+		}
+		a.cfg.Chat.Publish(Message{SessionID: sessionID, ChatMessage: m})
+		acct := m.AccountID
+		lote = append(lote, store.NewChatMessage{
+			SessionID: sessionID, AccountID: &acct, Platform: string(m.Platform), AuthorID: m.AuthorID,
+			Author: m.Author, Text: m.Text, Color: m.Color, Badges: m.Badges, MessageID: m.MessageID, At: m.At,
+		})
+		if len(lote) >= a.cfg.BatchSize {
+			vaciar()
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			// Lo que quedó en el canal al terminar la sesión se guarda también: si el
+			// select eligió ctx.Done con mensajes ya en cola, no se pierden en silencio.
+			for {
+				select {
+				case m := <-in:
+					acumular(m)
+				default:
+					return
+				}
+			}
 		case <-t.C:
 			vaciar()
 		case m := <-in:
-			// Guard: una plataforma que el registro no conoce (proveedor mal configurado,
-			// o test con un doble) no debe hacer que esto entre en pánico por indexar un
-			// mapa que no la tiene.
-			if c := a.mensajes[m.Platform]; c != nil {
-				c.Add(1)
-			}
-			a.cfg.Chat.Publish(Message{SessionID: sessionID, ChatMessage: m})
-			acct := m.AccountID
-			lote = append(lote, store.NewChatMessage{
-				SessionID: sessionID, AccountID: &acct, Platform: string(m.Platform), AuthorID: m.AuthorID,
-				Author: m.Author, Text: m.Text, Color: m.Color, Badges: m.Badges, MessageID: m.MessageID, At: m.At,
-			})
-			if len(lote) >= a.cfg.BatchSize {
-				vaciar()
-			}
+			acumular(m)
 		}
 	}
 }
