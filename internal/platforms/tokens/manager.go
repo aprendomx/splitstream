@@ -101,7 +101,19 @@ func (m *Manager) refresh(ctx context.Context, acct store.Account, t store.Token
 	return l.tok, l.err
 }
 
+// refreshTimeout acota la rotación desligada del contexto de quien llama: sin plazo
+// propio, un proveedor colgado dejaría el single-flight ocupado para siempre.
+const refreshTimeout = 30 * time.Second
+
 func (m *Manager) doRefresh(ctx context.Context, acct store.Account, t store.Tokens) (crypto.Secret, error) {
+	// La rotación no se aborta a medias: quien llama puede rendirse (el `select` de
+	// refresh devuelve ctx.Err() en cuanto su contexto muere), pero si Twitch ya rotó el
+	// refresh token y cancelásemos antes del SaveTokens, el par de la base quedaría
+	// inservible y la cuenta muerta. Por eso se sigue con un contexto desligado y con
+	// plazo propio, para que la petición y el guardado terminen pase lo que pase.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
+	defer cancel()
+
 	p, ok := m.providers(platforms.ID(acct.Platform))
 	if !ok {
 		return "", errors.New("plataforma sin proveedor: " + string(acct.Platform))

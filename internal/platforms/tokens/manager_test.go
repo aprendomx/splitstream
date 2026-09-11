@@ -174,3 +174,53 @@ func TestRunValidatesHourlyAndRefreshesOn401(t *testing.T) {
 		t.Errorf("status = %s", got.Status)
 	}
 }
+
+// Si quien pide el token se rinde a mitad del refresco, la rotación NO se pierde: Twitch
+// ya invalidó el refresh token viejo, así que el par nuevo tiene que acabar en la base
+// aunque el contexto del llamante muera. Si no, la cuenta quedaría muerta.
+func TestRefreshCompletesEvenIfCallerContextIsCanceled(t *testing.T) {
+	db, c, a, p, m := montar(t, time.Minute)
+	p.lento = 100 * time.Millisecond
+	// El proveedor rota: al entregar el par nuevo, el refresh token usado deja de valer.
+	invalidados := map[string]bool{}
+	p.refreshFn = func(r string) (store.Tokens, error) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if invalidados[r] {
+			return store.Tokens{}, platforms.ErrUnauthorized
+		}
+		invalidados[r] = true
+		return store.Tokens{Access: crypto.Secret("nuevo-" + r), Refresh: crypto.Secret("r-" + r),
+			ExpiresAt: time.Now().Add(4 * time.Hour)}, nil
+	}
+	var reauth atomic.Int32
+	m.OnReauth = func(store.Account) { reauth.Add(1) }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	// Da igual si devuelve el token o ctx.Err(): lo que importa es lo que queda guardado.
+	m.Token(ctx, a.ID)
+
+	time.Sleep(300 * time.Millisecond)
+	guardado, err := db.AccountTokens(context.Background(), c, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guardado.Access.Reveal() != "nuevo-r1" || guardado.Refresh.Reveal() != "r-r1" {
+		t.Fatalf("la rotación se perdió al cancelar: %+v", guardado)
+	}
+	// Con el par nuevo en la base y vigente, nadie vuelve a refrescar ni marca reauth.
+	tok, err := m.Token(context.Background(), a.ID)
+	if err != nil || tok.Reveal() != "nuevo-r1" {
+		t.Fatalf("Token = %q, %v", tok.Reveal(), err)
+	}
+	if p.refreshes.Load() != 1 {
+		t.Errorf("refrescos = %d, quería 1", p.refreshes.Load())
+	}
+	if got, _ := db.AccountByID(context.Background(), a.ID); got.Status != store.AccountStatusOK {
+		t.Errorf("status = %s", got.Status)
+	}
+	if reauth.Load() != 0 {
+		t.Errorf("avisos de reauth = %d", reauth.Load())
+	}
+}
