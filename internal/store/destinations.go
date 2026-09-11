@@ -111,6 +111,10 @@ type Destination struct {
 	// AccountID es el id de la cuenta vinculada, nil sin cuenta; sale del JOIN con
 	// destination_accounts para que el DTO no haga una consulta más.
 	AccountID *int64
+	// KeyFromAPI es true cuando la emisión vinculada trajo la clave desde la API de la
+	// plataforma (YouTube): «probar destino» se salta, porque no hay clave inválida que
+	// probar. Sale del JOIN con destination_broadcasts.
+	KeyFromAPI bool
 }
 
 // NewDestination son los datos para crear un destino.
@@ -134,8 +138,9 @@ type DestinationPatch struct {
 // ListDestinations devuelve todos los destinos ordenados por sort_order.
 func (d *DB) ListDestinations(ctx context.Context) ([]Destination, error) {
 	rows, err := d.ex.QueryContext(ctx,
-		`SELECT d.id, d.name, d.platform, d.rtmp_url, d.stream_key_last4, d.enabled, d.sort_order, d.created_at, d.updated_at, da.account_id
+		`SELECT d.id, d.name, d.platform, d.rtmp_url, d.stream_key_last4, d.enabled, d.sort_order, d.created_at, d.updated_at, da.account_id, COALESCE(br.key_from_api, 0)
 		 FROM destinations d LEFT JOIN destination_accounts da ON da.destination_id = d.id
+		   LEFT JOIN destination_broadcasts br ON br.destination_id = d.id
 		 ORDER BY d.sort_order, d.id`)
 	if err != nil {
 		return nil, fmt.Errorf("listar destinos: %w", err)
@@ -424,8 +429,9 @@ func (d *DB) DestinationByID(ctx context.Context, id int64) (*Destination, error
 
 func (d *DB) destination(ctx context.Context, id int64) (*Destination, error) {
 	row := d.ex.QueryRowContext(ctx,
-		`SELECT d.id, d.name, d.platform, d.rtmp_url, d.stream_key_last4, d.enabled, d.sort_order, d.created_at, d.updated_at, da.account_id
+		`SELECT d.id, d.name, d.platform, d.rtmp_url, d.stream_key_last4, d.enabled, d.sort_order, d.created_at, d.updated_at, da.account_id, COALESCE(br.key_from_api, 0)
 		 FROM destinations d LEFT JOIN destination_accounts da ON da.destination_id = d.id
+		   LEFT JOIN destination_broadcasts br ON br.destination_id = d.id
 		 WHERE d.id = ?`, id)
 	dest, err := scanDestination(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -439,16 +445,17 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanDestination(s scanner) (*Destination, error) {
 	var (
-		dest      Destination
-		platform  string
-		last4     string
-		enabled   int
-		createdAt string
-		updatedAt string
-		acct      sql.NullInt64
+		dest       Destination
+		platform   string
+		last4      string
+		enabled    int
+		createdAt  string
+		updatedAt  string
+		acct       sql.NullInt64
+		keyFromAPI int
 	)
 	if err := s.Scan(&dest.ID, &dest.Name, &platform, &dest.RTMPURL, &last4,
-		&enabled, &dest.SortOrder, &createdAt, &updatedAt, &acct); err != nil {
+		&enabled, &dest.SortOrder, &createdAt, &updatedAt, &acct, &keyFromAPI); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -458,6 +465,7 @@ func scanDestination(s scanner) (*Destination, error) {
 	dest.Platform = Platform(platform)
 	dest.KeyMask = crypto.Secret(last4).Mask()
 	dest.Enabled = enabled == 1
+	dest.KeyFromAPI = keyFromAPI == 1
 	if acct.Valid {
 		v := acct.Int64
 		dest.AccountID = &v

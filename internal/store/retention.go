@@ -53,6 +53,16 @@ func (d *DB) PruneSessions(ctx context.Context, olderThan time.Time) (int64, err
 	return n, nil
 }
 
+// PruneQuota borra los días anteriores a olderThanDay (YYYY-MM-DD, exclusivo).
+func (d *DB) PruneQuota(ctx context.Context, olderThanDay string) (int64, error) {
+	res, err := d.ex.ExecContext(ctx, `DELETE FROM quota_usage WHERE day < ?`, olderThanDay)
+	if err != nil {
+		return 0, fmt.Errorf("podar la cuota: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // PruneChat deja como mucho keepAtMost mensajes de chat, los más recientes. Las filas de
 // sesiones borradas ya cayeron por la clave ajena; esto acota el resto.
 func (d *DB) PruneChat(ctx context.Context, keepAtMost int) (int64, error) {
