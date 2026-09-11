@@ -16,12 +16,15 @@ import (
 	"github.com/aprendomx/splitstream/internal/store"
 )
 
-// errRevocado: Twitch revocó la suscripción (la persona quitó el permiso). No se reintenta.
-var errRevocado = errors.New("twitch revocó la suscripción al chat")
-
 // keepalivePorDefecto es lo que promete EventSub si no se pide otra cosa; el welcome trae
 // el valor de verdad y lo sustituye.
 const keepalivePorDefecto = 10 * time.Second
+
+// plazoSuscripcion: Twitch cierra con 4003 si no hay suscripción 10 s después del welcome,
+// y el cliente HTTP de producción espera hasta 15 s. Sin este plazo, un Helix lento dejaría
+// el socket sin leer y, si la petición llegara tarde, una suscripción huérfana de una sesión
+// ya cerrada. Se corta antes de los 10 s para que dé tiempo a reconectar.
+const plazoSuscripcion = 8 * time.Second
 
 // sobre es el envoltorio de todo mensaje de EventSub por WebSocket.
 type sobre struct {
@@ -64,6 +67,9 @@ type conexionChat struct {
 	conn      *websocket.Conn
 	keepalive time.Duration
 	suscribir bool
+	// establecida: llegó el welcome y la suscripción está hecha (o heredada de la sesión
+	// anterior). Es lo que distingue «esto funcionaba» de «no logro ni empezar».
+	establecida bool
 }
 
 // ReadChat lee el chat del canal de la cuenta hasta que ctx termine. Reconecta por su
@@ -99,7 +105,7 @@ func (p *Provider) ReadChat(ctx context.Context, acct store.Account, token platf
 			}
 			c = nueva
 		}
-		siguiente, err := p.sesionChat(ctx, acct, token, out, c)
+		siguiente, establecida, err := p.sesionChat(ctx, acct, token, out, c)
 		c = nil
 		if ctx.Err() != nil {
 			if siguiente != nil {
@@ -107,13 +113,21 @@ func (p *Provider) ReadChat(ctx context.Context, acct store.Account, token platf
 			}
 			return nil
 		}
-		if errors.Is(err, errRevocado) {
+		if errors.Is(err, platforms.ErrChatRevoked) {
 			return err
+		}
+		if establecida {
+			// La sesión llegó a funcionar (welcome + suscripción), así que este corte es uno
+			// nuevo y no la continuación del anterior: el backoff vuelve a empezar. Se
+			// reinicia aquí y no al conectar a secas para que un bucle de 4003 —conecta, no
+			// consigue suscribirse, cierra— siga espaciándose en vez de reintentar cada
+			// segundo hasta el final de la emisión.
+			espera = inicial
 		}
 		if siguiente != nil {
 			// session_reconnect: la conexión nueva ya está abierta y saludada, y la vieja
 			// cerrada. Se sigue con ella sin volver a suscribirse ni esperar backoff.
-			c, espera = siguiente, inicial
+			c = siguiente
 			continue
 		}
 		p.logger.Warn("el chat de twitch se cortó; reconectando", "cuenta", acct.DisplayName, "err", err, "en", espera)
@@ -153,9 +167,10 @@ func (p *Provider) abrirChat(ctx context.Context, url string) (*conexionChat, er
 
 // sesionChat mantiene UNA conexión hasta que se corta. Devuelve la conexión siguiente si
 // Twitch pidió reconectar (ya abierta y con su welcome leído cuando esto vuelve), o nil y
-// el error. La conexión que recibe queda cerrada al volver, pase lo que pase.
+// el error; el booleano dice si la sesión llegó a establecerse, que es lo que decide si el
+// backoff se reinicia. La conexión que recibe queda cerrada al volver, pase lo que pase.
 func (p *Provider) sesionChat(ctx context.Context, acct store.Account, token platforms.TokenSource,
-	out chan<- platforms.ChatMessage, c *conexionChat) (*conexionChat, error) {
+	out chan<- platforms.ChatMessage, c *conexionChat) (*conexionChat, bool, error) {
 	defer c.conn.CloseNow()
 
 	for {
@@ -165,16 +180,16 @@ func (p *Provider) sesionChat(ctx context.Context, acct store.Account, token pla
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, nil
+				return nil, c.establecida, nil
 			}
 			var ce websocket.CloseError
 			if errors.As(err, &ce) {
-				return nil, fmt.Errorf("twitch cerró el socket: %d %s (%s)", ce.Code, ce.Reason, motivoCierre(ce.Code))
+				return nil, c.establecida, fmt.Errorf("twitch cerró el socket: %d %s (%s)", ce.Code, ce.Reason, motivoCierre(ce.Code))
 			}
 			if leerCtx.Err() != nil {
-				return nil, fmt.Errorf("eventsub calló más de %s", c.keepalive+p.keepaliveGrace)
+				return nil, c.establecida, fmt.Errorf("eventsub calló más de %s", c.keepalive+p.keepaliveGrace)
 			}
-			return nil, fmt.Errorf("leer de eventsub: %w", err)
+			return nil, c.establecida, fmt.Errorf("leer de eventsub: %w", err)
 		}
 		var s sobre
 		if err := json.Unmarshal(data, &s); err != nil {
@@ -185,7 +200,7 @@ func (p *Provider) sesionChat(ctx context.Context, acct store.Account, token pla
 		case "session_welcome":
 			var sp sesionPayload
 			if err := json.Unmarshal(s.Payload, &sp); err != nil || sp.Session.ID == "" {
-				return nil, errors.New("welcome ilegible")
+				return nil, c.establecida, errors.New("welcome ilegible")
 			}
 			if sp.Session.KeepaliveTimeoutSeconds > 0 {
 				c.keepalive = time.Duration(sp.Session.KeepaliveTimeoutSeconds) * time.Second
@@ -193,28 +208,29 @@ func (p *Provider) sesionChat(ctx context.Context, acct store.Account, token pla
 			if c.suscribir {
 				// Hay 10 s para suscribirse o Twitch cierra con 4003.
 				if err := p.suscribirChat(ctx, acct, token, sp.Session.ID); err != nil {
-					return nil, err
+					return nil, c.establecida, err
 				}
 				c.suscribir = false
 			}
+			c.establecida = true
 			p.logger.Info("chat de twitch conectado", "cuenta", acct.DisplayName)
 		case "session_keepalive":
 			// Nada: leer con plazo ya reinició el temporizador.
 		case "session_reconnect":
 			var sp sesionPayload
 			if err := json.Unmarshal(s.Payload, &sp); err != nil || sp.Session.ReconnectURL == "" {
-				return nil, errors.New("reconnect sin URL")
+				return nil, c.establecida, errors.New("reconnect sin URL")
 			}
 			// Twitch da 30 s de gracia y sigue mandando por la vieja: se abre la nueva y se
 			// espera SU welcome antes de soltar esta, que el defer cierra al volver. Las
 			// suscripciones viajan con la sesión, así que la nueva no se vuelve a suscribir.
 			nueva, err := p.seguirReconexion(ctx, sp.Session.ReconnectURL)
 			if err != nil {
-				return nil, fmt.Errorf("reconexión de eventsub: %w", err)
+				return nil, c.establecida, fmt.Errorf("reconexión de eventsub: %w", err)
 			}
-			return nueva, nil
+			return nueva, c.establecida, nil
 		case "revocation":
-			return nil, errRevocado
+			return nil, c.establecida, fmt.Errorf("%w: twitch ya no deja leer el chat de %s", platforms.ErrChatRevoked, acct.DisplayName)
 		case "notification":
 			if s.Metadata.SubscriptionType != "channel.chat.message" {
 				continue
@@ -233,8 +249,6 @@ func (p *Provider) sesionChat(ctx context.Context, acct store.Account, token pla
 			}
 			select {
 			case out <- m:
-			case <-ctx.Done():
-				return nil, nil
 			default:
 				// El agregador no lee: descartar antes que bloquear el socket (y que
 				// Twitch lo cierre por no leer).
@@ -277,7 +291,8 @@ func (p *Provider) seguirReconexion(ctx context.Context, url string) (*conexionC
 		if sp.Session.KeepaliveTimeoutSeconds > 0 {
 			nueva.keepalive = time.Duration(sp.Session.KeepaliveTimeoutSeconds) * time.Second
 		}
-		nueva.suscribir = false
+		// La sesión nueva hereda las suscripciones de la vieja: nace establecida.
+		nueva.suscribir, nueva.establecida = false, true
 		return nueva, nil
 	}
 }
@@ -289,6 +304,10 @@ func (p *Provider) suscribirChat(ctx context.Context, acct store.Account, token 
 	if err != nil {
 		return err
 	}
+	// Mientras se suscribe nadie lee del socket: un Helix lento no puede comerse los 10 s
+	// que da Twitch antes del 4003.
+	ctx, cancel := context.WithTimeout(ctx, plazoSuscripcion)
+	defer cancel()
 	body, _ := json.Marshal(map[string]any{
 		"type": "channel.chat.message", "version": "1",
 		"condition": map[string]string{"broadcaster_user_id": acct.ExternalID, "user_id": acct.ExternalID},

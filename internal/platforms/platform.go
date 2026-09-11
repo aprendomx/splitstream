@@ -47,6 +47,9 @@ var (
 	ErrUnauthorized = errors.New("la plataforma rechazó el token")
 	// ErrRateLimited: 429; el mensaje dice cuándo reintentar.
 	ErrRateLimited = errors.New("la plataforma pide esperar")
+	// ErrChatRevoked: la persona quitó el permiso de leer el chat. No se reintenta: el
+	// agregador para esa cuenta y avisa, en vez de reconectar para que se la rechacen otra vez.
+	ErrChatRevoked = errors.New("la plataforma revocó la suscripción al chat")
 )
 
 // AuthPrompt es lo que la interfaz enseña durante el flujo de dispositivo.
