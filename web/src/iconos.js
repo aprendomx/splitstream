@@ -42,4 +42,8 @@ export {
   mdiRecordRec as iGrabar,
   mdiFolderPlay as iGrabaciones,
   mdiHarddisk as iDisco,
+  mdiMessageText as iChat,
+  mdiAccountCircle as iCuenta,
+  mdiLinkVariant as iVincular,
+  mdiFormatTitle as iTitulo,
 } from '@quasar/extras/mdi-v7'

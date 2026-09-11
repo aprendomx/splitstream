@@ -14,6 +14,7 @@ export const usePanel = defineStore('panel', {
     esLocal: true,
     cargando: true,
     estado: null,      // statusDTO
+    plataformas: [],   // platformDTO[]: capacidades y si hay client_id configurado
     errorConexion: null,
     ws: null,
     reintentoWs: 0,
@@ -60,6 +61,7 @@ export const usePanel = defineStore('panel', {
         this.marcarVistos(this.estado.recent_events ?? [])
         this.autenticado = true
         this.errorConexion = null
+        await this.cargarPlataformas()
         // Al recargar la página la cookie sigue siendo válida, así que se entra por aquí
         // y no por entrar(). Sin esto el panel se quedaba con la foto del GET inicial y
         // no volvía a actualizarse nunca.
@@ -76,6 +78,11 @@ export const usePanel = defineStore('panel', {
       } finally {
         this.cargando = false
       }
+    },
+
+    /** Catálogo de plataformas con proveedor: capacidades y si hay client_id configurado. */
+    async cargarPlataformas() {
+      try { this.plataformas = await api.plataformas() } catch { this.plataformas = [] }
     },
 
     async comprobarSetup() {

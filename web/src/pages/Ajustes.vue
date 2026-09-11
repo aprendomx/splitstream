@@ -1,10 +1,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
-import { iMas, iEditar, iBorrar, iWebhook, iDescargar, iProbar, iGrabaciones, iDisco } from '@/iconos'
+import { iMas, iEditar, iBorrar, iWebhook, iDescargar, iProbar, iGrabaciones, iDisco, iCuenta } from '@/iconos'
 import { api } from '@/api'
 import { bytesLegibles } from '@/diagnostico'
 import { usePanel } from '@/stores/panel'
+import { porId } from '@/plataformas'
 import DialogoWebhook from '@/components/DialogoWebhook.vue'
 
 // Ajustes que no caben en el panel principal: avisos por webhook y respaldo. En la v0.9
@@ -20,7 +21,44 @@ const respaldando = ref(false)
 async function cargar() {
   try { webhooks.value = await api.webhooks() } catch (e) { $q.notify({ type: 'negative', message: e.message }) }
 }
-onMounted(() => { cargar(); cargarGrabacion() })
+onMounted(() => { cargar(); cargarGrabacion(); cargarCuentas() })
+
+// Cuentas conectadas (Twitch y las que se sumen). Nombre y destino salen del propio
+// destino en el panel; aquí solo importa la cuenta y a qué canales sigue vinculada.
+const cuentas = ref([])
+
+async function cargarCuentas() {
+  try { cuentas.value = await api.cuentas() } catch (e) { $q.notify({ type: 'negative', message: e.message }) }
+}
+
+/** El nombre de cada destino vinculado, para la confirmación y la lista. */
+function nombresDestinos(c) {
+  return c.destinations.map((id) => panel.destinos.find((d) => d.id === id)?.name ?? `#${id}`)
+}
+
+function desconectar(c) {
+  const nombres = nombresDestinos(c)
+  const cuantos = nombres.length
+  $q.dialog({
+    title: 'Desconectar cuenta',
+    message:
+      `Se desvincularán ${cuantos} ${cuantos === 1 ? 'canal' : 'canales'}` +
+      (cuantos ? ` (${nombres.join(', ')})` : '') +
+      '; el chat y el título dejarán de funcionar para ' + (cuantos === 1 ? 'él' : 'ellos') + '.',
+    cancel: { flat: true, noCaps: true, label: 'Cancelar' },
+    ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Desconectar' },
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await api.borrarCuenta(c.id)
+      await cargarCuentas()
+      await panel.cargar()
+      $q.notify({ type: 'positive', message: 'Cuenta desconectada' })
+    } catch (e) {
+      $q.notify({ type: 'negative', message: e.message })
+    }
+  })
+}
 
 function abrirAlta() { editando.value = null; dialogo.value = true }
 function abrirEdicion(w) { editando.value = w; dialogo.value = true }
@@ -181,6 +219,45 @@ const estadoEntrega = (w) => {
               <q-btn flat round dense :icon="iEditar" size="sm" aria-label="Editar" @click="abrirEdicion(w)" />
               <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" aria-label="Eliminar" @click="borrar(w)" />
             </div>
+          </q-item-section>
+        </q-item>
+      </q-list>
+
+      <div class="text-h6 q-mt-xl q-mb-sm">Cuentas conectadas</div>
+      <p class="text-body2 text-grey-5">
+        Las cuentas vinculadas por código de dispositivo (Twitch, y las que se sumen) dan título,
+        categoría y chat de solo lectura a sus destinos. Se conectan desde el diálogo de cada canal.
+      </p>
+
+      <q-card v-if="!cuentas.length" flat bordered class="q-pa-lg text-center">
+        <q-icon :name="iCuenta" size="36px" class="text-grey-7" />
+        <div class="text-body2 text-grey-5 q-mt-sm">Todavía no hay cuentas conectadas.</div>
+      </q-card>
+
+      <q-list v-else bordered separator class="rounded-borders">
+        <q-item v-for="c in cuentas" :key="c.id">
+          <q-item-section avatar>
+            <q-icon :name="porId(c.platform).icono" size="24px" :style="{ color: porId(c.platform).color }" />
+          </q-item-section>
+          <q-item-section>
+            <q-item-label>
+              {{ c.display_name }}
+              <q-badge v-if="c.status === 'reauth'" color="warning" text-color="black" label="Reconectar" class="q-ml-xs" />
+            </q-item-label>
+            <q-item-label caption>
+              <template v-if="c.destinations.length">
+                Vinculada a {{ nombresDestinos(c).join(', ') }}
+              </template>
+              <template v-else>Sin destinos vinculados</template>
+            </q-item-label>
+            <q-item-label v-if="c.status === 'reauth'" caption class="text-warning">
+              La cuenta necesita reconectarse. Ábrela desde Editar → Cuenta en el destino, en el Panel.
+              <q-btn flat dense no-caps size="sm" label="Ir al panel" :to="{ name: 'panel' }" class="q-ml-xs" />
+            </q-item-label>
+          </q-item-section>
+          <q-item-section side>
+            <q-btn flat dense no-caps size="sm" :icon="iBorrar" label="Desconectar" class="text-negative"
+                   @click="desconectar(c)" />
           </q-item-section>
         </q-item>
       </q-list>

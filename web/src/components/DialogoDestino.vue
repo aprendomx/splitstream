@@ -3,6 +3,10 @@ import { iBorrar, iCerrar, iError, iInfo, iOcultar, iVer } from '@/iconos'
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { PLATAFORMAS, porId, pideServidor } from '@/plataformas'
 import { api, ApiError } from '@/api'
+import { usePanel } from '@/stores/panel'
+import ConectarCuenta from '@/components/ConectarCuenta.vue'
+
+const panel = usePanel()
 
 const props = defineProps({
   modelValue: Boolean,
@@ -35,6 +39,30 @@ const error = ref(null)
 const plat = computed(() => (plataforma.value ? porId(plataforma.value) : null))
 const necesitaServidor = computed(() => plataforma.value && pideServidor(plataforma.value))
 
+// Cuenta vinculada. Solo tiene sentido para plataformas con proveedor propio (Twitch, y
+// las que se sumen): custom, TikTok, X y Facebook no llevan bloque de cuenta.
+const cuentas = ref([])
+const cuentaId = ref(null)
+const plataformaConProveedor = computed(
+  () => panel.plataformas.find((p) => p.id === plataforma.value)?.configured !== undefined,
+)
+const plataformaConfigurada = computed(
+  () => panel.plataformas.find((p) => p.id === plataforma.value)?.configured === true,
+)
+const capacidades = computed(
+  () => panel.plataformas.find((p) => p.id === plataforma.value)?.capabilities ?? null,
+)
+
+async function cargarCuentas() {
+  if (!plataforma.value) { cuentas.value = []; return }
+  try {
+    const todas = await api.cuentas()
+    cuentas.value = todas.filter((c) => c.platform === plataforma.value)
+  } catch {
+    cuentas.value = []
+  }
+}
+
 watch(
   () => props.modelValue,
   (abierto) => {
@@ -51,6 +79,7 @@ watch(
       servidor.value = props.destino.rtmp_url
       habilitado.value = props.destino.enabled
       clave.value = ''
+      cuentaId.value = props.destino.account?.id ?? null
       paso.value = 2
     } else {
       plataforma.value = null
@@ -58,10 +87,18 @@ watch(
       servidor.value = ''
       clave.value = ''
       habilitado.value = true
+      cuentaId.value = null
       paso.value = 1
     }
+    cargarCuentas()
   },
 )
+
+/** Tras vincular desde el diálogo: refrescar la lista y dejar la cuenta nueva elegida. */
+async function trasConectar(cuenta) {
+  await cargarCuentas()
+  cuentaId.value = cuenta.id
+}
 
 function soltarPrevia() {
   if (logoPrevia.value) {
@@ -98,6 +135,8 @@ function elegir(p) {
   // El nombre se propone, no se impone: es lo que el usuario verá en la lista.
   if (!nombre.value) nombre.value = p.nombre
   if (p.url) servidor.value = p.url
+  cuentaId.value = null
+  cargarCuentas()
   paso.value = 2
 }
 
@@ -120,6 +159,8 @@ async function guardar() {
       // Clave vacía significa "no la toques". Mandarla vacía la borraría, y el backend la
       // rechazaría con un error sobre un campo que el usuario ni tocó.
       if (clave.value) patch.key = clave.value
+      // account_id solo tiene sentido si la plataforma tiene proveedor; null desvincula.
+      if (plataformaConProveedor.value) patch.account_id = cuentaId.value
       await api.editarDestino(props.destino.id, patch)
       id = props.destino.id
     } else {
@@ -131,6 +172,11 @@ async function guardar() {
         enabled: habilitado.value,
       })
       id = creado.id
+      // El destino todavía no existía cuando se eligió la cuenta: vincular es un PATCH
+      // aparte, tras crear.
+      if (plataformaConProveedor.value && cuentaId.value !== null) {
+        await api.editarDestino(id, { account_id: cuentaId.value })
+      }
     }
 
     // El logo va en una petición aparte porque en el alta el destino no tenía id hasta
@@ -249,6 +295,22 @@ async function guardar() {
             aria-label="Quitar el logo"
             @click="quitarLogo"
           />
+        </div>
+
+        <div v-if="plataformaConProveedor" class="bloque-cuenta q-gutter-y-sm">
+          <div class="text-caption text-grey-5">Cuenta</div>
+          <div class="row items-center q-gutter-xs">
+            <q-chip v-for="c in ['title','category','chat']" :key="c" dense square size="sm"
+                    :color="capacidades?.[c] ? 'primary' : 'grey-8'" :text-color="capacidades?.[c] ? 'white' : 'grey-5'">
+              {{ { title: 'Título', category: 'Categoría', chat: 'Chat' }[c] }}
+            </q-chip>
+          </div>
+          <q-select v-if="cuentas.length" v-model="cuentaId" :options="[{label: 'Sin cuenta', value: null}, ...cuentas.map(c => ({label: c.display_name + (c.status === 'reauth' ? ' (reconectar)' : ''), value: c.id}))]"
+                    emit-value map-options outlined dense label="Cuenta vinculada" />
+          <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="plat?.nombre" @conectada="trasConectar" />
+          <q-banner v-else dense class="bg-grey-9 text-grey-3 rounded-borders">
+            Conectar cuentas de {{ plat?.nombre }} necesita un client_id: pon <code>SPLITSTREAM_TWITCH_CLIENT_ID</code> o espera a una versión con la app incluida.
+          </q-banner>
         </div>
 
         <q-input

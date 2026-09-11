@@ -1,5 +1,5 @@
 <script setup>
-import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar, iProbar } from '@/iconos'
+import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar, iProbar, iCuenta } from '@/iconos'
 import { computed } from 'vue'
 import { porId } from '@/plataformas'
 import { api } from '@/api'
@@ -18,6 +18,7 @@ const m = computed(() => props.destino.metrics)
 const suspendido = computed(() => m.value?.state === 'suspended')
 const conCifras = computed(() => m.value && props.haySesion && props.destino.enabled)
 const logo = computed(() => (props.destino.logo_etag ? api.urlLogo(props.destino) : null))
+const conProveedor = computed(() => Object.values(props.destino.capabilities ?? {}).some(Boolean))
 </script>
 
 <template>
@@ -82,6 +83,15 @@ const logo = computed(() => (props.destino.logo_etag ? api.urlLogo(props.destino
         {{ diag.titulo }}
       </q-chip>
       <span v-if="conCifras" class="bitrate">{{ bitrateLegible(m.bitrate_bps) }}</span>
+    </div>
+
+    <div v-if="destino.account || conProveedor" class="row items-center q-gutter-xs q-px-md q-pt-xs">
+      <q-chip v-if="destino.account" dense square size="sm" :icon="iCuenta"
+              :color="destino.account.status === 'reauth' ? 'warning' : 'grey-8'" text-color="white">
+        {{ destino.account.display_name }}
+        <q-tooltip>{{ destino.account.status === 'reauth' ? 'La cuenta necesita reconectarse (Editar → Cuenta)' : 'Cuenta conectada' }}</q-tooltip>
+      </q-chip>
+      <q-chip v-else-if="conProveedor" dense square size="sm" color="grey-9" text-color="grey-5">sin cuenta</q-chip>
     </div>
 
     <div v-if="diag.detalle" class="detalle q-px-md q-pt-xs" :class="`text-${tono.color}`">
