@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -338,5 +339,31 @@ func TestServerWaitReturnsAfterBaseContextCancelWithAPendingFlow(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Wait() no volvió tras cancelar BaseContext con un flujo pendiente")
+	}
+}
+
+// Cambiar la plataforma del destino por la API suelta la cuenta vinculada: si no, el DTO
+// seguiría anunciando una cuenta de Twitch en un destino de YouTube y el título en vivo
+// iría a la plataforma equivocada.
+func TestPatchDestinationPlatformUnlinksAccount(t *testing.T) {
+	srv, db, ck := servidorPlataformas(t, &fakeProvider{configured: true})
+	a := cuentaViaStore(t, srv, db)
+	d := crearDest(t, db, srv, "Twitch", "clave", true)
+	if rec := do(t, srv, ck, http.MethodPatch, "/api/destinations/"+itoa(d.ID),
+		`{"platform":"twitch","account_id":`+itoa(a.ID)+`}`); rec.Code != 200 {
+		t.Fatalf("vincular: %d %s", rec.Code, rec.Body)
+	}
+
+	rec := do(t, srv, ck, http.MethodPatch, "/api/destinations/"+itoa(d.ID), `{"platform":"youtube"}`)
+	if rec.Code != 200 {
+		t.Fatalf("cambiar de plataforma: %d %s", rec.Code, rec.Body)
+	}
+	var dto destinationDTO
+	json.Unmarshal(rec.Body.Bytes(), &dto)
+	if dto.Account != nil {
+		t.Errorf("account = %+v tras cambiar a youtube, quería null", dto.Account)
+	}
+	if _, err := db.AccountForDestination(context.Background(), d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("el enlace sigue en la base: err = %v", err)
 	}
 }

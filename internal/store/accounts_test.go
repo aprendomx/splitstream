@@ -206,3 +206,53 @@ func TestLinkDestinationRequiresMatchingPlatformAndCascades(t *testing.T) {
 		t.Errorf("tras borrar el destino quedan enlaces: %v", ids)
 	}
 }
+
+// Cambiar la plataforma del destino tiene que soltar la cuenta: si no, un destino de
+// YouTube se quedaría con una cuenta de Twitch enlazada.
+func TestUpdateDestinationPlatformUnlinksAccount(t *testing.T) {
+	db := openTemp(t)
+	c := cifradorDePrueba(t)
+	ctx := context.Background()
+	a := cuentaDePrueba(t, db, c, "42")
+	tw, err := db.CreateDestination(ctx, c, store.NewDestination{Name: "Twitch", Platform: store.PlatformTwitch, RTMPURL: "rtmp://live.twitch.tv/app", Key: "k", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LinkDestination(ctx, tw.ID, a.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Un patch que no toca la plataforma conserva el enlace.
+	nombre := "Twitch principal"
+	d, err := db.UpdateDestination(ctx, c, tw.ID, store.DestinationPatch{Name: &nombre})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.AccountID == nil || *d.AccountID != a.ID {
+		t.Fatalf("un cambio de nombre no debería soltar la cuenta: %v", d.AccountID)
+	}
+	// Repetir la misma plataforma tampoco la suelta.
+	misma := store.PlatformTwitch
+	d, err = db.UpdateDestination(ctx, c, tw.ID, store.DestinationPatch{Platform: &misma})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.AccountID == nil || *d.AccountID != a.ID {
+		t.Fatalf("la misma plataforma no debería soltar la cuenta: %v", d.AccountID)
+	}
+
+	otra := store.PlatformYouTube
+	d, err = db.UpdateDestination(ctx, c, tw.ID, store.DestinationPatch{Platform: &otra})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.AccountID != nil {
+		t.Errorf("Destination.AccountID = %v tras cambiar de plataforma, quería nil", *d.AccountID)
+	}
+	if _, err := db.AccountForDestination(ctx, tw.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("AccountForDestination = %v, quería ErrNotFound", err)
+	}
+	if ids, _ := db.DestinationsOfAccount(ctx, a.ID); len(ids) != 0 {
+		t.Errorf("DestinationsOfAccount = %v, quería vacío", ids)
+	}
+}

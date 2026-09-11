@@ -201,7 +201,8 @@ func (d *DB) CreateDestination(ctx context.Context, c *crypto.Cipher, in NewDest
 // UpdateDestination aplica una modificación parcial. Los campos nil del patch
 // se dejan como están.
 func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, patch DestinationPatch) (*Destination, error) {
-	if _, err := d.destination(ctx, id); err != nil {
+	actual, err := d.destination(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -245,13 +246,41 @@ func (d *DB) UpdateDestination(ctx context.Context, c *crypto.Cipher, id int64, 
 		args = append(args, boolToInt(*patch.Enabled))
 	}
 
+	// Cambiar de plataforma invalida el enlace con la cuenta: una cuenta de Twitch no
+	// puede quedar colgando de un destino de YouTube (el título en vivo y el chat irían
+	// a la plataforma equivocada). Se borra el enlace y el panel vuelve a pedir la cuenta.
+	cambiaPlataforma := patch.Platform != nil && *patch.Platform != actual.Platform
+
+	aplicar := func(tx *DB) error {
+		if len(sets) > 0 {
+			query := "UPDATE destinations SET " + joinComma(sets) + " WHERE id = ?"
+			if _, err := tx.ex.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf("actualizar destino: %w", err)
+			}
+		}
+		if cambiaPlataforma {
+			if _, err := tx.ex.ExecContext(ctx,
+				`DELETE FROM destination_accounts WHERE destination_id = ?`, id); err != nil {
+				return fmt.Errorf("desvincular la cuenta al cambiar de plataforma: %w", err)
+			}
+		}
+		return nil
+	}
+
 	if len(sets) > 0 {
 		sets = append(sets, "updated_at = ?")
 		args = append(args, nowRFC3339(), id)
-		query := "UPDATE destinations SET " + joinComma(sets) + " WHERE id = ?"
-		if _, err := d.ex.ExecContext(ctx, query, args...); err != nil {
-			return nil, fmt.Errorf("actualizar destino: %w", err)
-		}
+	}
+	// El UPDATE y el borrado del enlace van en la misma transacción: si se partieran, un
+	// fallo dejaría el destino con la plataforma nueva y la cuenta vieja aún enlazada.
+	// Si ya venimos dentro de una transacción (ToggleAll) se reutiliza: InTx no se anida.
+	if _, enTx := d.ex.(*sql.Tx); enTx {
+		err = aplicar(d)
+	} else {
+		err = d.InTx(ctx, aplicar)
+	}
+	if err != nil {
+		return nil, err
 	}
 	return d.destination(ctx, id)
 }
