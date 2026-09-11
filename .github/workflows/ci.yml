@@ -39,7 +39,12 @@ jobs:
         run: CGO_ENABLED=0 go build -o /dev/null ./cmd/splitstream
 
       # El detector de carreras necesita cgo, así que aquí NO se desactiva.
+      # GOMAXPROCS=2 lo pide el spec §8: con poco paralelismo el planificador reordena de
+      # otra forma y salen aquí las carreras de arranque y parada que en un runner ancho
+      # se esconden.
       - name: tests con -race
+        env:
+          GOMAXPROCS: "2"
         run: go test ./... -race -count=1
 
       # El motor no debe conocer ni la librería RTMP ni la base de datos (spec §6).
@@ -55,10 +60,13 @@ jobs:
       # TLS. Habla con la ingesta a través de interfaces estrechas, no del tipo concreto,
       # y el panel.tls que expone es un dato que le pasa main.go, no algo que calcule
       # importando webtls.
-      - name: internal/httpapi no conoce go-rtmp ni el TLS
+      # Tampoco los proveedores concretos: la API los ve por platforms.Registry y el gestor
+      # de tokens por la interfaz TokenGetter, así que ni platforms/twitch ni
+      # platforms/tokens pueden aparecer en sus dependencias.
+      - name: internal/httpapi no conoce go-rtmp, el TLS ni los proveedores
         run: |
-          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio|internal/webtls'; then
-            echo "::error::internal/httpapi importa go-rtmp, internal/rtmpio o internal/webtls"
+          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio|internal/webtls|internal/platforms/twitch|internal/platforms/tokens'; then
+            echo "::error::internal/httpapi importa go-rtmp, internal/rtmpio, internal/webtls, platforms/twitch o platforms/tokens"
             exit 1
           fi
 
