@@ -12,7 +12,8 @@ for n in macos-apple-silicon.tar.gz macos-intel.tar.gz linux-x86_64.tar.gz linux
 done
 
 deploy/homebrew/render.sh "$TAG" "$T/SHA256SUMS.txt" > "$T/splitstream.rb"
-grep -q 'version "1.2.3"' "$T/splitstream.rb"
+# La version sale de la URL: brew audit rechaza un `version` redundante.
+grep -q 'version "' "$T/splitstream.rb" && exit 1
 grep -q "releases/download/$TAG/splitstream-$TAG-linux-arm64.tar.gz" "$T/splitstream.rb"
 grep -q "$(printf '%064d' 4)" "$T/splitstream.rb"
 grep -q '{{' "$T/splitstream.rb" && exit 1

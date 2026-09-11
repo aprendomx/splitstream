@@ -2,7 +2,6 @@
 class Splitstream < Formula
   desc "Retransmite una señal RTMP de OBS a varias plataformas a la vez"
   homepage "https://github.com/aprendomx/splitstream"
-  version "{{VERSION_SIN_V}}"
   license "MIT"
 
   on_macos do
@@ -30,10 +29,6 @@ class Splitstream < Formula
   def install
     bin.install "splitstream"
     doc.install "manual-de-usuario.md" if File.exist?("manual-de-usuario.md")
-  end
-
-  def post_install
-    (var/"splitstream").mkpath
   end
 
   # `brew services start splitstream`: la base y la clave en var/splitstream, el log en var/log.

@@ -179,9 +179,17 @@ jobs:
           gh release download "${GITHUB_REF_NAME}" --pattern SHA256SUMS.txt
           deploy/homebrew/render.sh "${GITHUB_REF_NAME}" SHA256SUMS.txt > splitstream.rb
           cat splitstream.rb
+      # Homebrew no instala fórmulas por ruta: exige que vivan en un tap. Se usa el tap
+      # real (público, sin token) con la fórmula recién renderizada encima, que es
+      # exactamente lo que verá quien haga `brew install aprendomx/tap/splitstream`.
       - name: instalar la fórmula de verdad
         run: |
-          brew install --formula ./splitstream.rb
+          # Homebrew 6 exige `brew trust` para cargar fórmulas de un tap de terceros; en
+          # versiones anteriores el comando no existe y se ignora.
+          brew tap aprendomx/tap
+          brew trust aprendomx/tap || true
+          cp splitstream.rb "$(brew --repository aprendomx/tap)/Formula/splitstream.rb"
+          brew install aprendomx/tap/splitstream
           splitstream -version | grep -F "${GITHUB_REF_NAME}"
       - name: adjuntar a la release
         env:
