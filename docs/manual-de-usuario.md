@@ -88,6 +88,9 @@ leer el chat. No puede escribir en el chat ni moderar. Los tokens se guardan cif
 tu clave maestra, como las claves de stream, y se renuevan solos; si Twitch los revoca, el
 canal muestra «reconectar» y repites los tres pasos.
 
+**Desconectar** borra los tokens de Splitstream; el permiso sigue vigente en Twitch hasta
+que caduque (unas horas) o lo retires en Twitch → Configuración → Conexiones.
+
 Los chips **Título**, **Categoría** y **Chat** de cada canal dicen qué puede hacer cada
 plataforma. Un canal «Otro», TikTok o X no tiene ninguno: son solo una URL y una clave,
 y eso está bien.
