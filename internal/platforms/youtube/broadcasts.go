@@ -249,18 +249,31 @@ func (p *Provider) transition(ctx context.Context, acct store.Account, token cry
 	return err
 }
 
+// emisionSnippet es la parte de snippet que sí importa conservar en un update: Google
+// trata liveBroadcasts.update con part=snippet como un REEMPLAZO completo del snippet, no
+// un parche. Si solo mandamos el título, scheduledStartTime se pierde (o Google devuelve
+// 400 en emisiones programadas): por eso cada update relee estos campos y los reenvía tal
+// cual, con el título nuevo encima.
+type emisionSnippet struct {
+	Title              string `json:"title"`
+	Description        string `json:"description"`
+	ScheduledStartTime string `json:"scheduledStartTime"`
+}
+
 // SetTitle no recibe la emisión (la interfaz platforms.TitleSetter es la misma para
 // Twitch/Kick, donde el título es del canal): busca la próxima emisión del canal
 // (broadcastStatus=upcoming) y si no hay ninguna, la activa (broadcastStatus=active). Sin
 // ninguna de las dos, ErrNoBroadcast — el resultado por destino le dice a la persona que
-// cree la emisión primero.
+// cree la emisión primero. findBroadcast ya pide part=id,snippet: el snippet que trae ese
+// list es el mismo que hay que reenviar en el update, así que aquí NO hace falta un GET
+// aparte (a diferencia de SetBroadcastTitle, que solo tiene el id).
 func (p *Provider) SetTitle(ctx context.Context, acct store.Account, token crypto.Secret, title string) error {
-	ref, err := p.findBroadcast(ctx, acct, token, "upcoming")
+	ref, snip, err := p.findBroadcast(ctx, acct, token, "upcoming")
 	if err != nil {
 		return err
 	}
 	if ref == "" {
-		ref, err = p.findBroadcast(ctx, acct, token, "active")
+		ref, snip, err = p.findBroadcast(ctx, acct, token, "active")
 		if err != nil {
 			return err
 		}
@@ -268,48 +281,85 @@ func (p *Provider) SetTitle(ctx context.Context, acct store.Account, token crypt
 	if ref == "" {
 		return platforms.ErrNoBroadcast
 	}
-	return p.updateTitle(ctx, acct, token, ref, title)
+	snip.Title = title
+	return p.updateTitle(ctx, acct, token, ref, snip)
 }
 
 // SetBroadcastTitle actualiza directamente la emisión que ya se conoce (BroadcastRef del
-// destino): evita los dos list que hace SetTitle cuando no hace falta adivinar cuál es.
+// destino): se salta el list por broadcastStatus que hace SetTitle cuando no hace falta
+// adivinar cuál es. Pero como solo tiene el id, sí necesita leer el snippet actual antes
+// de reemplazarlo (ver emisionSnippet) — sin emisión con ese id, ErrNoBroadcast.
 func (p *Provider) SetBroadcastTitle(ctx context.Context, acct store.Account, token crypto.Secret, ref, title string) error {
-	return p.updateTitle(ctx, acct, token, ref, title)
+	snip, err := p.getSnippet(ctx, acct, token, ref)
+	if err != nil {
+		return err
+	}
+	snip.Title = title
+	return p.updateTitle(ctx, acct, token, ref, snip)
 }
 
-func (p *Provider) findBroadcast(ctx context.Context, acct store.Account, token crypto.Secret, estado string) (string, error) {
-	httpReq, err := p.api(ctx, http.MethodGet, "/liveBroadcasts?part=id&mine=true&broadcastStatus="+estado, token, nil)
+func (p *Provider) findBroadcast(ctx context.Context, acct store.Account, token crypto.Secret, estado string) (string, emisionSnippet, error) {
+	httpReq, err := p.api(ctx, http.MethodGet, "/liveBroadcasts?part=id,snippet&mine=true&broadcastStatus="+estado, token, nil)
 	if err != nil {
-		return "", err
+		return "", emisionSnippet{}, err
 	}
 	body, err := p.do(httpReq, http.StatusOK)
 	p.gastar(acct, "list")
 	if err != nil {
-		return "", err
+		return "", emisionSnippet{}, err
 	}
 	var out struct {
 		Items []struct {
-			ID string `json:"id"`
+			ID      string         `json:"id"`
+			Snippet emisionSnippet `json:"snippet"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return "", errors.New("youtube: respuesta de liveBroadcasts.list ilegible")
+		return "", emisionSnippet{}, errors.New("youtube: respuesta de liveBroadcasts.list ilegible")
 	}
 	if len(out.Items) == 0 {
-		return "", nil
+		return "", emisionSnippet{}, nil
 	}
-	return out.Items[0].ID, nil
+	return out.Items[0].ID, out.Items[0].Snippet, nil
 }
 
-func (p *Provider) updateTitle(ctx context.Context, acct store.Account, token crypto.Secret, ref, title string) error {
+// getSnippet lee el snippet actual de una emisión por id (1 unidad, "list"): lo que
+// SetBroadcastTitle necesita releer porque solo le llega el ref, no el snippet completo
+// que sí trae findBroadcast.
+func (p *Provider) getSnippet(ctx context.Context, acct store.Account, token crypto.Secret, ref string) (emisionSnippet, error) {
+	httpReq, err := p.api(ctx, http.MethodGet, "/liveBroadcasts?part=snippet&id="+url.QueryEscape(ref), token, nil)
+	if err != nil {
+		return emisionSnippet{}, err
+	}
+	body, err := p.do(httpReq, http.StatusOK)
+	p.gastar(acct, "list")
+	if err != nil {
+		return emisionSnippet{}, err
+	}
+	var out struct {
+		Items []struct {
+			Snippet emisionSnippet `json:"snippet"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return emisionSnippet{}, errors.New("youtube: respuesta de liveBroadcasts.list ilegible")
+	}
+	if len(out.Items) == 0 {
+		return emisionSnippet{}, platforms.ErrNoBroadcast
+	}
+	return out.Items[0].Snippet, nil
+}
+
+// updateTitle reemplaza el snippet completo (ver emisionSnippet): snip ya trae el título
+// nuevo puesto por quien llama, y scheduledStartTime/description tal como se leyeron, para
+// que el update no se los borre.
+func (p *Provider) updateTitle(ctx context.Context, acct store.Account, token crypto.Secret, ref string, snip emisionSnippet) error {
 	var cuerpo struct {
-		ID      string `json:"id"`
-		Snippet struct {
-			Title string `json:"title"`
-		} `json:"snippet"`
+		ID      string         `json:"id"`
+		Snippet emisionSnippet `json:"snippet"`
 	}
 	cuerpo.ID = ref
-	cuerpo.Snippet.Title = title
+	cuerpo.Snippet = snip
 	b, err := json.Marshal(cuerpo)
 	if err != nil {
 		return err

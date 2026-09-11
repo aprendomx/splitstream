@@ -40,9 +40,13 @@ type servidorEmisiones struct {
 	// transitionRes decide código+cuerpo de POST /liveBroadcasts/transition; por defecto
 	// siempre responde éxito en vivo.
 	transitionRes func(n int32, r *http.Request) (int, []byte)
-	// listRes decide código+cuerpo de GET /liveBroadcasts según broadcastStatus; por
-	// defecto no hay ninguna emisión ni en upcoming ni en active.
+	// listRes decide código+cuerpo de GET /liveBroadcasts?mine=true&broadcastStatus=...;
+	// por defecto no hay ninguna emisión ni en upcoming ni en active.
 	listRes func(estado string) []byte
+	// getSnippetRes decide el cuerpo de GET /liveBroadcasts?part=snippet&id=...
+	// (SetBroadcastTitle releyendo antes de reemplazar el snippet); por defecto trae el
+	// snippet de broadcast_insert.json (mismo scheduledStartTime del fixture).
+	getSnippetRes func(id string) []byte
 }
 
 func nuevoServidorEmisiones(t *testing.T) *servidorEmisiones {
@@ -64,6 +68,11 @@ func nuevoServidorEmisiones(t *testing.T) *servidorEmisiones {
 
 	mux.HandleFunc("POST /liveStreams", func(w http.ResponseWriter, r *http.Request) {
 		s.insertStreamCalls.Add(1)
+		if r.URL.Query().Get("part") != "snippet,cdn" {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":{"code":400,"message":"falta part","errors":[{"reason":"invalidParameter"}]}}`))
+			return
+		}
 		w.Write(fixture(t, "stream_insert.json"))
 	})
 
@@ -105,12 +114,24 @@ func nuevoServidorEmisiones(t *testing.T) *servidorEmisiones {
 
 	mux.HandleFunc("GET /liveBroadcasts", func(w http.ResponseWriter, r *http.Request) {
 		s.listCalls.Add(1)
-		if r.URL.Query().Get("mine") != "true" {
+		q := r.URL.Query()
+		// Dos formas de la misma ruta: por id (SetBroadcastTitle releyendo el snippet) o
+		// por mine+broadcastStatus (SetTitle buscando la próxima/activa). Se distinguen
+		// por los parámetros, no por el path: la API real solo tiene un endpoint list.
+		if id := q.Get("id"); id != "" {
+			if s.getSnippetRes != nil {
+				w.Write(s.getSnippetRes(id))
+				return
+			}
+			w.Write([]byte(`{"items":[{"id":"` + id + `","snippet":{"title":"Prueba","description":"","scheduledStartTime":"2026-09-11T20:00:00Z"}}]}`))
+			return
+		}
+		if q.Get("mine") != "true" {
 			w.WriteHeader(400)
 			w.Write([]byte(`{"error":{"code":400,"message":"falta mine=true","errors":[{"reason":"invalidParameter"}]}}`))
 			return
 		}
-		estado := r.URL.Query().Get("broadcastStatus")
+		estado := q.Get("broadcastStatus")
 		if s.listRes != nil {
 			w.Write(s.listRes(estado))
 			return
@@ -126,6 +147,9 @@ func nuevoServidorEmisiones(t *testing.T) *servidorEmisiones {
 func proveedorEmisiones(s *servidorEmisiones, opts youtube.Options) *youtube.Provider {
 	opts.HTTPClient = s.Client()
 	opts.APIBase = s.URL
+	// OAuthBase también apunta al fake: ningún New de test debe quedarse con el host real
+	// de Google, aunque estos tests no ejerciten el flujo de OAuth.
+	opts.OAuthBase = s.URL
 	return youtube.New(opts)
 }
 
@@ -266,13 +290,16 @@ func TestEndBroadcastCompletes(t *testing.T) {
 
 func TestSetTitleUpdatesTheUpcomingOrActiveBroadcast(t *testing.T) {
 	s := nuevoServidorEmisiones(t)
+	// El list ya trae part=id,snippet: SetTitle reutiliza este snippet (con su
+	// scheduledStartTime) para el update, sin un GET aparte.
 	s.listRes = func(estado string) []byte {
 		if estado == "upcoming" {
-			return []byte(`{"items":[{"id":"bcast123"}]}`)
+			return []byte(`{"items":[{"id":"bcast123","snippet":{"title":"Prueba","liveChatId":"chat456","scheduledStartTime":"2026-09-11T20:00:00Z"}}]}`)
 		}
 		return []byte(`{"items":[]}`)
 	}
-	p := proveedorEmisiones(s, youtube.Options{})
+	sinks, quota := cuentaCuota()
+	p := proveedorEmisiones(s, youtube.Options{Quota: quota})
 	ctx := context.Background()
 	acct := cuentaYT()
 
@@ -282,14 +309,20 @@ func TestSetTitleUpdatesTheUpcomingOrActiveBroadcast(t *testing.T) {
 	var cuerpo struct {
 		ID      string `json:"id"`
 		Snippet struct {
-			Title string `json:"title"`
+			Title              string `json:"title"`
+			ScheduledStartTime string `json:"scheduledStartTime"`
 		} `json:"snippet"`
 	}
 	if err := json.Unmarshal(s.lastUpdateBody, &cuerpo); err != nil {
 		t.Fatal(err)
 	}
-	if cuerpo.ID != "bcast123" || cuerpo.Snippet.Title != "Nuevo" {
-		t.Errorf("cuerpo del update = %+v", cuerpo)
+	if cuerpo.ID != "bcast123" || cuerpo.Snippet.Title != "Nuevo" || cuerpo.Snippet.ScheduledStartTime != "2026-09-11T20:00:00Z" {
+		t.Errorf("cuerpo del update = %+v, quería title=Nuevo y scheduledStartTime conservado", cuerpo)
+	}
+	// list (1, upcoming) + update (50): el reintento de SetTitle sobre la que ya
+	// encontró en upcoming no vuelve a leer, así que la cuota queda en 51, no en 101.
+	if sinks[acct.ID] != 51 {
+		t.Errorf("cuota SetTitle = %d, quería 51", sinks[acct.ID])
 	}
 
 	// Sin nada en upcoming ni en active: ErrNoBroadcast.
@@ -299,18 +332,30 @@ func TestSetTitleUpdatesTheUpcomingOrActiveBroadcast(t *testing.T) {
 		t.Fatalf("sin emisión: err = %v, quería ErrNoBroadcast", err)
 	}
 
-	// SetBroadcastTitle va directo al update, sin pasar por los list (cuota 50).
+	// SetBroadcastTitle no adivina cuál emisión es (se salta el list por
+	// broadcastStatus), pero sí relee su snippet por id antes de reemplazarlo: cuota
+	// 51 (list 1 + update 50), no 50.
 	s3 := nuevoServidorEmisiones(t)
-	sinks, quota := cuentaCuota()
-	p3 := proveedorEmisiones(s3, youtube.Options{Quota: quota})
+	sinks3, quota3 := cuentaCuota()
+	p3 := proveedorEmisiones(s3, youtube.Options{Quota: quota3})
 	if err := p3.SetBroadcastTitle(ctx, acct, "tok", "bcast123", "Nuevo"); err != nil {
 		t.Fatal(err)
 	}
-	if s3.listCalls.Load() != 0 {
-		t.Errorf("SetBroadcastTitle no debería llamar a list: llamadas = %d", s3.listCalls.Load())
+	var cuerpo3 struct {
+		ID      string `json:"id"`
+		Snippet struct {
+			Title              string `json:"title"`
+			ScheduledStartTime string `json:"scheduledStartTime"`
+		} `json:"snippet"`
 	}
-	if sinks[acct.ID] != 50 {
-		t.Errorf("cuota = %d, quería 50", sinks[acct.ID])
+	if err := json.Unmarshal(s3.lastUpdateBody, &cuerpo3); err != nil {
+		t.Fatal(err)
+	}
+	if cuerpo3.Snippet.Title != "Nuevo" || cuerpo3.Snippet.ScheduledStartTime != "2026-09-11T20:00:00Z" {
+		t.Errorf("cuerpo del update (SetBroadcastTitle) = %+v", cuerpo3)
+	}
+	if sinks3[acct.ID] != 51 {
+		t.Errorf("cuota SetBroadcastTitle = %d, quería 51", sinks3[acct.ID])
 	}
 }
 
