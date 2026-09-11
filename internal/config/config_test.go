@@ -603,3 +603,29 @@ func TestConfigLogValueShowsTLSButNoSecrets(t *testing.T) {
 		t.Error("el log lleva la master key")
 	}
 }
+
+func TestTwitchClientIDAndChatRetention(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TwitchClientID != "" || cfg.RetentionMaxChat != 200000 {
+		t.Errorf("defaults: client=%q chat=%d", cfg.TwitchClientID, cfg.RetentionMaxChat)
+	}
+	cfg, err = config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64(),
+		"SPLITSTREAM_TWITCH_CLIENT_ID": " abc ", "SPLITSTREAM_RETENTION_MAX_CHAT": "0"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TwitchClientID != "abc" || cfg.RetentionMaxChat != 0 {
+		t.Errorf("override: client=%q chat=%d", cfg.TwitchClientID, cfg.RetentionMaxChat)
+	}
+	if _, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_RETENTION_MAX_CHAT": "-1"})); err == nil {
+		t.Error("negativo debería fallar")
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("cfg", "config", cfg)
+	if !strings.Contains(buf.String(), "twitch_client_id=abc") {
+		t.Error("el client_id es público y sirve para diagnosticar: debería salir en el log")
+	}
+}

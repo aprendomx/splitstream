@@ -77,6 +77,12 @@ type Config struct {
 	// UpdateCheck consulta la última release de GitHub al arrancar y cada 24 h. Solo el
 	// aviso: nunca se actualiza solo. `SPLITSTREAM_UPDATE_CHECK=false` lo apaga.
 	UpdateCheck bool
+	// TwitchClientID: client_id propio para Twitch; vacío usa el incluido en el binario.
+	// Es público por diseño, no un secreto.
+	TwitchClientID string
+	// RetentionMaxChat es el tope de filas en la tabla de mensajes de chat, como
+	// RetentionMaxEvents pero para el chat.
+	RetentionMaxChat int
 }
 
 // LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente. Receptor por
@@ -97,6 +103,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("tls_redirect_addr", c.TLSRedirectAddr),
 		slog.String("trusted_proxies", prefijos(c.TrustedProxies)),
 		slog.Bool("update_check", c.UpdateCheck),
+		slog.String("twitch_client_id", c.TwitchClientID),
+		slog.Int("retention_max_chat", c.RetentionMaxChat),
 	)
 }
 
@@ -256,6 +264,10 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	if cfg.RetentionMaxEvents, err = parseNonNegative(get("SPLITSTREAM_RETENTION_MAX_EVENTS", "50000"), "SPLITSTREAM_RETENTION_MAX_EVENTS"); err != nil {
 		return nil, err
 	}
+	if cfg.RetentionMaxChat, err = parseNonNegative(get("SPLITSTREAM_RETENTION_MAX_CHAT", "200000"), "SPLITSTREAM_RETENTION_MAX_CHAT"); err != nil {
+		return nil, err
+	}
+	cfg.TwitchClientID = strings.TrimSpace(get("SPLITSTREAM_TWITCH_CLIENT_ID", ""))
 
 	raw, ok := lookup("SPLITSTREAM_MASTER_KEY")
 	if !ok || raw == "" {

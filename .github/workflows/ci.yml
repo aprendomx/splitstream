@@ -70,6 +70,21 @@ jobs:
             exit 1
           fi
 
+      # La capa de plataformas (v0.11) y el chat no tocan el motor ni el transporte RTMP, y
+      # el motor no los conoce: si alguien cruza la frontera, se rompe aquí.
+      - name: internal/platforms e internal/chat no conocen el motor
+        run: |
+          if go list -deps ./internal/platforms/... ./internal/chat | grep -E "go-rtmp|internal/relay|internal/rtmpio"; then
+            echo "::error::internal/platforms o internal/chat importan el motor o RTMP"
+            exit 1
+          fi
+      - name: internal/relay no conoce las plataformas
+        run: |
+          if go list -deps ./internal/relay ./internal/rtmpio | grep -E "internal/platforms|internal/chat"; then
+            echo "::error::el motor importa la capa de plataformas"
+            exit 1
+          fi
+
       # disk_windows.go es el primer archivo con build tag del repo: sin esto, una rotura
       # solo en Windows se vería al etiquetar la release.
       - name: compila para Windows

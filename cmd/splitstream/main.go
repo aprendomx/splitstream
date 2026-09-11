@@ -26,11 +26,15 @@ import (
 	"time"
 
 	"github.com/aprendomx/splitstream/internal/alerts"
+	"github.com/aprendomx/splitstream/internal/chat"
 	"github.com/aprendomx/splitstream/internal/config"
 	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/events"
 	"github.com/aprendomx/splitstream/internal/httpapi"
 	"github.com/aprendomx/splitstream/internal/maintenance"
+	"github.com/aprendomx/splitstream/internal/platforms"
+	"github.com/aprendomx/splitstream/internal/platforms/tokens"
+	"github.com/aprendomx/splitstream/internal/platforms/twitch"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
@@ -270,6 +274,41 @@ func run(ctx context.Context, out io.Writer) error {
 		webhooks.Run(sinkCtx)
 	}()
 
+	// Capa de plataformas (v0.11): proveedores por capacidad, tokens y chat. Nada de
+	// esto lo conoce el motor; entra por el bus de eventos y por la API.
+	registro := platforms.NewRegistry(twitch.New(twitch.Options{
+		ClientID: twitch.ResolveClientID(cfg.TwitchClientID), Logger: logger,
+	}))
+	gestorTokens := tokens.NewManager(db, cipher, registro.Get)
+	gestorTokens.Logger = logger
+	gestorTokens.OnReauth = func(acct store.Account) {
+		if _, err := db.LogEvent(context.Background(), store.Event{Level: store.LevelWarn, Kind: "account_reauth_required",
+			Message: "la cuenta de " + string(acct.Platform) + " " + acct.DisplayName + " necesita reconectarse"}); err != nil {
+			logger.Error("no se pudo registrar el aviso de reconexión", "err", err)
+		}
+	}
+	fondo.Add(1)
+	go func() {
+		defer fondo.Done()
+		gestorTokens.Run(sinkCtx)
+	}()
+
+	chatBus := chat.NewBus()
+	agregador := chat.NewAggregator(chat.Config{DB: db, Events: bus, Chat: chatBus, Registry: registro, Tokens: gestorTokens, Logger: logger})
+	fondo.Add(1)
+	go func() {
+		defer fondo.Done()
+		agregador.Run(sinkCtx)
+	}()
+
+	// Sin client_id —ni el propio (SPLITSTREAM_TWITCH_CLIENT_ID) ni el incluido en el
+	// binario— conectar cuentas de Twitch no puede funcionar: se avisa una vez al
+	// arrancar, no se falla, porque el resto del servicio (RTMP, otros destinos) sigue
+	// sirviendo igual.
+	if twitch.ResolveClientID(cfg.TwitchClientID) == "" {
+		logger.Info("twitch sin client_id: conectar cuentas está desactivado hasta configurar SPLITSTREAM_TWITCH_CLIENT_ID")
+	}
+
 	hub := relay.NewHub(logger)
 	engine := relay.NewEngine(relay.EngineConfig{
 		Hub:         hub,
@@ -351,6 +390,10 @@ func run(ctx context.Context, out io.Writer) error {
 			{Name: "grabaciones", Run: func(ctx context.Context) (string, error) {
 				n, freed, err := factory.PruneRecordings(ctx)
 				return fmt.Sprintf("grabaciones: %d borradas, %.1f MB liberados", n, float64(freed)/(1<<20)), err
+			}},
+			{Name: "chat", Run: func(ctx context.Context) (string, error) {
+				n, err := db.PruneChat(ctx, cfg.RetentionMaxChat)
+				return fmt.Sprintf("chat: %d mensajes borrados", n), err
 			}},
 		},
 		OnDone: func(resumen string, err error) {
@@ -469,6 +512,14 @@ func run(ctx context.Context, out io.Writer) error {
 		PublicURL:      publicURL,
 		MetricsToken:   cfg.MetricsToken,
 		UpdateInfo:     updateInfo,
+		Platforms:      registro,
+		Tokens:         gestorTokens,
+		Chat:           chatBus,
+		ChatStats:      agregador.Stats,
+		// El padre de los sondeos de autorización en curso: el mismo contexto de vida
+		// de los sinks, para que se corten en el apagado en vez de sobrevivir hasta que
+		// venza el código de dispositivo (30 min).
+		BaseContext: sinkCtx,
 		ExtraMetrics: []httpapi.ExtraMetrics{func() []httpapi.Metric {
 			ok, failed := webhooks.Stats()
 			return []httpapi.Metric{
@@ -630,12 +681,19 @@ func run(ctx context.Context, out io.Writer) error {
 	// aviso de apagado —el que más le importa a quien opera esto— se pierde siempre. El
 	// peor caso del cierre entero suma HTTP 5 s + redirección 2 s + WaitIdle 5 s + hub 3 s +
 	// fondo 10 s + ingesta 3 s = 28 s, por debajo del TimeoutStopSec=30 de systemd.
+	//
+	// api.Wait() se suma a la MISMA espera y no a una nueva: espera a los sondeos de
+	// autorización en curso (platforms.go), que cuelgan de BaseContext = sinkCtx, ya
+	// cancelado arriba, así que terminan solos y rápido. Sumar un tope propio habría
+	// dejado el apagado en 38 s, por encima de los 30 de systemd; comparten el mismo
+	// presupuesto de 10 s porque ninguno de los dos escribe en la base tras su propio
+	// Wait, así que da igual cuál termine primero.
 	finFondo := make(chan struct{})
-	go func() { fondo.Wait(); close(finFondo) }()
+	go func() { fondo.Wait(); api.Wait(); close(finFondo) }()
 	select {
 	case <-finFondo:
 	case <-time.After(10 * time.Second):
-		logger.Warn("los avisos y el mantenimiento no terminaron en 10s; se sigue adelante")
+		logger.Warn("los avisos, el mantenimiento o los sondeos de autorización no terminaron en 10s; se sigue adelante")
 	}
 	return nil
 }
