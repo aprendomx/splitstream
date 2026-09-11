@@ -57,6 +57,24 @@ type Options struct {
 	// tests no esperen minutos de verdad.
 	TransitionRetry    time.Duration
 	TransitionDeadline time.Duration
+	// ChatBudget entrega lo gastado y el presupuesto diario de cuota de una cuenta; nil
+	// desactiva el chequeo (se sondea sin protección de presupuesto). ok en falso significa
+	// que no se pudo leer la cuota: es protección, no bloqueo, así que ReadChat sondea
+	// igual y solo deja un warning.
+	ChatBudget func(accountID int64) (used, budget int, ok bool)
+	// OnChatPaused avisa que el chat se dejó de sondear por presupuesto (propio o por
+	// quotaExceeded de Google), con las unidades usadas y el presupuesto en ese momento.
+	OnChatPaused func(acct store.Account, used, budget int)
+	// ChatNoBroadcastWait/ChatNoBroadcastGiveUp gobiernan la espera cuando ReadChat no
+	// encuentra ninguna emisión activa (spec: 30 s / 10 min por defecto).
+	ChatNoBroadcastWait   time.Duration
+	ChatNoBroadcastGiveUp time.Duration
+	// MinPoll es el piso del intervalo de sondeo del chat (spec: 2 s por defecto), sin
+	// importar lo que pida pollingIntervalMillis.
+	MinPoll time.Duration
+	// Sleep espera d o se rinde si ctx termina; nil duerme de verdad con time.After. Los
+	// tests lo inyectan para registrar duraciones sin dormir.
+	Sleep func(ctx context.Context, d time.Duration) error
 }
 
 type Provider struct {
@@ -68,6 +86,13 @@ type Provider struct {
 	quota     func(accountID int64) platforms.QuotaSink
 	retry     time.Duration
 	deadline  time.Duration
+
+	chatBudget            func(accountID int64) (used, budget int, ok bool)
+	onChatPaused          func(acct store.Account, used, budget int)
+	chatNoBroadcastWait   time.Duration
+	chatNoBroadcastGiveUp time.Duration
+	minPoll               time.Duration
+	sleep                 func(ctx context.Context, d time.Duration) error
 }
 
 // New construye el proveedor. Los tests SIEMPRE deben inyectar OAuthBase y APIBase (los
@@ -76,7 +101,10 @@ type Provider struct {
 func New(o Options) *Provider {
 	p := &Provider{http: o.HTTPClient, oauthBase: o.OAuthBase, apiBase: o.APIBase,
 		now: o.Now, logger: o.Logger, quota: o.Quota,
-		retry: o.TransitionRetry, deadline: o.TransitionDeadline}
+		retry: o.TransitionRetry, deadline: o.TransitionDeadline,
+		chatBudget: o.ChatBudget, onChatPaused: o.OnChatPaused,
+		chatNoBroadcastWait: o.ChatNoBroadcastWait, chatNoBroadcastGiveUp: o.ChatNoBroadcastGiveUp,
+		minPoll: o.MinPoll, sleep: o.Sleep}
 	if p.http == nil {
 		p.http = &http.Client{Timeout: 15 * time.Second}
 	}
@@ -91,6 +119,18 @@ func New(o Options) *Provider {
 	}
 	if p.logger == nil {
 		p.logger = slog.Default()
+	}
+	if p.chatNoBroadcastWait <= 0 {
+		p.chatNoBroadcastWait = defaultChatNoBroadcastWait
+	}
+	if p.chatNoBroadcastGiveUp <= 0 {
+		p.chatNoBroadcastGiveUp = defaultChatNoBroadcastGiveUp
+	}
+	if p.minPoll <= 0 {
+		p.minPoll = defaultMinPoll
+	}
+	if p.sleep == nil {
+		p.sleep = sleepReal
 	}
 	return p
 }

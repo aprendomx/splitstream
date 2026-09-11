@@ -258,6 +258,11 @@ type emisionSnippet struct {
 	Title              string `json:"title"`
 	Description        string `json:"description"`
 	ScheduledStartTime string `json:"scheduledStartTime"`
+	// LiveChatID identifica el chat de la emisión (spec Task 5): se lee de findBroadcast
+	// para no duplicar la llamada a liveBroadcasts.list. omitempty porque es de solo
+	// lectura: cuando updateTitle reenvía el snippet completo, no vale la pena repetirlo
+	// en un PUT que solo puede escribir title/description/scheduledStartTime.
+	LiveChatID string `json:"liveChatId,omitempty"`
 }
 
 // SetTitle no recibe la emisión (la interfaz platforms.TitleSetter es la misma para
