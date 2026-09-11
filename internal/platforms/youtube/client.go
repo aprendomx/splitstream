@@ -52,6 +52,11 @@ type Options struct {
 	// ejemplo en los tests de este paquete que no ejercitan gastar()): entonces gastar no
 	// hace nada, nunca revienta.
 	Quota func(accountID int64) platforms.QuotaSink
+	// TransitionRetry/TransitionDeadline gobiernan el reintento de StartBroadcast mientras
+	// el stream esté inactivo (spec §5: 5 s / 60 s por defecto). Inyectables para que los
+	// tests no esperen minutos de verdad.
+	TransitionRetry    time.Duration
+	TransitionDeadline time.Duration
 }
 
 type Provider struct {
@@ -61,6 +66,8 @@ type Provider struct {
 	now       func() time.Time
 	logger    *slog.Logger
 	quota     func(accountID int64) platforms.QuotaSink
+	retry     time.Duration
+	deadline  time.Duration
 }
 
 // New construye el proveedor. Los tests SIEMPRE deben inyectar OAuthBase y APIBase (los
@@ -68,7 +75,8 @@ type Provider struct {
 // las credenciales van por cuenta (RequiresOwnApp) y Configured() es fijo.
 func New(o Options) *Provider {
 	p := &Provider{http: o.HTTPClient, oauthBase: o.OAuthBase, apiBase: o.APIBase,
-		now: o.Now, logger: o.Logger, quota: o.Quota}
+		now: o.Now, logger: o.Logger, quota: o.Quota,
+		retry: o.TransitionRetry, deadline: o.TransitionDeadline}
 	if p.http == nil {
 		p.http = &http.Client{Timeout: 15 * time.Second}
 	}

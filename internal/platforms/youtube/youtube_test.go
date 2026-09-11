@@ -290,7 +290,9 @@ func TestErrorsCarryTheReasonNeverTheToken(t *testing.T) {
 }
 
 func TestCapabilities(t *testing.T) {
-	p := youtube.New(youtube.Options{})
+	// Ruling (diferible de Task 3): el invariante "ningún New de test sin hosts" es
+	// literal, así que aquí también se inyectan hosts dummy que jamás se llaman.
+	p := youtube.New(youtube.Options{OAuthBase: "http://127.0.0.1:0", APIBase: "http://127.0.0.1:0"})
 	if p.ID() != platforms.YouTube {
 		t.Errorf("ID() = %v", p.ID())
 	}

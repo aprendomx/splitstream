@@ -1,0 +1,1 @@
+{"kind":"youtube#liveStream","id":"stream789","cdn":{"ingestionType":"rtmp","resolution":"variable","frameRate":"variable","ingestionInfo":{"streamName":"abcd-efgh-ijkl-mnop","ingestionAddress":"rtmp://a.rtmp.youtube.com/live2","backupIngestionAddress":"rtmp://b.rtmp.youtube.com/live2?backup=1"}},"status":{"streamStatus":"ready"}}
