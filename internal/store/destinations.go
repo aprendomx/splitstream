@@ -108,6 +108,9 @@ type Destination struct {
 	SortOrder int
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// AccountID es el id de la cuenta vinculada, nil sin cuenta; sale del JOIN con
+	// destination_accounts para que el DTO no haga una consulta más.
+	AccountID *int64
 }
 
 // NewDestination son los datos para crear un destino.
@@ -131,8 +134,9 @@ type DestinationPatch struct {
 // ListDestinations devuelve todos los destinos ordenados por sort_order.
 func (d *DB) ListDestinations(ctx context.Context) ([]Destination, error) {
 	rows, err := d.ex.QueryContext(ctx,
-		`SELECT id, name, platform, rtmp_url, stream_key_last4, enabled, sort_order, created_at, updated_at
-		 FROM destinations ORDER BY sort_order, id`)
+		`SELECT d.id, d.name, d.platform, d.rtmp_url, d.stream_key_last4, d.enabled, d.sort_order, d.created_at, d.updated_at, da.account_id
+		 FROM destinations d LEFT JOIN destination_accounts da ON da.destination_id = d.id
+		 ORDER BY d.sort_order, d.id`)
 	if err != nil {
 		return nil, fmt.Errorf("listar destinos: %w", err)
 	}
@@ -391,8 +395,9 @@ func (d *DB) DestinationByID(ctx context.Context, id int64) (*Destination, error
 
 func (d *DB) destination(ctx context.Context, id int64) (*Destination, error) {
 	row := d.ex.QueryRowContext(ctx,
-		`SELECT id, name, platform, rtmp_url, stream_key_last4, enabled, sort_order, created_at, updated_at
-		 FROM destinations WHERE id = ?`, id)
+		`SELECT d.id, d.name, d.platform, d.rtmp_url, d.stream_key_last4, d.enabled, d.sort_order, d.created_at, d.updated_at, da.account_id
+		 FROM destinations d LEFT JOIN destination_accounts da ON da.destination_id = d.id
+		 WHERE d.id = ?`, id)
 	dest, err := scanDestination(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrDestinationNotFound
@@ -411,9 +416,10 @@ func scanDestination(s scanner) (*Destination, error) {
 		enabled   int
 		createdAt string
 		updatedAt string
+		acct      sql.NullInt64
 	)
 	if err := s.Scan(&dest.ID, &dest.Name, &platform, &dest.RTMPURL, &last4,
-		&enabled, &dest.SortOrder, &createdAt, &updatedAt); err != nil {
+		&enabled, &dest.SortOrder, &createdAt, &updatedAt, &acct); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -423,6 +429,10 @@ func scanDestination(s scanner) (*Destination, error) {
 	dest.Platform = Platform(platform)
 	dest.KeyMask = crypto.Secret(last4).Mask()
 	dest.Enabled = enabled == 1
+	if acct.Valid {
+		v := acct.Int64
+		dest.AccountID = &v
+	}
 
 	var err error
 	if dest.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
