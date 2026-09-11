@@ -21,6 +21,12 @@ type lectorFalso struct {
 	arranques atomic.Int32
 	paradas   atomic.Int32
 	n         int
+	// espera, si no es nil, hace que ReadChat bloquee antes de emitir sus n mensajes hasta
+	// que se cierre el canal (o el contexto se cancele). Sirve para intercalar, en una
+	// prueba, el cierre de la base entre el arranque del lector (cuentas ya listadas con
+	// la base viva) y la escritura del lote: nil conserva el comportamiento de siempre,
+	// emitir en cuanto arranca.
+	espera chan struct{}
 }
 
 func (l *lectorFalso) ID() platforms.ID { return platforms.Twitch }
@@ -45,6 +51,13 @@ func (l *lectorFalso) ReadChat(ctx context.Context, acct store.Account, tok plat
 	defer l.paradas.Add(1)
 	if _, err := tok(ctx); err != nil {
 		return err
+	}
+	if l.espera != nil {
+		select {
+		case <-l.espera:
+		case <-ctx.Done():
+			return nil
+		}
 	}
 	for i := 0; i < l.n; i++ {
 		out <- platforms.ChatMessage{Platform: platforms.Twitch, AccountID: acct.ID, AuthorID: "u", Author: "v", Text: "m", At: time.Now()}
@@ -180,17 +193,25 @@ func TestAggregatorIgnoresAccountsWithoutEnabledLinkedDestinationOrInReauth(t *t
 }
 
 func TestAggregatorDropsWhenTheStoreFailsInsteadOfBlocking(t *testing.T) {
-	db, _, _, _, ag, _ := montar(t, 30)
+	db, _, _, lector, ag, _ := montar(t, 30)
+	// La señal retiene los 30 mensajes del lector hasta que la prueba la suelte: así el
+	// cierre de la base cae entre que el lector arrancó (cuentas ya listadas con la base
+	// viva) y que su lote se intenta insertar, que es el escenario que se quiere probar sin
+	// dejarlo a una carrera contra Aggregator.arrancar.
+	lector.espera = make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ag.Run(ctx)
-	sid := sesion(t, db)
-	// Se cierra la base debajo del agregador: los lotes fallan, se cuentan y nada se cuelga.
+	sesion(t, db)
+	esperar(t, func() bool { return lector.arranques.Load() == 1 }, "el lector no arrancó con la sesión")
+
+	// Se cierra la base con el lector ya corriendo y se suelta la señal: sus 30 mensajes
+	// llegan al lote, pero el INSERT falla porque la base ya no está.
 	db.Close()
-	time.Sleep(200 * time.Millisecond)
-	_, _, dropped := ag.Stats()
-	if dropped == 0 {
-		t.Error("los mensajes no persistidos deberían contarse como descartados")
-	}
-	_ = sid
+	close(lector.espera)
+
+	esperar(t, func() bool {
+		_, _, dropped := ag.Stats()
+		return dropped == 30
+	}, "los 30 mensajes del lote fallido deberían contarse como descartados")
 }

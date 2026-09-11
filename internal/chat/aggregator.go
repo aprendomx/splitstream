@@ -93,10 +93,9 @@ func (a *Aggregator) arrancar(ctx context.Context, sessionID int64) {
 	a.cfg.Chat.Reset()
 	cuentas, err := a.cuentasConChat(ctx)
 	if err != nil {
-		// Si la base ya no responde (p. ej. se cerró debajo de nosotros), la sesión se
-		// queda sin chat entero: no hay un lote concreto que contar, pero silenciarlo del
-		// todo dejaría el fallo invisible en /metrics. Se cuenta como un lote perdido.
-		a.dropped.Add(1)
+		// dropped cuenta MENSAJES perdidos, no intentos de arranque: si no se pudo ni
+		// listar cuentas, ningún mensaje llegó a leerse, así que no hay nada que sumar
+		// aquí. El log es la señal de este fallo.
 		a.cfg.Logger.Error("no se pudieron listar las cuentas para el chat", "err", err)
 		return
 	}
