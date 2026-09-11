@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -190,6 +191,42 @@ func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Si el patch vincula una cuenta, la plataforma se valida ANTES de tocar la base: sin
+	// esto, un 400 por plataformas distintas dejaba el resto del patch ya aplicado —
+	// UpdateDestination confirmaba antes de que LinkDestination lo rechazara.
+	var vincular *int64
+	if len(in.AccountID) > 0 && !bytes.Equal(bytes.TrimSpace(in.AccountID), []byte("null")) {
+		var accountID int64
+		if err := json.Unmarshal(in.AccountID, &accountID); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidInput, "account_id inválido")
+			return
+		}
+		acct, err := s.db.AccountByID(r.Context(), accountID)
+		if err != nil {
+			s.writeStoreError(w, err)
+			return
+		}
+		// La plataforma resultante es la del patch si lo trae, o si no la del destino tal
+		// como está ahora: es la que tendrá el destino cuando el patch termine de aplicarse.
+		var resultante store.Platform
+		if in.Platform != nil {
+			resultante = store.Platform(*in.Platform)
+		} else {
+			actual, err := s.db.DestinationByID(r.Context(), id)
+			if err != nil {
+				s.writeStoreError(w, err)
+				return
+			}
+			resultante = actual.Platform
+		}
+		if resultante != acct.Platform {
+			writeError(w, http.StatusBadRequest, codeInvalidInput,
+				fmt.Sprintf("la cuenta es de %s y el destino de %s", acct.Platform, resultante))
+			return
+		}
+		vincular = &accountID
+	}
+
 	patch := store.DestinationPatch{Name: in.Name, RTMPURL: in.RTMPURL, Enabled: in.Enabled}
 	if in.Platform != nil {
 		p := store.Platform(*in.Platform)
@@ -207,20 +244,15 @@ func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// El enlace con la cuenta va aparte del resto del patch: distingue "no lo mandaron"
-	// (json.RawMessage vacío) de `null` (desvincular) de un número (vincular).
+	// (json.RawMessage vacío) de `null` (desvincular) de un número ya validado (vincular).
 	if len(in.AccountID) > 0 {
-		if bytes.Equal(bytes.TrimSpace(in.AccountID), []byte("null")) {
+		if vincular == nil {
 			if err := s.db.UnlinkDestination(r.Context(), id); err != nil {
 				s.writeStoreError(w, err)
 				return
 			}
 		} else {
-			var accountID int64
-			if err := json.Unmarshal(in.AccountID, &accountID); err != nil {
-				writeError(w, http.StatusBadRequest, codeInvalidInput, "account_id inválido")
-				return
-			}
-			if err := s.db.LinkDestination(r.Context(), id, accountID); err != nil {
+			if err := s.db.LinkDestination(r.Context(), id, *vincular); err != nil {
 				s.writeStoreError(w, err)
 				return
 			}

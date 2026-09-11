@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -23,6 +24,9 @@ type fakeProvider struct {
 	titulos    []string
 	categorias []string
 	fallaTitle error
+	// estados cuenta las llamadas a BeginAuth: cada una da un state distinto, para poder
+	// tener varios flujos vivos a la vez sobre el mismo proveedor (tope I-2).
+	estados int
 }
 
 func (f *fakeProvider) ID() platforms.ID { return platforms.Twitch }
@@ -34,7 +38,11 @@ func (f *fakeProvider) BeginAuth(context.Context) (platforms.AuthPrompt, error) 
 	if !f.configured {
 		return platforms.AuthPrompt{}, platforms.ErrNoClientID
 	}
-	return platforms.AuthPrompt{State: "estado-1", VerificationURI: "https://www.twitch.tv/activate", UserCode: "ABCDEFGH",
+	f.mu.Lock()
+	f.estados++
+	state := fmt.Sprintf("estado-%d", f.estados)
+	f.mu.Unlock()
+	return platforms.AuthPrompt{State: state, VerificationURI: "https://www.twitch.tv/activate", UserCode: "ABCDEFGH",
 		DeviceCode: "secreto-dispositivo", ExpiresAt: time.Now().Add(30 * time.Minute), Interval: time.Millisecond}, nil
 }
 func (f *fakeProvider) PollAuth(context.Context, platforms.AuthPrompt) (store.NewAccount, error) {
@@ -137,10 +145,11 @@ func TestAuthFlowPollsUntilDoneAndCreatesTheAccount(t *testing.T) {
 	if len(cuentas) != 1 || cuentas[0].Status != store.AccountStatusOK {
 		t.Errorf("cuentas = %+v", cuentas)
 	}
-	// El flujo terminado se puede consultar una vez más y luego desaparece.
+	// El flujo terminado ya se entregó una vez arriba —la propia consulta que lo vio
+	// "done" lo borró—, así que esta consulta siguiente tiene que dar 404, no 200.
 	rec = do(t, srv, ck, http.MethodGet, "/api/platforms/twitch/auth/"+inicio.State, "")
-	if rec.Code != 200 && rec.Code != 404 {
-		t.Errorf("tras done: %d", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("tras done: %d, quería 404", rec.Code)
 	}
 	if rec := do(t, srv, ck, http.MethodGet, "/api/platforms/twitch/auth/inventado", ""); rec.Code != 404 {
 		t.Errorf("state desconocido = %d", rec.Code)
@@ -211,6 +220,11 @@ func TestAccountsListAndDeleteWithoutLeakingTokens(t *testing.T) {
 	if rec := do(t, srv, ck, http.MethodPatch, "/api/destinations/"+itoa(yt.ID), `{"platform":"youtube","account_id":`+itoa(a.ID)+`}`); rec.Code != 400 {
 		t.Errorf("plataformas distintas = %d", rec.Code)
 	}
+	// El 400 no deja el patch a medias: la plataforma del destino sigue siendo la
+	// original, no "youtube" (I-3: la validación va ANTES de tocar la base).
+	if tras, err := db.DestinationByID(context.Background(), yt.ID); err != nil || tras.Platform != store.PlatformCustom {
+		t.Errorf("yt.Platform tras el 400 = %v (err=%v), quería %q sin tocar", tras, err, store.PlatformCustom)
+	}
 	// Se reasigna la `rec` de fuera (sin `:=`): si se declarara una nueva aquí, el
 	// Unmarshal de abajo seguiría leyendo la respuesta del GET /api/accounts de más
 	// arriba en vez de la de este PATCH.
@@ -232,5 +246,97 @@ func TestAccountsListAndDeleteWithoutLeakingTokens(t *testing.T) {
 	ev, _ := db.RecentEvents(context.Background(), 5)
 	if len(ev) == 0 || ev[0].Kind != "account_disconnected" {
 		t.Errorf("eventos = %+v", ev)
+	}
+}
+
+// TestAuthFlowSweepRemovesExpiredEntriesRegardlessOfStatus cubre I-1: antes, la barrida
+// solo miraba `pending`, así que un flujo ya terminado (done/expired/error) —que es como
+// sondear() los deja mucho antes de que venza su código— nunca se borraba. Se inserta la
+// entrada ya vencida directamente en el mapa (una de las dos formas que pedía la ronda de
+// arreglo) para no depender de esperar de verdad.
+func TestAuthFlowSweepRemovesExpiredEntriesRegardlessOfStatus(t *testing.T) {
+	srv, _, ck := servidorPlataformas(t, &fakeProvider{configured: true})
+
+	srv.auths.mu.Lock()
+	srv.auths.flows["vencido"] = &authFlow{status: "done", expira: time.Now().Add(-2 * time.Hour), platform: platforms.Twitch}
+	srv.auths.mu.Unlock()
+
+	// Cualquier GET a /auth/{state} —incluso a un state que no existe— dispara la
+	// barrida en handleAuthStatus.
+	if rec := do(t, srv, ck, http.MethodGet, "/api/platforms/twitch/auth/otro-inexistente", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("consulta de control = %d", rec.Code)
+	}
+	if rec := do(t, srv, ck, http.MethodGet, "/api/platforms/twitch/auth/vencido", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("el flujo vencido (status=done) no se limpió: %d", rec.Code)
+	}
+}
+
+// TestAuthFlowCapsLiveFlowsPerPlatform cubre I-2: con un proveedor que nunca resuelve el
+// sondeo (PollAuth siempre "pendiente"), el noveno POST sobre la misma plataforma debe
+// rechazarse con 409 en vez de arrancar una novena goroutine de sondeo.
+func TestAuthFlowCapsLiveFlowsPerPlatform(t *testing.T) {
+	p := &fakeProvider{configured: true, pendientes: 1 << 30} // "nunca" termina
+	ctx, cancel := context.WithCancel(context.Background())
+	srv, _ := newTestServer(t, func(c *Config) {
+		c.Platforms = platforms.NewRegistry(p)
+		c.Tokens = tokensFalsos{db: c.DB, c: c.Cipher}
+		c.BaseContext = ctx
+	})
+	ck := login(t, srv)
+	// Cancelar BaseContext y esperar a que las goroutines de sondeo salgan: si no, siguen
+	// vivas sondeando cada pocos milisegundos durante el resto de la suite.
+	t.Cleanup(func() {
+		cancel()
+		srv.Wait()
+	})
+
+	for i := 0; i < maxFlujosPorPlataforma; i++ {
+		if rec := do(t, srv, ck, http.MethodPost, "/api/platforms/twitch/auth", ""); rec.Code != http.StatusOK {
+			t.Fatalf("POST %d = %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	rec := do(t, srv, ck, http.MethodPost, "/api/platforms/twitch/auth", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("noveno POST = %d, quería 409: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "demasiadas conexiones") {
+		t.Errorf("mensaje = %s", rec.Body)
+	}
+}
+
+// TestServerWaitReturnsAfterBaseContextCancelWithAPendingFlow cubre la última pata de I-2:
+// Wait() no debe bloquear para siempre si BaseContext se cancela mientras un flujo sigue
+// pendiente — es justo lo que hace main.go al apagar el proceso.
+func TestServerWaitReturnsAfterBaseContextCancelWithAPendingFlow(t *testing.T) {
+	p := &fakeProvider{configured: true, pendientes: 1 << 30}
+	ctx, cancel := context.WithCancel(context.Background())
+	srv, _ := newTestServer(t, func(c *Config) {
+		c.Platforms = platforms.NewRegistry(p)
+		c.Tokens = tokensFalsos{db: c.DB, c: c.Cipher}
+		c.BaseContext = ctx
+	})
+	ck := login(t, srv)
+
+	rec := do(t, srv, ck, http.MethodPost, "/api/platforms/twitch/auth", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST = %d %s", rec.Code, rec.Body)
+	}
+	var inicio authStartDTO
+	json.Unmarshal(rec.Body.Bytes(), &inicio)
+
+	rec = do(t, srv, ck, http.MethodGet, "/api/platforms/twitch/auth/"+inicio.State, "")
+	var estado authStatusDTO
+	json.Unmarshal(rec.Body.Bytes(), &estado)
+	if estado.Status != "pending" {
+		t.Fatalf("estado = %+v, quería pending", estado)
+	}
+
+	cancel()
+	done := make(chan struct{})
+	go func() { srv.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Wait() no volvió tras cancelar BaseContext con un flujo pendiente")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync"
 
 	"github.com/aprendomx/splitstream/internal/chat"
 	"github.com/aprendomx/splitstream/internal/crypto"
@@ -156,6 +157,11 @@ type Config struct {
 	Chat *chat.Bus
 	// ChatStats alimenta /metrics.
 	ChatStats func() (map[platforms.ID]uint64, map[platforms.ID]bool, uint64)
+	// BaseContext es el padre de los flujos de autorización en curso (platforms.go): al
+	// cancelarlo, todos los sondeos en marcha cortan en vez de seguir vivos hasta que
+	// venza su código de dispositivo. Nil usa context.Background(); main.go le pasará el
+	// contexto de vida de los sinks en la Task 7.
+	BaseContext context.Context
 }
 
 // Server sirve la API del spec §9.
@@ -190,6 +196,10 @@ type Server struct {
 	chatStats    func() (map[platforms.ID]uint64, map[platforms.ID]bool, uint64)
 	// auths son los flujos de dispositivo en curso (ver platforms.go).
 	auths *authFlows
+	// baseCtx es el padre de los flujos de autorización en curso; wg cuenta sus
+	// goroutines de sondeo para que Wait() pueda esperarlas.
+	baseCtx context.Context
+	wg      sync.WaitGroup
 }
 
 func New(cfg Config) (*Server, error) {
@@ -207,6 +217,10 @@ func New(cfg Config) (*Server, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	baseCtx := cfg.BaseContext
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
 
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
@@ -220,7 +234,8 @@ func New(cfg Config) (*Server, error) {
 		tls:     cfg.TLS, publicURL: cfg.PublicURL,
 		updateInfo: cfg.UpdateInfo,
 		platforms:  cfg.Platforms, tokens: cfg.Tokens, chat: cfg.Chat, chatStats: cfg.ChatStats,
-		auths: &authFlows{flows: map[string]*authFlow{}},
+		auths:   &authFlows{flows: map[string]*authFlow{}},
+		baseCtx: baseCtx,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto

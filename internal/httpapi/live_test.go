@@ -3,10 +3,12 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/aprendomx/splitstream/internal/platforms"
 	"github.com/aprendomx/splitstream/internal/store"
 )
 
@@ -82,5 +84,44 @@ func TestCategoriesSearchUsesTheFirstOKTwitchAccount(t *testing.T) {
 	}
 	if rec := do(t, srv, ck, http.MethodGet, "/api/platforms/twitch/categories?q=", ""); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != "[]" {
 		t.Errorf("q vacía = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestLiveTitleReportsPlatformErrorsWithoutLeakingTheToken cubre I-5: un error de la
+// plataforma —tanto el traducido (ErrUnauthorized) como uno genérico— tiene que llegar
+// como un resultado legible (ok: false, mensaje) y nunca con el token de por medio.
+func TestLiveTitleReportsPlatformErrorsWithoutLeakingTheToken(t *testing.T) {
+	p := &fakeProvider{configured: true}
+	srv, db, ck := servidorPlataformas(t, p)
+	a := cuentaViaStore(t, srv, db)
+	d, err := db.CreateDestination(context.Background(), srv.cipher, store.NewDestination{
+		Name: "Twitch", Platform: store.PlatformTwitch, RTMPURL: "rtmp://x/app", Key: "k", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LinkDestination(context.Background(), d.ID, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"title":"x","destinations":[` + itoa(d.ID) + `]}`
+
+	p.fallaTitle = platforms.ErrUnauthorized
+	rec := do(t, srv, ck, http.MethodPost, "/api/live/title", body)
+	var res []liveResultDTO
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if rec.Code != 200 || len(res) != 1 || res[0].OK || !strings.Contains(res[0].Message, "reconéctala") {
+		t.Errorf("no autorizado: %d %+v", rec.Code, res)
+	}
+	if strings.Contains(rec.Body.String(), "tok-acceso-fixture") {
+		t.Error("la respuesta lleva el token (ErrUnauthorized)")
+	}
+
+	p.fallaTitle = errors.New("boom")
+	rec = do(t, srv, ck, http.MethodPost, "/api/live/title", body)
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if rec.Code != 200 || len(res) != 1 || res[0].OK || !strings.Contains(res[0].Message, "boom") {
+		t.Errorf("error genérico: %d %+v", rec.Code, res)
+	}
+	if strings.Contains(rec.Body.String(), "tok-acceso-fixture") {
+		t.Error("la respuesta lleva el token (error genérico)")
 	}
 }

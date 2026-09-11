@@ -35,11 +35,53 @@ type authFlows struct {
 }
 
 type authFlow struct {
-	status  string // pending | done | expired | error
-	account *store.Account
-	message string
-	expira  time.Time
-	cancel  context.CancelFunc
+	status   string // pending | done | expired | error
+	account  *store.Account
+	message  string
+	expira   time.Time
+	cancel   context.CancelFunc
+	platform platforms.ID
+}
+
+// maxFlujosPorPlataforma tope de flujos "pending" simultáneos por plataforma. Cada uno es
+// una goroutine sondeando de por vida (hasta 30 min): sin tope, refrescar la pestaña del
+// panel muchas veces podría acumular goroutines sin límite.
+const maxFlujosPorPlataforma = 8
+
+// Wait bloquea hasta que todas las goroutines de sondeo de autorización en curso terminen
+// —porque acabaron, vencieron, o porque BaseContext se canceló—. main.go la llama antes de
+// cerrar la base, para no dejar una goroutine escribiendo en una conexión ya cerrada.
+func (s *Server) Wait() { s.wg.Wait() }
+
+// limpiarVencidos borra del mapa las entradas —EN CUALQUIER ESTADO— cuya expiración quedó
+// atrás hace más de un minuto.
+//
+// Antes solo miraba `pending`, pero sondear() deja el flujo en done/expired/error mucho
+// antes de que venza su código (el propio sondeo termina en cuanto la persona autoriza o
+// el código caduca), así que esa condición nunca se cumplía y el mapa solo se limpiaba de
+// las entradas "pending" cuyo estado no había cambiado en absoluto — nada práctico. Solo
+// `expira` importa. Debe llamarse con auths.mu ya tomado.
+func (s *Server) limpiarVencidos() {
+	ahora := time.Now()
+	for k, v := range s.auths.flows {
+		if ahora.After(v.expira.Add(time.Minute)) {
+			delete(s.auths.flows, k)
+		}
+	}
+}
+
+// flujosVivos cuenta los flujos "pending" de una plataforma, tras barrer los vencidos.
+func (s *Server) flujosVivos(id platforms.ID) int {
+	s.auths.mu.Lock()
+	defer s.auths.mu.Unlock()
+	s.limpiarVencidos()
+	var n int
+	for _, v := range s.auths.flows {
+		if v.platform == id && v.status == "pending" {
+			n++
+		}
+	}
+	return n
 }
 
 type authStartDTO struct {
@@ -76,6 +118,11 @@ func (s *Server) handleStartAuth(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.flujosVivos(p.ID()) >= maxFlujosPorPlataforma {
+		writeError(w, http.StatusConflict, codeConflict,
+			"hay demasiadas conexiones en curso; espera a que terminen o venzan")
+		return
+	}
 	prompt, err := p.BeginAuth(r.Context())
 	if errors.Is(err, platforms.ErrNoClientID) {
 		writeError(w, http.StatusConflict, codeConflict,
@@ -87,12 +134,19 @@ func (s *Server) handleStartAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, codeInternal, "la plataforma no respondió")
 		return
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), prompt.ExpiresAt)
-	f := &authFlow{status: "pending", expira: prompt.ExpiresAt, cancel: cancel}
+	// El sondeo cuelga de BaseContext, no de la petición HTTP: cerrar la pestaña no debe
+	// cancelarlo (la persona puede estar autorizando desde el móvil), pero apagar el
+	// proceso sí — y Wait() deja que main.go espere a que esa cancelación surta efecto.
+	ctx, cancel := context.WithDeadline(s.baseCtx, prompt.ExpiresAt)
+	f := &authFlow{status: "pending", expira: prompt.ExpiresAt, cancel: cancel, platform: p.ID()}
 	s.auths.mu.Lock()
 	s.auths.flows[prompt.State] = f
 	s.auths.mu.Unlock()
-	go s.sondear(ctx, p, prompt, f)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.sondear(ctx, p, prompt, f)
+	}()
 
 	writeJSON(w, http.StatusOK, authStartDTO{State: prompt.State, VerificationURI: prompt.VerificationURI,
 		UserCode: prompt.UserCode, ExpiresIn: int(time.Until(prompt.ExpiresAt).Seconds())})
@@ -100,7 +154,13 @@ func (s *Server) handleStartAuth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) sondear(ctx context.Context, p platforms.Provider, prompt platforms.AuthPrompt, f *authFlow) {
 	defer f.cancel()
-	espera := prompt.Interval
+	// Un proveedor que devuelva Interval <= 0 no debe convertir el sondeo en un bucle
+	// cerrado machacando PollAuth: 5 s es una espera prudente si no dice nada.
+	intervalo := prompt.Interval
+	if intervalo <= 0 {
+		intervalo = 5 * time.Second
+	}
+	espera := intervalo
 	for {
 		select {
 		case <-ctx.Done():
@@ -124,7 +184,7 @@ func (s *Server) sondear(ctx context.Context, p platforms.Provider, prompt platf
 			// slow_down no está documentado por Twitch; si el proveedor lo tradujo a
 			// pendiente, doblar la espera no cuesta nada.
 			if espera < 30*time.Second {
-				espera += prompt.Interval / 2
+				espera += intervalo / 2
 			}
 		case errors.Is(err, platforms.ErrAuthExpired):
 			s.terminar(f, "expired", nil, "el código venció; vuelve a empezar")
@@ -159,11 +219,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		// se limpian de paso.
 		delete(s.auths.flows, state)
 	}
-	for k, v := range s.auths.flows {
-		if v.status == "pending" && time.Now().After(v.expira.Add(time.Minute)) {
-			delete(s.auths.flows, k)
-		}
-	}
+	s.limpiarVencidos()
 	// Estado, mensaje y cuenta se copian AQUÍ, todavía con el candado puesto: sondear()
 	// escribe esos mismos campos desde su goroutine, y leerlos fuera del candado sería una
 	// carrera de datos aunque el mapa ya esté a salvo.
@@ -218,7 +274,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, err)
 		return
 	}
-	s.db.LogEvent(r.Context(), store.Event{Level: store.LevelInfo, Kind: "account_disconnected",
+	s.db.LogEvent(context.WithoutCancel(r.Context()), store.Event{Level: store.LevelInfo, Kind: "account_disconnected",
 		Message: "cuenta de " + nombresPlataforma[platforms.ID(acct.Platform)] + " desconectada: " + acct.DisplayName})
 	w.WriteHeader(http.StatusNoContent)
 }

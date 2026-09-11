@@ -13,13 +13,19 @@ import (
 )
 
 func chatDTO(m chat.Message) chatMessageDTO {
-	acct := m.AccountID
 	badges := m.Badges
 	if badges == nil {
 		badges = []string{}
 	}
-	return chatMessageDTO{SessionID: m.SessionID, Platform: string(m.Platform), AccountID: &acct, AuthorID: m.AuthorID,
+	dto := chatMessageDTO{SessionID: m.SessionID, Platform: string(m.Platform), AuthorID: m.AuthorID,
 		Author: m.Author, Text: m.Text, Color: m.Color, Badges: badges, MessageID: m.MessageID, At: m.At}
+	// AccountID en 0 significa "sin cuenta" (mensaje de un chat sin cuenta vinculada, o de
+	// una plataforma que no la lleva): null, igual que storedChatDTO, y no el 0 literal.
+	if m.AccountID != 0 {
+		acct := m.AccountID
+		dto.AccountID = &acct
+	}
+	return dto
 }
 
 func storedChatDTO(m store.ChatMessage) chatMessageDTO {
