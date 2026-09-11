@@ -142,6 +142,9 @@ func (m *Manager) marcarReauth(ctx context.Context, acct store.Account) error {
 // Vuelve en cuanto ctx termina; los fallos de red se loguean a debug y se reintentan en la
 // siguiente vuelta.
 func (m *Manager) Run(ctx context.Context) {
+	// Twitch pide validar «al arrancar y cada hora después»: la primera pasada va ya, sin
+	// esperar el primer tick. Sin cuentas en la base no hace ninguna petición.
+	m.validarTodas(ctx)
 	t := time.NewTimer(m.Interval)
 	defer t.Stop()
 	for {

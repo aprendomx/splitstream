@@ -41,6 +41,12 @@ type Aggregator struct {
 	mensajes  map[platforms.ID]*atomic.Uint64
 	conectado map[platforms.ID]*atomic.Bool
 	dropped   atomic.Uint64
+
+	// eventos y soltar son la suscripción al bus, tomada en el constructor y no en Run:
+	// así la garantía de no perder el publisher_connected de la primera sesión no
+	// depende de que la goroutine de Run arranque antes que la ingesta.
+	eventos <-chan store.Event
+	soltar  func()
 }
 
 func NewAggregator(cfg Config) *Aggregator {
@@ -54,6 +60,7 @@ func NewAggregator(cfg Config) *Aggregator {
 		cfg.BatchSize = 50
 	}
 	a := &Aggregator{cfg: cfg, mensajes: map[platforms.ID]*atomic.Uint64{}, conectado: map[platforms.ID]*atomic.Bool{}}
+	a.eventos, a.soltar = cfg.Events.Subscribe(64)
 	for id := range cfg.Registry.AllCapabilities() {
 		a.mensajes[id] = &atomic.Uint64{}
 		a.conectado[id] = &atomic.Bool{}
@@ -65,8 +72,8 @@ func NewAggregator(cfg Config) *Aggregator {
 // publisher_disconnected los para. Vuelve con ctx. Se engancha al bus y no al motor para
 // que el motor siga sin conocer este paquete.
 func (a *Aggregator) Run(ctx context.Context) {
-	ch, release := a.cfg.Events.Subscribe(64)
-	defer release()
+	ch := a.eventos
+	defer a.soltar()
 	defer a.parar()
 	for {
 		select {
