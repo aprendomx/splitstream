@@ -249,6 +249,9 @@ func TestWithoutClientIDNothingWorks(t *testing.T) {
 	if _, err := p.BeginAuth(context.Background()); !errors.Is(err, platforms.ErrNoClientID) {
 		t.Errorf("err = %v", err)
 	}
+	if _, err := p.SearchCategories(context.Background(), "tok", "science"); !errors.Is(err, platforms.ErrNoClientID) {
+		t.Errorf("buscar categorías sin client_id: err = %v", err)
+	}
 	if twitch.ResolveClientID("  ") != twitch.ClientID || twitch.ResolveClientID("propio") != "propio" {
 		t.Error("ResolveClientID: el entorno manda; vacío es el incluido")
 	}

@@ -1,0 +1,65 @@
+{
+  "metadata": {
+    "message_id": "befa7b53-d79d-478f-86b9-120f112b044e",
+    "message_type": "notification",
+    "message_timestamp": "2023-11-06T18:11:47.492253549Z",
+    "subscription_type": "channel.chat.message",
+    "subscription_version": "1"
+  },
+  "payload": {
+    "subscription": {
+      "id": "0b7f3361-672b-4d39-b307-dd5b576c9b27",
+      "status": "enabled",
+      "type": "channel.chat.message",
+      "version": "1",
+      "condition": {
+        "broadcaster_user_id": "141981764",
+        "user_id": "141981764"
+      },
+      "transport": {
+        "method": "websocket",
+        "session_id": "AQoQILE98gtqShGmLD7AM6yJThAB"
+      },
+      "created_at": "2023-11-06T18:11:47.492253549Z",
+      "cost": 0
+    },
+    "event": {
+      "broadcaster_user_id": "141981764",
+      "broadcaster_user_login": "twitchdev",
+      "broadcaster_user_name": "TwitchDev",
+      "chatter_user_id": "4145994",
+      "chatter_user_login": "viewer32",
+      "chatter_user_name": "viewer32",
+      "message_id": "cc106a89-1814-919d-454c-f4f2f970aae7",
+      "message": {
+        "text": "Hi chat",
+        "fragments": [
+          {
+            "type": "text",
+            "text": "Hi chat",
+            "cheermote": null,
+            "emote": null,
+            "mention": null
+          }
+        ]
+      },
+      "color": "#00FF7F",
+      "badges": [
+        {
+          "set_id": "moderator",
+          "id": "1",
+          "info": ""
+        },
+        {
+          "set_id": "subscriber",
+          "id": "0",
+          "info": "0"
+        }
+      ],
+      "message_type": "text",
+      "cheer": null,
+      "reply": null,
+      "channel_points_custom_reward_id": null
+    }
+  }
+}

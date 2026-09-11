@@ -34,6 +34,10 @@ const (
 	defaultHelixBase   = "https://api.twitch.tv"
 	defaultEventSubURL = "wss://eventsub.wss.twitch.tv/ws"
 	boxArtSize         = "144x192"
+	// defaultChatBackoffMax y defaultKeepaliveGrace: el tope del backoff de reconexión del
+	// chat (§7) y el margen que se le da al keepalive de EventSub antes de darlo por muerto.
+	defaultChatBackoffMax = 30 * time.Second
+	defaultKeepaliveGrace = 5 * time.Second
 )
 
 // ResolveClientID: el entorno manda; vacío o espacios, el incluido.
@@ -50,18 +54,24 @@ type Options struct {
 	AuthBase    string
 	HelixBase   string
 	EventSubURL string
-	Now         func() time.Time
-	Logger      *slog.Logger
+	// ChatBackoffMax y KeepaliveGrace solo se inyectan en los tests, para no esperar
+	// segundos reales; en producción valen 30 s y 5 s.
+	ChatBackoffMax time.Duration
+	KeepaliveGrace time.Duration
+	Now            func() time.Time
+	Logger         *slog.Logger
 }
 
 type Provider struct {
-	clientID    string
-	http        *http.Client
-	authBase    string
-	helixBase   string
-	eventSubURL string
-	now         func() time.Time
-	logger      *slog.Logger
+	clientID       string
+	http           *http.Client
+	authBase       string
+	helixBase      string
+	eventSubURL    string
+	chatBackoffMax time.Duration
+	keepaliveGrace time.Duration
+	now            func() time.Time
+	logger         *slog.Logger
 }
 
 // New construye el proveedor. Los tests SIEMPRE deben inyectar AuthBase y HelixBase (los
@@ -69,7 +79,8 @@ type Provider struct {
 // llegue a marcar una petición real, porque no hay cuentas en la base que la disparen.
 func New(o Options) *Provider {
 	p := &Provider{clientID: o.ClientID, http: o.HTTPClient, authBase: o.AuthBase, helixBase: o.HelixBase,
-		eventSubURL: o.EventSubURL, now: o.Now, logger: o.Logger}
+		eventSubURL: o.EventSubURL, chatBackoffMax: o.ChatBackoffMax, keepaliveGrace: o.KeepaliveGrace,
+		now: o.Now, logger: o.Logger}
 	if p.http == nil {
 		p.http = &http.Client{Timeout: 15 * time.Second}
 	}
@@ -81,6 +92,12 @@ func New(o Options) *Provider {
 	}
 	if p.eventSubURL == "" {
 		p.eventSubURL = defaultEventSubURL
+	}
+	if p.chatBackoffMax <= 0 {
+		p.chatBackoffMax = defaultChatBackoffMax
+	}
+	if p.keepaliveGrace <= 0 {
+		p.keepaliveGrace = defaultKeepaliveGrace
 	}
 	if p.now == nil {
 		p.now = time.Now

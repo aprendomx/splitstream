@@ -51,6 +51,9 @@ func (p *Provider) patchChannel(ctx context.Context, acct store.Account, token c
 }
 
 func (p *Provider) SearchCategories(ctx context.Context, token crypto.Secret, q string) ([]platforms.Category, error) {
+	if !p.Configured() {
+		return nil, platforms.ErrNoClientID
+	}
 	q = strings.TrimSpace(q)
 	if q == "" {
 		return []platforms.Category{}, nil
