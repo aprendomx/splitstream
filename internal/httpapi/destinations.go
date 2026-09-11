@@ -1,11 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/platforms"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/store"
 )
@@ -70,6 +73,10 @@ type destinationPatch struct {
 	RTMPURL  *string `json:"rtmp_url"`
 	Key      *string `json:"key"`
 	Enabled  *bool   `json:"enabled"`
+	// AccountID es json.RawMessage y no *int64 porque hay que distinguir TRES casos: el
+	// campo ausente (no tocar el enlace), `null` (desvincular) y un número (vincular). Un
+	// *int64 solo distingue dos.
+	AccountID json.RawMessage `json:"account_id"`
 }
 
 func (s *Server) handleListDestinations(w http.ResponseWriter, r *http.Request) {
@@ -88,14 +95,62 @@ func (s *Server) escribirListaDestinos(w http.ResponseWriter, r *http.Request) {
 
 	// Los etags de los logos se piden una vez para toda la lista, no uno por destino.
 	etags := s.logoETags(r.Context())
+	cuentas, err := s.accountsByID(r.Context())
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
 
 	// Slice no nil para que el JSON sea [] y no null: un null obligaría al frontend a
 	// comprobarlo antes de iterar.
 	out := make([]destinationDTO, 0, len(dests))
 	for _, d := range dests {
-		out = append(out, newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID]))
+		dto := newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID])
+		s.decorar(r.Context(), &dto, d, cuentas)
+		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// accountsByID carga todas las cuentas indexadas por id, para decorar una lista entera de
+// destinos con una sola consulta en vez de una por destino.
+func (s *Server) accountsByID(ctx context.Context) (map[int64]store.Account, error) {
+	cuentas, err := s.db.Accounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]store.Account, len(cuentas))
+	for _, a := range cuentas {
+		out[a.ID] = a
+	}
+	return out, nil
+}
+
+// decorar rellena Account y Capabilities de un destinationDTO ya construido.
+//
+// cuentas es el mapa cargado una vez por lista (accountsByID); nil para decorar un destino
+// suelto —alta, PATCH, toggle—, que entonces consulta la cuenta directamente si hace falta.
+func (s *Server) decorar(ctx context.Context, dto *destinationDTO, d store.Destination, cuentas map[int64]store.Account) {
+	if s.platforms != nil {
+		dto.Capabilities = capsDTO(s.platforms.AllCapabilities()[platforms.ID(d.Platform)])
+	}
+	if d.AccountID == nil {
+		return
+	}
+	var a store.Account
+	if cuentas != nil {
+		var ok bool
+		if a, ok = cuentas[*d.AccountID]; !ok {
+			return
+		}
+	} else {
+		ap, err := s.db.AccountByID(ctx, *d.AccountID)
+		if err != nil {
+			return
+		}
+		a = *ap
+	}
+	dto.Account = &accountRefDTO{ID: a.ID, DisplayName: a.DisplayName, Platform: string(a.Platform), Status: a.Status}
 }
 
 func (s *Server) handleCreateDestination(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +174,9 @@ func (s *Server) handleCreateDestination(w http.ResponseWriter, r *http.Request)
 	s.applyHot(r, *d)
 
 	w.Header().Set("Location", "/api/destinations/"+strconv.FormatInt(d.ID, 10))
-	writeJSON(w, http.StatusCreated, newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID)))
+	dto := newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID))
+	s.decorar(r.Context(), &dto, *d, nil)
+	writeJSON(w, http.StatusCreated, dto)
 }
 
 func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) {
@@ -149,8 +206,37 @@ func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// El enlace con la cuenta va aparte del resto del patch: distingue "no lo mandaron"
+	// (json.RawMessage vacío) de `null` (desvincular) de un número (vincular).
+	if len(in.AccountID) > 0 {
+		if bytes.Equal(bytes.TrimSpace(in.AccountID), []byte("null")) {
+			if err := s.db.UnlinkDestination(r.Context(), id); err != nil {
+				s.writeStoreError(w, err)
+				return
+			}
+		} else {
+			var accountID int64
+			if err := json.Unmarshal(in.AccountID, &accountID); err != nil {
+				writeError(w, http.StatusBadRequest, codeInvalidInput, "account_id inválido")
+				return
+			}
+			if err := s.db.LinkDestination(r.Context(), id, accountID); err != nil {
+				s.writeStoreError(w, err)
+				return
+			}
+		}
+		// Se relee: el enlace pudo cambiar aunque nada más del destino lo hiciera.
+		d, err = s.db.DestinationByID(r.Context(), id)
+		if err != nil {
+			s.writeStoreError(w, err)
+			return
+		}
+	}
+
 	s.applyHot(r, *d)
-	writeJSON(w, http.StatusOK, newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID)))
+	dto := newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID))
+	s.decorar(r.Context(), &dto, *d, nil)
+	writeJSON(w, http.StatusOK, dto)
 }
 
 func (s *Server) handleDeleteDestination(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +290,9 @@ func (s *Server) handleToggleDestination(w http.ResponseWriter, r *http.Request)
 	}
 
 	s.applyHot(r, *d)
-	writeJSON(w, http.StatusOK, newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID)))
+	dto := newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID))
+	s.decorar(r.Context(), &dto, *d, nil)
+	writeJSON(w, http.StatusOK, dto)
 }
 
 type reorderRequest struct {
@@ -331,5 +419,7 @@ func (s *Server) handleRetryDestination(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.applyHot(r, *d)
-	writeJSON(w, http.StatusOK, newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID)))
+	dto := newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID))
+	s.decorar(r.Context(), &dto, *d, nil)
+	writeJSON(w, http.StatusOK, dto)
 }

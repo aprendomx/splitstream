@@ -64,9 +64,15 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 	// Los etags de los logos se piden UNA vez para toda la lista, no uno por destino: este
 	// estado lo empuja el WebSocket cada segundo.
 	etags := s.logoETags(ctx)
+	cuentas, err := s.accountsByID(ctx)
+	if err != nil {
+		return out, err
+	}
 	out.Destinations = make([]destinationDTO, 0, len(dests))
 	for _, d := range dests {
-		out.Destinations = append(out.Destinations, newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID]))
+		dto := newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID])
+		s.decorar(ctx, &dto, d, cuentas)
+		out.Destinations = append(out.Destinations, dto)
 	}
 
 	// Los últimos eventos viajan con el estado: el panel los pinta y avisa de los nuevos

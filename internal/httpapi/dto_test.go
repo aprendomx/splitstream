@@ -178,7 +178,8 @@ func TestNewEventDTOKeepsTheOptionalIDs(t *testing.T) {
 // TestDTOFieldNamesAreSnakeCase: el frontend de la fase 5 va a depender de estos nombres,
 // así que conviene que sean consistentes desde el principio.
 func TestDTOFieldNamesAreSnakeCase(t *testing.T) {
-	tipos := []any{metricsDTO{}, destinationDTO{}, eventDTO{}, sessionDTO{}, ingestDTO{}, statusDTO{}, panelDTO{}, updateDTO{}}
+	tipos := []any{metricsDTO{}, destinationDTO{}, eventDTO{}, sessionDTO{}, ingestDTO{}, statusDTO{}, panelDTO{}, updateDTO{},
+		capabilitiesDTO{}, accountRefDTO{}, accountDTO{}, platformDTO{}, chatMessageDTO{}}
 
 	for _, v := range tipos {
 		rt := reflect.TypeOf(v)
