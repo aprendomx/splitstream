@@ -119,6 +119,10 @@ enseñe sin una consulta más.
 - `Run(ctx)`: cada hora valida el token de cada cuenta (`Validator.Validate`), como exige
   Twitch; 401 → intenta refrescar; si tampoco, `reauth`. Corre en `fondo` y vuelve con el
   contexto. Un fallo de red se loguea a debug y se reintenta a la hora.
+- El manager **también valida al arrancar**, no solo cada hora: `Run` hace la primera
+  pasada antes de esperar el primer tick, así que un token ya revocado se detecta desde
+  el primer arranque en vez de hasta una hora después. Sin cuentas en la base, esa
+  primera pasada no hace ninguna petición.
 - `Refresher`/`Validator` son interfaces que implementa cada proveedor; el manager no sabe
   de Twitch.
 - El manager es lo único que lee `AccountTokens`; los proveedores reciben el token ya
@@ -297,6 +301,13 @@ platform, status}` (nil sin cuenta) y `capabilities {title, category, chat}`.
   del fixture).
 - **CI**: los dos guards nuevos de fronteras; `go test ./... -race` con `GOMAXPROCS=2`.
 - **Integración con mediamtx**: no cambia; el chat no toca el camino de producción del motor.
+- **Ruling sobre `panic` y hosts reales**: el proveedor de Twitch no hace `panic` bajo
+  `go test` contra hosts reales — el guard de fronteras falla el build si algún test usa
+  las URL por defecto, pero eso es una comprobación estática, no una defensa en
+  ejecución. La garantía real es más simple y más sólida: **sin cuentas en la base de
+  datos, nada llama a Twitch**. El manager de tokens y el agregador de chat solo hacen
+  peticiones por cuenta existente, y todos los tests del paquete `twitch` inyectan sus
+  propios hosts (`httptest`) en vez de dejar los que trae el binario.
 
 ## 9. Spike D.0 (respuestas, 2026-09-10)
 

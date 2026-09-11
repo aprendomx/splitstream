@@ -71,6 +71,31 @@ No te fíes de que diga «guardado». Mira la tarjeta del canal: cuando empieces
 desde OBS debe ponerse en **Emitiendo** con el bitrate subiendo. Eso es lo único que
 demuestra que funciona.
 
+### Conectar tu cuenta de Twitch
+
+Con la cuenta conectada, Splitstream puede cambiar el título y la categoría de tu canal y
+leer tu chat en el panel. No hace falta para retransmitir: la clave de stream sigue siendo
+lo único imprescindible.
+
+1. Edita el canal de Twitch (o vincúlalo) y, en el bloque **Cuenta**, pulsa **Conectar
+   cuenta de Twitch**.
+2. Verás un código de ocho letras. Abre `twitch.tv/activate` en cualquier dispositivo,
+   entra con tu cuenta y escribe el código. El panel se entera solo.
+3. Elige la cuenta en «Cuenta vinculada» y guarda.
+
+Splitstream pide dos permisos: gestionar la configuración del canal (título y categoría) y
+leer el chat. No puede escribir en el chat ni moderar. Los tokens se guardan cifrados con
+tu clave maestra, como las claves de stream, y se renuevan solos; si Twitch los revoca, el
+canal muestra «reconectar» y repites los tres pasos.
+
+Los chips **Título**, **Categoría** y **Chat** de cada canal dicen qué puede hacer cada
+plataforma. Un canal «Otro», TikTok o X no tiene ninguno: son solo una URL y una clave,
+y eso está bien.
+
+> Hasta que la app de Splitstream esté registrada en Twitch, conectar cuentas necesita que
+> definas `SPLITSTREAM_TWITCH_CLIENT_ID` (ver el README). Sin ella, el bloque **Cuenta**
+> te lo dice en vez de mostrar el botón de conectar.
+
 ---
 
 ## 3. Empieza a emitir
@@ -207,6 +232,23 @@ Lo que hay que saber para no perder una hora buscando un fallo que no es tuyo:
 | **Facebook** | Solo acepta RTMPS, y limita las emisiones activas simultáneas |
 | **TikTok** | Servidor distinto en cada emisión; requiere 1.000 seguidores |
 
+### Qué puede hacer desde el panel
+
+Retransmitir siempre funciona igual en todas las plataformas: es solo una URL y una clave.
+Lo que cambia es si Splitstream puede además tocar el canal desde el panel —cambiarle el
+título, la categoría, o leerte el chat—, y eso depende de tener una cuenta conectada, no
+solo un canal vinculado:
+
+| Plataforma | Qué puede hacer desde el panel |
+| --- | --- |
+| **Twitch** | Título, categoría, chat (de lectura) |
+| **YouTube** | Próximamente |
+| **Kick** | Próximamente |
+| **Facebook** | Solo retransmitir — exige verificación de negocio para la API de canal |
+| **X** | Solo retransmitir — no tiene una API viable para esto |
+| **TikTok** | Solo retransmitir — no tiene una API viable para esto |
+| **Otro** | Solo retransmitir |
+
 ---
 
 ## 7. Rotar la clave de ingesta
@@ -279,7 +321,21 @@ ffmpeg -i x.flv -c copy x.mp4
 
 ---
 
-## 10. Avisos
+## 10. Título en vivo y chat
+
+**Título en vivo.** Con al menos un canal con cuenta conectada aparece un campo sobre la
+lista de canales. Escribe el título (y, para Twitch, busca la categoría) y pulsa **Aplicar
+en todos los que puedan**. Cada canal responde por separado: si uno falla, los demás
+cambian igual.
+
+**Chat.** Durante una emisión, el botón **Chat** junto a «Vista previa» abre una columna
+con los mensajes de las plataformas conectadas, con una pestaña por plataforma. Es solo
+lectura. El chat se guarda con la sesión y la retención lo poda igual que los eventos
+(`SPLITSTREAM_RETENTION_MAX_CHAT`, 200 000 mensajes por defecto).
+
+---
+
+## 11. Avisos
 
 Splitstream puede avisarte cuando un canal falla o se corta la emisión, sin que tengas que
 tener el panel abierto: en **Ajustes → Avisos**, pulsa **Nuevo aviso** y dale una URL de
@@ -332,7 +388,7 @@ por su cuenta, y solo manda su propia versión.
 
 ---
 
-## 11. Respaldo
+## 12. Respaldo
 
 En **Ajustes → Respaldo**, el botón **Descargar respaldo** te da una copia de la base de
 datos completa: canales, claves cifradas y la contraseña del panel.
@@ -347,7 +403,7 @@ respaldo es sobrevivir a que pierdas el original.
 
 ---
 
-## 12. Preguntas frecuentes
+## 13. Preguntas frecuentes
 
 **¿Puedo cambiar la calidad por canal?**
 No. Splitstream reenvía el vídeo tal cual, sin tocarlo — por eso apenas consume CPU. Emitir
