@@ -31,9 +31,16 @@ type fakeProvider struct {
 	// estados cuenta las llamadas a BeginAuth: cada una da un state distinto, para poder
 	// tener varios flujos vivos a la vez sobre el mismo proveedor (tope I-2).
 	estados int
+	// id permite tener un segundo proveedor en el registro; vacío significa twitch.
+	id platforms.ID
 }
 
-func (f *fakeProvider) ID() platforms.ID { return platforms.Twitch }
+func (f *fakeProvider) ID() platforms.ID {
+	if f.id != "" {
+		return f.id
+	}
+	return platforms.Twitch
+}
 func (f *fakeProvider) Capabilities() platforms.Capabilities {
 	return platforms.Capabilities{Title: true, Category: true, ChatRead: true}
 }
@@ -376,5 +383,42 @@ func TestPatchDestinationPlatformUnlinksAccount(t *testing.T) {
 	}
 	if _, err := db.AccountForDestination(context.Background(), d.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("el enlace sigue en la base: err = %v", err)
+	}
+}
+
+// El estado de un flujo solo se consulta desde la plataforma en la que se inició:
+// preguntar por otra ruta devuelve 404 y —lo importante— no se lleva por delante el flujo
+// bueno, que sigue consultable donde le corresponde.
+func TestAuthStatusChecksThePlatformOfTheFlow(t *testing.T) {
+	tw := &fakeProvider{configured: true, pendientes: 2}
+	kick := &fakeProvider{configured: true, id: platforms.Kick}
+	srv, _ := newTestServer(t, func(c *Config) {
+		c.Platforms = platforms.NewRegistry(tw, kick)
+		c.Tokens = tokensFalsos{db: c.DB, c: c.Cipher}
+	})
+	ck := login(t, srv)
+
+	rec := do(t, srv, ck, http.MethodPost, "/api/platforms/twitch/auth", "")
+	if rec.Code != 200 {
+		t.Fatalf("inicio: %d %s", rec.Code, rec.Body)
+	}
+	var inicio authStartDTO
+	json.Unmarshal(rec.Body.Bytes(), &inicio)
+	if inicio.State == "" {
+		t.Fatalf("sin state: %s", rec.Body)
+	}
+
+	if rec := do(t, srv, ck, http.MethodGet, "/api/platforms/kick/auth/"+inicio.State, ""); rec.Code != http.StatusNotFound {
+		t.Errorf("consulta por kick = %d %s, quería 404", rec.Code, rec.Body)
+	}
+	// El 404 de kick no borró nada: por twitch sigue respondiendo.
+	rec = do(t, srv, ck, http.MethodGet, "/api/platforms/twitch/auth/"+inicio.State, "")
+	if rec.Code != 200 {
+		t.Fatalf("consulta por twitch = %d %s, quería 200", rec.Code, rec.Body)
+	}
+	var estado authStatusDTO
+	json.Unmarshal(rec.Body.Bytes(), &estado)
+	if estado.Status != "pending" && estado.Status != "done" {
+		t.Errorf("estado = %+v", estado)
 	}
 }

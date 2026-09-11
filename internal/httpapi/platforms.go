@@ -208,12 +208,20 @@ func (s *Server) terminar(f *authFlow, status string, acct *store.Account, msg s
 }
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.proveedor(w, r); !ok {
+	p, ok := s.proveedor(w, r)
+	if !ok {
 		return
 	}
 	state := r.PathValue("state")
 	s.auths.mu.Lock()
 	f, ok := s.auths.flows[state]
+	// Cada flujo pertenece a la plataforma en la que se inició: consultarlo desde la ruta
+	// de otra no puede devolver su estado ni su cuenta. Se comprueba ANTES de entregar y
+	// borrar, para que una consulta con la plataforma equivocada no se lleve por delante
+	// el flujo bueno.
+	if ok && f.platform != p.ID() {
+		ok = false
+	}
 	if ok && f.status != "pending" {
 		// Un flujo terminado se entrega una vez y se olvida; los expirados sin consultar
 		// se limpian de paso.
