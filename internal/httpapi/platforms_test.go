@@ -25,6 +25,9 @@ type fakeProvider struct {
 	titulos    []string
 	categorias []string
 	fallaTitle error
+	// lentoTitle hace que SetTitle tarde: sirve para ejercitar el plazo por destino de
+	// POST /api/live/title.
+	lentoTitle time.Duration
 	// estados cuenta las llamadas a BeginAuth: cada una da un state distinto, para poder
 	// tener varios flujos vivos a la vez sobre el mismo proveedor (tope I-2).
 	estados int
@@ -66,9 +69,17 @@ func (f *fakeProvider) Refresh(context.Context, crypto.Secret) (store.Tokens, er
 func (f *fakeProvider) Validate(context.Context, crypto.Secret) (platforms.Identity, error) {
 	return platforms.Identity{}, nil
 }
-func (f *fakeProvider) SetTitle(_ context.Context, acct store.Account, tok crypto.Secret, title string) error {
+func (f *fakeProvider) SetTitle(ctx context.Context, acct store.Account, tok crypto.Secret, title string) error {
 	if f.fallaTitle != nil {
 		return f.fallaTitle
+	}
+	if f.lentoTitle > 0 {
+		// Como cualquier cliente HTTP real: si el contexto muere antes, se abandona.
+		select {
+		case <-time.After(f.lentoTitle):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

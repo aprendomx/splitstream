@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/chat"
 	"github.com/aprendomx/splitstream/internal/crypto"
@@ -194,6 +195,9 @@ type Server struct {
 	tokens       TokenGetter
 	chat         *chat.Bus
 	chatStats    func() (map[platforms.ID]uint64, map[platforms.ID]bool, uint64)
+	// liveTimeout es el plazo por destino de POST /api/live/title (ver live.go). Campo y
+	// no constante para que los tests puedan bajarlo sin dormir diez segundos.
+	liveTimeout time.Duration
 	// auths son los flujos de dispositivo en curso (ver platforms.go).
 	auths *authFlows
 	// baseCtx es el padre de los flujos de autorización en curso; wg cuenta sus
@@ -234,8 +238,9 @@ func New(cfg Config) (*Server, error) {
 		tls:     cfg.TLS, publicURL: cfg.PublicURL,
 		updateInfo: cfg.UpdateInfo,
 		platforms:  cfg.Platforms, tokens: cfg.Tokens, chat: cfg.Chat, chatStats: cfg.ChatStats,
-		auths:   &authFlows{flows: map[string]*authFlow{}},
-		baseCtx: baseCtx,
+		auths:       &authFlows{flows: map[string]*authFlow{}},
+		baseCtx:     baseCtx,
+		liveTimeout: liveTimeoutPorDefecto,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto

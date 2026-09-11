@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/platforms"
 	"github.com/aprendomx/splitstream/internal/store"
@@ -15,6 +16,15 @@ type liveTitleRequest struct {
 	CategoryID   *string `json:"category_id"`
 	Destinations []int64 `json:"destinations"`
 }
+
+// maxDestinosPorPeticion acota POST /api/live/title: cada destino es una petición a la
+// plataforma, y una lista larga tendría a la API ocupada minutos. Veinte pasa de sobra
+// cualquier panel real.
+const maxDestinosPorPeticion = 20
+
+// liveTimeoutPorDefecto es el plazo por destino: sin él, una plataforma que no contesta
+// dejaba colgada la petición entera y con ella los destinos que faltaban por procesar.
+const liveTimeoutPorDefecto = 10 * time.Second
 
 type liveResultDTO struct {
 	DestinationID int64  `json:"destination_id"`
@@ -39,14 +49,35 @@ func (s *Server) handleLiveTitle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidInput, "elige al menos un destino")
 		return
 	}
+	if len(in.Destinations) > maxDestinosPorPeticion {
+		writeError(w, http.StatusBadRequest, codeInvalidInput, "como mucho 20 destinos por petición")
+		return
+	}
+	// Se deduplica conservando el orden: un id repetido haría dos veces la misma llamada a
+	// la plataforma y devolvería dos resultados para el mismo destino, que el panel no
+	// sabría casar.
+	vistos := make(map[int64]bool, len(in.Destinations))
 	out := make([]liveResultDTO, 0, len(in.Destinations))
 	for _, id := range in.Destinations {
+		if vistos[id] {
+			continue
+		}
+		vistos[id] = true
 		out = append(out, s.aplicarEnDestino(r.Context(), id, in))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) aplicarEnDestino(ctx context.Context, id int64, in liveTitleRequest) liveResultDTO {
+	// Plazo POR destino: los destinos se procesan en serie, así que sin esto una sola
+	// plataforma colgada se llevaría por delante a las demás y a la petición entera.
+	plazo := s.liveTimeout
+	if plazo <= 0 {
+		plazo = liveTimeoutPorDefecto
+	}
+	ctx, cancel := context.WithTimeout(ctx, plazo)
+	defer cancel()
+
 	res := liveResultDTO{DestinationID: id}
 	d, err := s.db.DestinationByID(ctx, id)
 	if err != nil {
@@ -119,6 +150,10 @@ func mensajePlataforma(err error) string {
 		return "la plataforma rechazó la cuenta; reconéctala"
 	case errors.Is(err, platforms.ErrRateLimited):
 		return "la plataforma pide esperar un momento"
+	case errors.Is(err, context.DeadlineExceeded):
+		// Se agotó el plazo por destino: no es culpa de la cuenta, así que no se sugiere
+		// reconectarla.
+		return "la plataforma tardó demasiado"
 	}
 	return "la plataforma respondió con un error: " + err.Error()
 }

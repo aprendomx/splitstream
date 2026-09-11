@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aprendomx/splitstream/internal/platforms"
 	"github.com/aprendomx/splitstream/internal/store"
@@ -123,5 +124,79 @@ func TestLiveTitleReportsPlatformErrorsWithoutLeakingTheToken(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "tok-acceso-fixture") {
 		t.Error("la respuesta lleva el token (error genérico)")
+	}
+}
+
+// TestLiveTitleCapsDeduplicatesAndTimesOutPerDestination cubre el tope de destinos, la
+// deduplicación de ids y el plazo por destino: sin ellos, una lista larga o una plataforma
+// colgada dejaban la petición ocupada sin límite.
+func TestLiveTitleCapsDeduplicatesAndTimesOutPerDestination(t *testing.T) {
+	p := &fakeProvider{configured: true}
+	srv, db, ck := servidorPlataformas(t, p)
+	a := cuentaViaStore(t, srv, db)
+	conCuenta, err := db.CreateDestination(context.Background(), srv.cipher, store.NewDestination{
+		Name: "Twitch", Platform: store.PlatformTwitch, RTMPURL: "rtmp://x/app", Key: "k", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LinkDestination(context.Background(), conCuenta.ID, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	sinCuenta, err := db.CreateDestination(context.Background(), srv.cipher, store.NewDestination{
+		Name: "Twitch 2", Platform: store.PlatformTwitch, RTMPURL: "rtmp://x/app", Key: "k", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 21 destinos: uno por encima del tope.
+	ids := make([]string, 0, 21)
+	for i := 1; i <= 21; i++ {
+		ids = append(ids, itoa(int64(i)))
+	}
+	rec := do(t, srv, ck, http.MethodPost, "/api/live/title",
+		`{"title":"x","destinations":[`+strings.Join(ids, ",")+`]}`)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "20 destinos") {
+		t.Errorf("21 destinos = %d %s, quería 400", rec.Code, rec.Body)
+	}
+	// Justo en el tope sí pasa.
+	if rec := do(t, srv, ck, http.MethodPost, "/api/live/title",
+		`{"title":"x","destinations":[`+strings.Join(ids[:20], ",")+`]}`); rec.Code != 200 {
+		t.Errorf("20 destinos = %d %s, quería 200", rec.Code, rec.Body)
+	}
+
+	// Ids repetidos: un solo resultado por id y una sola llamada a la plataforma. Se
+	// limpia lo anotado antes: la petición de 20 destinos de arriba ya incluía a este.
+	p.mu.Lock()
+	p.titulos = nil
+	p.mu.Unlock()
+	repetido := itoa(conCuenta.ID)
+	rec = do(t, srv, ck, http.MethodPost, "/api/live/title",
+		`{"title":"Hola","destinations":[`+repetido+`,`+repetido+`,`+repetido+`]}`)
+	var res []liveResultDTO
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if rec.Code != 200 || len(res) != 1 || res[0].DestinationID != conCuenta.ID || !res[0].OK {
+		t.Errorf("ids repetidos: %d %+v", rec.Code, res)
+	}
+	p.mu.Lock()
+	llamadas := len(p.titulos)
+	p.mu.Unlock()
+	if llamadas != 1 {
+		t.Errorf("llamadas a SetTitle = %d, quería 1", llamadas)
+	}
+
+	// Plazo por destino: la plataforma tarda más de lo permitido y el resto sigue.
+	srv.liveTimeout = 50 * time.Millisecond
+	p.lentoTitle = 2 * time.Second
+	rec = do(t, srv, ck, http.MethodPost, "/api/live/title",
+		`{"title":"Hola","destinations":[`+itoa(conCuenta.ID)+`,`+itoa(sinCuenta.ID)+`]}`)
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if rec.Code != 200 || len(res) != 2 {
+		t.Fatalf("plazo: %d %+v", rec.Code, res)
+	}
+	if res[0].OK || !strings.Contains(res[0].Message, "tardó demasiado") {
+		t.Errorf("el destino lento = %+v, quería ok:false y «tardó demasiado»", res[0])
+	}
+	if res[1].DestinationID != sinCuenta.ID || res[1].OK || !strings.Contains(res[1].Message, "cuenta") {
+		t.Errorf("el resto no se procesó: %+v", res[1])
 	}
 }
