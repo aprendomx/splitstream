@@ -172,22 +172,27 @@ async function guardar() {
         enabled: habilitado.value,
       })
       id = creado.id
-      // El destino todavía no existía cuando se eligió la cuenta: vincular es un PATCH
-      // aparte, tras crear.
-      if (plataformaConProveedor.value && cuentaId.value !== null) {
-        await api.editarDestino(id, { account_id: cuentaId.value })
-      }
     }
 
-    // El logo va en una petición aparte porque en el alta el destino no tenía id hasta
-    // ahora mismo. Si falla, el canal QUEDA CREADO y se avisa: deshacer la creación a
-    // espaldas del usuario sería peor que un logo que falta.
+    // A partir de aquí el destino YA EXISTE. Lo que falle después (la cuenta en el alta,
+    // el logo) se avisa y el diálogo se cierra igual: dejarlo abierto con un error
+    // genérico invita a pulsar «Vincular» otra vez y crear el canal por duplicado.
     let avisoLogo = null
+    // El destino todavía no existía cuando se eligió la cuenta: vincular es un PATCH
+    // aparte, tras crear.
+    if (!editando.value && plataformaConProveedor.value && cuentaId.value !== null) {
+      try {
+        await api.editarDestino(id, { account_id: cuentaId.value })
+      } catch (e) {
+        avisoLogo = e instanceof ApiError ? `no se pudo vincular la cuenta: ${e.message}` : 'no se pudo vincular la cuenta'
+      }
+    }
     try {
       if (logoArchivo.value) await api.subirLogo(id, logoArchivo.value)
       else if (logoQuitado.value) await api.quitarLogo(id)
     } catch (e) {
-      avisoLogo = e instanceof ApiError ? e.message : 'No se pudo guardar el logo'
+      const motivo = e instanceof ApiError ? e.message : 'No se pudo guardar el logo'
+      avisoLogo = avisoLogo ? `${avisoLogo}; ${motivo}` : motivo
     }
 
     emit('guardado', avisoLogo)

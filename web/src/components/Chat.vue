@@ -17,6 +17,8 @@ const visibles = computed(() => (pestaña.value === 'todos' ? mensajes.value : m
 function conectar() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   ws = new WebSocket(`${proto}://${location.host}/api/chat/ws`)
+  // Una conexión que abre bien reinicia el backoff aunque el chat esté en silencio.
+  ws.onopen = () => { reintento = 0 }
   ws.onmessage = async (ev) => {
     try {
       mensajes.value.push(JSON.parse(ev.data))
