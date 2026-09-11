@@ -524,13 +524,14 @@ func TestRunServesTheAPI(t *testing.T) {
 	}
 }
 
-// TestRunExposesPlatforms: run() cablea internal/platforms hasta la API. Sin
-// SPLITSTREAM_TWITCH_CLIENT_ID en el entorno del test, Twitch sale en la lista pero
-// `configured` en false —el binario incluido también está vacío en un `go test`—. No hay
-// cuentas en la base, así que nada dispara una petición real a Twitch (tokens.Manager.Run
-// solo actúa sobre cuentas existentes y chat.Aggregator solo arranca lectores cuando hay
-// una sesión de ingesta publicando).
+// TestRunExposesPlatforms: run() cablea internal/platforms hasta la API. El client_id se
+// fija en el entorno del test para que la afirmación no dependa de la máquina ni de que
+// alguna vez se rellene `twitch.ClientID` en el binario: con él, Twitch sale en la lista
+// con `configured` en true. No hay cuentas en la base, así que nada dispara una petición
+// real a Twitch (tokens.Manager.Run solo actúa sobre cuentas existentes y chat.Aggregator
+// solo arranca lectores cuando hay una sesión de ingesta publicando).
 func TestRunExposesPlatforms(t *testing.T) {
+	t.Setenv("SPLITSTREAM_TWITCH_CLIENT_ID", "cid-de-prueba")
 	addr, cancel, hecho := arrancaRun(t, io.Discard)
 	defer cancel()
 
@@ -588,8 +589,8 @@ func TestRunExposesPlatforms(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decodificar /api/platforms: %v", err)
 	}
-	if len(out) != 1 || out[0].ID != "twitch" || out[0].Configured {
-		t.Errorf("/api/platforms = %+v, quería [{id:twitch configured:false}]", out)
+	if len(out) != 1 || out[0].ID != "twitch" || !out[0].Configured {
+		t.Errorf("/api/platforms = %+v, quería [{id:twitch configured:true}]", out)
 	}
 
 	cancel()
