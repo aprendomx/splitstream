@@ -178,6 +178,44 @@ func TestReadChatPausesWhenTheBudgetIsReached(t *testing.T) {
 	}
 }
 
+// TestReadChatPollsWhenTheBudgetIsUnknown cubre la resolución de ambigüedad (b): si
+// ChatBudget no puede decir cuánto se ha gastado (ok=false), el presupuesto es
+// protección, no bloqueo, así que se sondea igual y no se avisa una pausa que no ocurrió.
+func TestReadChatPollsWhenTheBudgetIsUnknown(t *testing.T) {
+	s := nuevoServidorChat(t)
+	s.findRes = func(n int32) (int, []byte) { return 200, fixture(t, "broadcasts_active.json") }
+	s.chatRes = func(n int32, pageToken string) (int, []byte) { return 200, fixture(t, "chat_page1.json") }
+
+	var pausas int
+	p := proveedorChat(s, youtube.Options{
+		MinPoll:    20 * time.Millisecond,
+		ChatBudget: func(accountID int64) (used, budget int, ok bool) { return 0, 0, false },
+		OnChatPaused: func(acct store.Account, used, budget int) {
+			pausas++
+		},
+	})
+	acct := cuentaYT()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := make(chan platforms.ChatMessage, 1)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- p.ReadChat(ctx, acct, tokenFijo("tok"), out) }()
+
+	m1 := recibir(t, out)
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("ReadChat = %v, quería nil al cancelar", err)
+	}
+
+	if m1.MessageID != "m1" {
+		t.Errorf("m1.MessageID = %q, quería \"m1\" (el sondeo debió seguir con ok=false)", m1.MessageID)
+	}
+	if pausas != 0 {
+		t.Errorf("OnChatPaused se llamó %d veces, quería 0 (ok=false no es una pausa)", pausas)
+	}
+}
+
 func TestReadChatWaitsForABroadcastThenGivesUp(t *testing.T) {
 	s := nuevoServidorChat(t)
 	s.findRes = func(n int32) (int, []byte) { return 200, []byte(`{"items":[]}`) }

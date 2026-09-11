@@ -259,9 +259,9 @@ type emisionSnippet struct {
 	Description        string `json:"description"`
 	ScheduledStartTime string `json:"scheduledStartTime"`
 	// LiveChatID identifica el chat de la emisión (spec Task 5): se lee de findBroadcast
-	// para no duplicar la llamada a liveBroadcasts.list. omitempty porque es de solo
-	// lectura: cuando updateTitle reenvía el snippet completo, no vale la pena repetirlo
-	// en un PUT que solo puede escribir title/description/scheduledStartTime.
+	// para no duplicar la llamada a liveBroadcasts.list. Es de solo lectura: Google lo
+	// rechaza en un PUT, así que updateTitle lo vacía antes de reenviar el snippet
+	// (omitempty aquí evita mandar la clave cuando ya viene en "").
 	LiveChatID string `json:"liveChatId,omitempty"`
 }
 
@@ -359,6 +359,8 @@ func (p *Provider) getSnippet(ctx context.Context, acct store.Account, token cry
 // nuevo puesto por quien llama, y scheduledStartTime/description tal como se leyeron, para
 // que el update no se los borre.
 func (p *Provider) updateTitle(ctx context.Context, acct store.Account, token crypto.Secret, ref string, snip emisionSnippet) error {
+	// LiveChatID es de solo lectura: no viaja en el update, o Google lo rechaza.
+	snip.LiveChatID = ""
 	var cuerpo struct {
 		ID      string         `json:"id"`
 		Snippet emisionSnippet `json:"snippet"`

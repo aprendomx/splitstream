@@ -309,8 +309,9 @@ func TestSetTitleUpdatesTheUpcomingOrActiveBroadcast(t *testing.T) {
 	var cuerpo struct {
 		ID      string `json:"id"`
 		Snippet struct {
-			Title              string `json:"title"`
-			ScheduledStartTime string `json:"scheduledStartTime"`
+			Title              string  `json:"title"`
+			ScheduledStartTime string  `json:"scheduledStartTime"`
+			LiveChatID         *string `json:"liveChatId"`
 		} `json:"snippet"`
 	}
 	if err := json.Unmarshal(s.lastUpdateBody, &cuerpo); err != nil {
@@ -318,6 +319,11 @@ func TestSetTitleUpdatesTheUpcomingOrActiveBroadcast(t *testing.T) {
 	}
 	if cuerpo.ID != "bcast123" || cuerpo.Snippet.Title != "Nuevo" || cuerpo.Snippet.ScheduledStartTime != "2026-09-11T20:00:00Z" {
 		t.Errorf("cuerpo del update = %+v, quería title=Nuevo y scheduledStartTime conservado", cuerpo)
+	}
+	// liveChatId es de solo lectura: el snippet que trajo el list lo tenía (chat456), pero
+	// el update no debe reenviarlo, o Google lo rechaza.
+	if cuerpo.Snippet.LiveChatID != nil {
+		t.Errorf("cuerpo del update trae snippet.liveChatId = %q, quería que no viajara", *cuerpo.Snippet.LiveChatID)
 	}
 	// list (1, upcoming) + update (50): el reintento de SetTitle sobre la que ya
 	// encontró en upcoming no vuelve a leer, así que la cuota queda en 51, no en 101.
@@ -336,6 +342,11 @@ func TestSetTitleUpdatesTheUpcomingOrActiveBroadcast(t *testing.T) {
 	// broadcastStatus), pero sí relee su snippet por id antes de reemplazarlo: cuota
 	// 51 (list 1 + update 50), no 50.
 	s3 := nuevoServidorEmisiones(t)
+	// getSnippetRes trae liveChatId a propósito: es lo que SetBroadcastTitle relee antes
+	// de reemplazar el snippet, y el update no debe reenviarlo.
+	s3.getSnippetRes = func(id string) []byte {
+		return []byte(`{"items":[{"id":"` + id + `","snippet":{"title":"Prueba","liveChatId":"chat456","scheduledStartTime":"2026-09-11T20:00:00Z"}}]}`)
+	}
 	sinks3, quota3 := cuentaCuota()
 	p3 := proveedorEmisiones(s3, youtube.Options{Quota: quota3})
 	if err := p3.SetBroadcastTitle(ctx, acct, "tok", "bcast123", "Nuevo"); err != nil {
@@ -344,8 +355,9 @@ func TestSetTitleUpdatesTheUpcomingOrActiveBroadcast(t *testing.T) {
 	var cuerpo3 struct {
 		ID      string `json:"id"`
 		Snippet struct {
-			Title              string `json:"title"`
-			ScheduledStartTime string `json:"scheduledStartTime"`
+			Title              string  `json:"title"`
+			ScheduledStartTime string  `json:"scheduledStartTime"`
+			LiveChatID         *string `json:"liveChatId"`
 		} `json:"snippet"`
 	}
 	if err := json.Unmarshal(s3.lastUpdateBody, &cuerpo3); err != nil {
@@ -353,6 +365,9 @@ func TestSetTitleUpdatesTheUpcomingOrActiveBroadcast(t *testing.T) {
 	}
 	if cuerpo3.Snippet.Title != "Nuevo" || cuerpo3.Snippet.ScheduledStartTime != "2026-09-11T20:00:00Z" {
 		t.Errorf("cuerpo del update (SetBroadcastTitle) = %+v", cuerpo3)
+	}
+	if cuerpo3.Snippet.LiveChatID != nil {
+		t.Errorf("cuerpo del update (SetBroadcastTitle) trae snippet.liveChatId = %q, quería que no viajara", *cuerpo3.Snippet.LiveChatID)
 	}
 	if sinks3[acct.ID] != 51 {
 		t.Errorf("cuota SetBroadcastTitle = %d, quería 51", sinks3[acct.ID])
