@@ -45,7 +45,7 @@ func (f *fakeProvider) Capabilities() platforms.Capabilities {
 	return platforms.Capabilities{Title: true, Category: true, ChatRead: true}
 }
 func (f *fakeProvider) Configured() bool { return f.configured }
-func (f *fakeProvider) BeginAuth(context.Context) (platforms.AuthPrompt, error) {
+func (f *fakeProvider) BeginAuth(context.Context, platforms.Credentials) (platforms.AuthPrompt, error) {
 	if !f.configured {
 		return platforms.AuthPrompt{}, platforms.ErrNoClientID
 	}
@@ -56,7 +56,7 @@ func (f *fakeProvider) BeginAuth(context.Context) (platforms.AuthPrompt, error) 
 	return platforms.AuthPrompt{State: state, VerificationURI: "https://www.twitch.tv/activate", UserCode: "ABCDEFGH",
 		DeviceCode: "secreto-dispositivo", ExpiresAt: time.Now().Add(30 * time.Minute), Interval: time.Millisecond}, nil
 }
-func (f *fakeProvider) PollAuth(context.Context, platforms.AuthPrompt) (store.NewAccount, error) {
+func (f *fakeProvider) PollAuth(context.Context, platforms.Credentials, platforms.AuthPrompt) (store.NewAccount, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sondeos++
@@ -70,7 +70,7 @@ func (f *fakeProvider) PollAuth(context.Context, platforms.AuthPrompt) (store.Ne
 		Scopes: []string{"user:read:chat"}, Tokens: store.Tokens{Access: "tok-acceso-fixture", Refresh: "tok-refresco-fixture",
 			ExpiresAt: time.Now().Add(4 * time.Hour)}}, nil
 }
-func (f *fakeProvider) Refresh(context.Context, crypto.Secret) (store.Tokens, error) {
+func (f *fakeProvider) Refresh(context.Context, store.Account, platforms.Credentials, crypto.Secret) (store.Tokens, error) {
 	return store.Tokens{}, nil
 }
 func (f *fakeProvider) Validate(context.Context, crypto.Secret) (platforms.Identity, error) {

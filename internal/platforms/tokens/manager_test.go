@@ -19,7 +19,7 @@ import (
 type fakeProvider struct {
 	mu        sync.Mutex
 	refreshes atomic.Int32
-	refreshFn func(refresh string) (store.Tokens, error)
+	refreshFn func(acct store.Account, creds platforms.Credentials, refresh string) (store.Tokens, error)
 	validate  func(access string) (platforms.Identity, error)
 	lento     time.Duration
 }
@@ -27,16 +27,16 @@ type fakeProvider struct {
 func (f *fakeProvider) ID() platforms.ID                     { return platforms.Twitch }
 func (f *fakeProvider) Capabilities() platforms.Capabilities { return platforms.Capabilities{} }
 func (f *fakeProvider) Configured() bool                     { return true }
-func (f *fakeProvider) BeginAuth(context.Context) (platforms.AuthPrompt, error) {
+func (f *fakeProvider) BeginAuth(context.Context, platforms.Credentials) (platforms.AuthPrompt, error) {
 	return platforms.AuthPrompt{}, nil
 }
-func (f *fakeProvider) PollAuth(context.Context, platforms.AuthPrompt) (store.NewAccount, error) {
+func (f *fakeProvider) PollAuth(context.Context, platforms.Credentials, platforms.AuthPrompt) (store.NewAccount, error) {
 	return store.NewAccount{}, nil
 }
-func (f *fakeProvider) Refresh(ctx context.Context, r crypto.Secret) (store.Tokens, error) {
+func (f *fakeProvider) Refresh(ctx context.Context, acct store.Account, creds platforms.Credentials, r crypto.Secret) (store.Tokens, error) {
 	f.refreshes.Add(1)
 	time.Sleep(f.lento)
-	return f.refreshFn(r.Reveal())
+	return f.refreshFn(acct, creds, r.Reveal())
 }
 func (f *fakeProvider) Validate(ctx context.Context, a crypto.Secret) (platforms.Identity, error) {
 	if f.validate == nil {
@@ -61,11 +61,49 @@ func montar(t *testing.T, expira time.Duration) (*store.DB, *crypto.Cipher, *sto
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &fakeProvider{refreshFn: func(r string) (store.Tokens, error) {
+	p := &fakeProvider{refreshFn: func(acct store.Account, creds platforms.Credentials, r string) (store.Tokens, error) {
 		return store.Tokens{Access: crypto.Secret("nuevo-" + r), Refresh: crypto.Secret("r-" + r), ExpiresAt: time.Now().Add(4 * time.Hour)}, nil
 	}}
 	m := tokens.NewManager(db, c, func(id platforms.ID) (platforms.Provider, bool) { return p, id == platforms.Twitch })
 	return db, c, a, p, m
+}
+
+// Con app propia, refrescar manda el client_secret del usuario a Refresh; con la app
+// incluida (Twitch) las credenciales van vacías, como siempre.
+func TestDoRefreshPassesOwnAppCredentials(t *testing.T) {
+	db, c, cuentaTwitch, p, m := montar(t, time.Minute)
+
+	cuentaPropia, err := db.UpsertAccount(context.Background(), c, store.NewAccount{
+		Platform: store.PlatformTwitch, ExternalID: "2", DisplayName: "dos", Scopes: []string{"x"},
+		Tokens:      store.Tokens{Access: "viejo2", Refresh: "r2", ExpiresAt: time.Now().Add(time.Minute)},
+		OwnApp:      true,
+		Credentials: store.Credentials{ClientID: "c", ClientSecret: "s"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var recibidas []platforms.Credentials
+	p.refreshFn = func(acct store.Account, creds platforms.Credentials, r string) (store.Tokens, error) {
+		recibidas = append(recibidas, creds)
+		return store.Tokens{Access: crypto.Secret("nuevo-" + r), Refresh: crypto.Secret("r-" + r), ExpiresAt: time.Now().Add(4 * time.Hour)}, nil
+	}
+
+	if _, err := m.Token(context.Background(), cuentaPropia.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Token(context.Background(), cuentaTwitch.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(recibidas) != 2 {
+		t.Fatalf("refrescos = %d, quería 2", len(recibidas))
+	}
+	if recibidas[0].ClientSecret.Reveal() != "s" {
+		t.Errorf("app propia: ClientSecret = %q, quería \"s\"", recibidas[0].ClientSecret.Reveal())
+	}
+	if recibidas[1].ClientID.Reveal() != "" || recibidas[1].ClientSecret.Reveal() != "" {
+		t.Errorf("sin app propia: creds = %+v, quería vacías", recibidas[1])
+	}
 }
 
 func TestTokenIsReturnedWithoutRefreshWhenItIsFresh(t *testing.T) {
@@ -122,7 +160,9 @@ func TestConcurrentTokenCallsShareOneRefresh(t *testing.T) {
 
 func TestFailedRefreshMarksReauthAndNotifies(t *testing.T) {
 	db, _, a, p, m := montar(t, time.Minute)
-	p.refreshFn = func(string) (store.Tokens, error) { return store.Tokens{}, platforms.ErrUnauthorized }
+	p.refreshFn = func(store.Account, platforms.Credentials, string) (store.Tokens, error) {
+		return store.Tokens{}, platforms.ErrUnauthorized
+	}
 	var avisada atomic.Int64
 	m.OnReauth = func(acct store.Account) { avisada.Store(acct.ID) }
 	if _, err := m.Token(context.Background(), a.ID); !errors.Is(err, tokens.ErrReauth) {
@@ -183,7 +223,7 @@ func TestRefreshCompletesEvenIfCallerContextIsCanceled(t *testing.T) {
 	p.lento = 100 * time.Millisecond
 	// El proveedor rota: al entregar el par nuevo, el refresh token usado deja de valer.
 	invalidados := map[string]bool{}
-	p.refreshFn = func(r string) (store.Tokens, error) {
+	p.refreshFn = func(acct store.Account, creds platforms.Credentials, r string) (store.Tokens, error) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		if invalidados[r] {

@@ -109,7 +109,7 @@ func TestDeviceFlowPendingThenDone(t *testing.T) {
 	}
 	p := proveedor(t, s)
 	ctx := context.Background()
-	prompt, err := p.BeginAuth(ctx)
+	prompt, err := p.BeginAuth(ctx, platforms.Credentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,11 +118,11 @@ func TestDeviceFlowPendingThenDone(t *testing.T) {
 		t.Fatalf("prompt = %+v", prompt)
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := p.PollAuth(ctx, prompt); !errors.Is(err, platforms.ErrAuthPending) {
+		if _, err := p.PollAuth(ctx, platforms.Credentials{}, prompt); !errors.Is(err, platforms.ErrAuthPending) {
 			t.Fatalf("poll %d: err = %v, quería ErrAuthPending", i, err)
 		}
 	}
-	acct, err := p.PollAuth(ctx, prompt)
+	acct, err := p.PollAuth(ctx, platforms.Credentials{}, prompt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,8 +139,8 @@ func TestDeviceFlowExpiresAndSlowsDown(t *testing.T) {
 	ahora := time.Now()
 	p := twitch.New(twitch.Options{ClientID: "cid", HTTPClient: s.Client(), AuthBase: s.URL, HelixBase: s.URL,
 		Now: func() time.Time { return ahora }})
-	prompt, _ := p.BeginAuth(context.Background())
-	_, err := p.PollAuth(context.Background(), prompt)
+	prompt, _ := p.BeginAuth(context.Background(), platforms.Credentials{})
+	_, err := p.PollAuth(context.Background(), platforms.Credentials{}, prompt)
 	if !errors.Is(err, platforms.ErrAuthPending) {
 		t.Fatalf("slow_down: err = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestDeviceFlowExpiresAndSlowsDown(t *testing.T) {
 		t.Errorf("el prompt original no cambia: %v", prompt.Interval)
 	}
 	ahora = ahora.Add(31 * time.Minute)
-	if _, err := p.PollAuth(context.Background(), prompt); !errors.Is(err, platforms.ErrAuthExpired) {
+	if _, err := p.PollAuth(context.Background(), platforms.Credentials{}, prompt); !errors.Is(err, platforms.ErrAuthExpired) {
 		t.Errorf("vencido: err = %v", err)
 	}
 }
@@ -163,14 +163,14 @@ func TestRefreshRotatesWithoutClientSecret(t *testing.T) {
 		return 200, fixture(t, "refresh.json")
 	}
 	p := proveedor(t, s)
-	tok, err := p.Refresh(context.Background(), "viejo")
+	tok, err := p.Refresh(context.Background(), cuenta(), platforms.Credentials{}, "viejo")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tok.Access.Reveal() != "1ssjqsqfy6bads1ws7m03gras79zfr" || tok.Refresh.Reveal() == "" || time.Until(tok.ExpiresAt) < 4*time.Hour {
 		t.Errorf("tokens = %+v", tok)
 	}
-	if _, err := p.Refresh(context.Background(), "otro"); !errors.Is(err, platforms.ErrUnauthorized) {
+	if _, err := p.Refresh(context.Background(), cuenta(), platforms.Credentials{}, "otro"); !errors.Is(err, platforms.ErrUnauthorized) {
 		t.Errorf("refresh inválido: err = %v, quería ErrUnauthorized", err)
 	}
 }
@@ -246,7 +246,7 @@ func TestWithoutClientIDNothingWorks(t *testing.T) {
 	if p.Configured() {
 		t.Error("sin client_id no está configurado")
 	}
-	if _, err := p.BeginAuth(context.Background()); !errors.Is(err, platforms.ErrNoClientID) {
+	if _, err := p.BeginAuth(context.Background(), platforms.Credentials{}); !errors.Is(err, platforms.ErrNoClientID) {
 		t.Errorf("err = %v", err)
 	}
 	if _, err := p.SearchCategories(context.Background(), "tok", "science"); !errors.Is(err, platforms.ErrNoClientID) {

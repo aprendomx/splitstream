@@ -34,13 +34,13 @@ func (l *lectorFalso) Capabilities() platforms.Capabilities {
 	return platforms.Capabilities{ChatRead: true}
 }
 func (l *lectorFalso) Configured() bool { return true }
-func (l *lectorFalso) BeginAuth(context.Context) (platforms.AuthPrompt, error) {
+func (l *lectorFalso) BeginAuth(context.Context, platforms.Credentials) (platforms.AuthPrompt, error) {
 	return platforms.AuthPrompt{}, nil
 }
-func (l *lectorFalso) PollAuth(context.Context, platforms.AuthPrompt) (store.NewAccount, error) {
+func (l *lectorFalso) PollAuth(context.Context, platforms.Credentials, platforms.AuthPrompt) (store.NewAccount, error) {
 	return store.NewAccount{}, nil
 }
-func (l *lectorFalso) Refresh(context.Context, crypto.Secret) (store.Tokens, error) {
+func (l *lectorFalso) Refresh(context.Context, store.Account, platforms.Credentials, crypto.Secret) (store.Tokens, error) {
 	return store.Tokens{}, nil
 }
 func (l *lectorFalso) Validate(context.Context, crypto.Secret) (platforms.Identity, error) {

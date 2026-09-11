@@ -121,7 +121,15 @@ func (m *Manager) doRefresh(ctx context.Context, acct store.Account, t store.Tok
 	if t.Refresh.Reveal() == "" {
 		return "", m.marcarReauth(ctx, acct)
 	}
-	nuevo, err := p.Refresh(ctx, t.Refresh)
+	var creds platforms.Credentials
+	if acct.OwnApp {
+		// Con app propia, refrescar exige el client_id y el client_secret del usuario.
+		var err error
+		if creds, err = m.db.AccountCredentials(ctx, m.cipher, acct.ID); err != nil {
+			return "", err
+		}
+	}
+	nuevo, err := p.Refresh(ctx, acct, creds, t.Refresh)
 	if err != nil {
 		if errors.Is(err, platforms.ErrUnauthorized) {
 			return "", m.marcarReauth(ctx, acct)

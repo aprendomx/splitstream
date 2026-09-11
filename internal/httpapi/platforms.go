@@ -123,7 +123,8 @@ func (s *Server) handleStartAuth(w http.ResponseWriter, r *http.Request) {
 			"hay demasiadas conexiones en curso; espera a que terminen o venzan")
 		return
 	}
-	prompt, err := p.BeginAuth(r.Context())
+	// TODO(Task 9): pasar las credenciales de la cuenta con app propia en vez de vacías.
+	prompt, err := p.BeginAuth(r.Context(), platforms.Credentials{})
 	if errors.Is(err, platforms.ErrNoClientID) {
 		writeError(w, http.StatusConflict, codeConflict,
 			"esta plataforma no tiene client_id: pon SPLITSTREAM_TWITCH_CLIENT_ID o espera a una versión con la app incluida")
@@ -168,7 +169,7 @@ func (s *Server) sondear(ctx context.Context, p platforms.Provider, prompt platf
 			return
 		case <-time.After(espera):
 		}
-		nueva, err := p.PollAuth(ctx, prompt)
+		nueva, err := p.PollAuth(ctx, platforms.Credentials{}, prompt)
 		switch {
 		case err == nil:
 			acct, err := s.db.UpsertAccount(ctx, s.cipher, nueva)
