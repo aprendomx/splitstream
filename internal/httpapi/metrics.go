@@ -118,6 +118,21 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	add("splitstream_recording_dropped_frames_total", "Mensajes que la grabación descartó por disco lento.", "counter", nil, recDrops)
 	add("splitstream_recording_free_bytes", "Espacio libre en el directorio de grabaciones.", "gauge", nil, float64(s.freeBytes()))
 
+	// Chat: mensajes por plataforma, si la cuenta de esa plataforma sigue conectada, y
+	// cuántos se descartaron por un suscriptor lento del bus.
+	if s.chatStats != nil {
+		mensajes, conectado, dropped := s.chatStats()
+		for plat, n := range mensajes {
+			add("splitstream_chat_messages_total", "Mensajes de chat recibidos por plataforma.", "counter",
+				map[string]string{"platform": string(plat)}, float64(n))
+		}
+		for plat, ok := range conectado {
+			add("splitstream_chat_connected", "1 si el lector de chat de la plataforma está conectado.", "gauge",
+				map[string]string{"platform": string(plat)}, b2f(ok))
+		}
+		add("splitstream_chat_dropped_total", "Mensajes de chat descartados por un suscriptor lento.", "counter", nil, float64(dropped))
+	}
+
 	for _, extra := range s.extra {
 		ms = append(ms, extra()...)
 	}

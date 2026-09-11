@@ -21,6 +21,13 @@ disco, agregar chats, cuentas múltiples, y cualquier ingesta que no sea RTMP.
 > se atrasa se degrada la grabación, nunca el directo. Siguen fuera: transcodificar,
 > ABR, chat de escritura, multi-tenant.
 
+> **Enmienda 2026-09-11 (v0.11):** el chat unificado deja de estar fuera de alcance, pero
+> solo su lectura. Con una cuenta de plataforma conectada (hoy solo Twitch, vía Device
+> Code Grant y EventSub), Splitstream puede leer el chat en el panel y cambiar el título
+> y la categoría del canal en vivo. Escribir o moderar el chat sigue fuera, igual que
+> cualquier capacidad de plataforma para YouTube, Kick, Facebook, X y TikTok que no sea
+> retransmitir: solo Twitch tiene proveedor propio por ahora. Multi-tenant sigue fuera.
+
 ## 2. Decisiones tomadas
 
 | Decisión | Elegido | Por qué |
@@ -122,6 +129,11 @@ splitstream/
 │   ├── api/
 │   │   ├── router.go  auth.go  destinations.go  status.go  events.go  ws.go
 │   │   └── apierr/                # {"error":{"code","message"}}
+│   ├── platforms/                 # interfaces por capacidad (título, categoría, chat)
+│   │   │                          # y el registro de proveedores (v0.11)
+│   │   ├── tokens/                 # gestor de tokens: refresco, validación al arrancar
+│   │   └── twitch/                 # proveedor Twitch: DCF, refresh, Helix, EventSub
+│   ├── chat/                       # agregador de chat por sesión (v0.11)
 │   └── web/embed.go               # go:embed de web/dist/spa
 ├── web/                           # proyecto Quasar (Vite)
 │   └── src/{pages,components,stores,boot}
@@ -171,6 +183,9 @@ de build, así que el piso no restringe el despliegue.
 módulo `x/crypto` que ya se traía. Sigue sin haber módulo nuevo. `go.mod` gana
 `golang.org/x/net` y `golang.org/x/text` como `// indirect` —transitivas de `autocert`—
 sin que cambien las cinco directas.
+
+**Desde la v0.11 (2026-09-11):** sin módulo nuevo; `coder/websocket` también como
+cliente (EventSub); Device Code Grant a mano con `net/http`.
 
 ## 6. Arquitectura del motor
 
@@ -296,6 +311,16 @@ descartados, uptime de la conexión actual, número de reconexiones, último err
   carpeta o cambiar `SPLITSTREAM_RECORDINGS_DIR` no rompe el listado), `segment`,
   `started_at`, `ended_at` (NULL mientras el segmento sigue abierto), `bytes`,
   `duration_ms`.
+- *(v0.11, migración 0007)* **`platform_accounts`** — una cuenta de plataforma conectada:
+  `id`, `platform` (`twitch|youtube|kick`), `external_id`, `display_name`, tokens de
+  acceso y refresco cifrados, `expires_at`, `scopes`, `status` (`ok|reauth`), y
+  `destination_accounts` — el enlace `destination_id ↔ account_id` (uno por destino, con
+  `ON DELETE CASCADE` en ambos sentidos).
+- *(v0.11, migración 0008)* **`chat_messages`** — un mensaje leído del chat de una
+  plataforma: `id`, `session_id` (cae con la sesión), `account_id`, `platform`,
+  `author_id`, `author`, `text`, `color`, `badges`, `message_id`, `at`.
+
+`SchemaVersion` es `8` desde la v0.11.
 
 Migraciones versionadas en `internal/store/migrations/*.sql`, embebidas y aplicadas al
 arranque por un runner propio que lleva la versión en `PRAGMA user_version`. SQLite en
@@ -362,6 +387,17 @@ PATCH  /api/recording/settings                                                  
 GET    /api/recordings?limit=&before= → listado de segmentos grabados           (v0.9)
 GET    /api/recordings/:id/download   → descarga el FLV del segmento            (v0.9)
 DELETE /api/recordings/:id                                                      (v0.9)
+
+GET    /api/platforms                      → catálogo y capacidades por plataforma (v0.11)
+POST   /api/platforms/:p/auth              → arranca el flujo de autorización      (v0.11)
+GET    /api/platforms/:p/auth/:state       → sondea el estado del flujo             (v0.11)
+GET    /api/platforms/twitch/categories?q= → busca categorías de Twitch             (v0.11)
+GET    /api/accounts                       → cuentas de plataforma conectadas       (v0.11)
+DELETE /api/accounts/:id                   → desconecta una cuenta                  (v0.11)
+PATCH  /api/destinations/:id               → gana `account_id` para enlazar cuenta  (v0.11)
+POST   /api/live/title                     → título/categoría en todos los que puedan (v0.11)
+GET    /api/chat/ws                        → chat en vivo por WebSocket             (v0.11)
+GET    /api/sessions/:id/chat              → historial de chat paginado por sesión  (v0.11)
 ```
 
 Errores siempre con la forma `{"error": {"code": "...", "message": "..."}}`.
@@ -440,6 +476,13 @@ defecto `recordings/` junto a la base).
 (`aprendomx/tap`), winget (`aprendomx.Splitstream`), `deploy/install.sh` e imagen
 `ghcr.io/aprendomx/splitstream`. Eventos nuevos: `update_available`,
 `tls_certificate_error`.
+
+**Desde la v0.11 (2026-09-11):** dos variables más — `SPLITSTREAM_TWITCH_CLIENT_ID`
+(vacío por defecto; usa el client_id incluido en el binario, hoy vacío hasta que se
+registre la app, así que conectar cuentas de Twitch necesita esta variable) y
+`SPLITSTREAM_RETENTION_MAX_CHAT` (`200000` por defecto; `0` desactiva el tope de filas en
+`chat_messages`). Eventos nuevos: `account_connected`, `account_disconnected`,
+`account_reauth_required`, `channel_updated`, `chat_connected`, `chat_disconnected`.
 
 README con instalación, configuración de OBS, y la nota de ancho de banda: **el subida
 necesario es bitrate × número de destinos**. Sin transcodificación no hay nada que hacer

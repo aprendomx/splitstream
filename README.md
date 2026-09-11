@@ -250,6 +250,8 @@ Todo se controla con variables de entorno:
 | `SPLITSTREAM_METRICS_TOKEN` | vacío | Con valor, `/metrics` acepta `Authorization: Bearer`. Vacío: solo cookie de sesión |
 | `SPLITSTREAM_RETENTION_DAYS` | `90` | Eventos y sesiones cerradas más viejos se borran. `0` desactiva |
 | `SPLITSTREAM_RETENTION_MAX_EVENTS` | `50000` | Tope de filas en `events`. `0` desactiva |
+| `SPLITSTREAM_RETENTION_MAX_CHAT` | `200000` | Tope de filas en `chat_messages`. `0` desactiva |
+| `SPLITSTREAM_TWITCH_CLIENT_ID` | vacío | Vacío: el client_id incluido en el binario; pon el tuyo si registras tu propia app en dev.twitch.tv. Es público, no un secreto. **Hasta que la app de Splitstream esté registrada, conectar cuentas de Twitch necesita esta variable** |
 | `SPLITSTREAM_RECORDINGS_DIR` | `recordings/` junto a la base | Dónde se escriben los archivos de grabación |
 | `SPLITSTREAM_TLS_DOMAIN` | vacío | Con valor, TLS integrado con Let's Encrypt para ese dominio; el panel pasa a `:443` |
 | `SPLITSTREAM_TLS_CACHE_DIR` | `tls-cache/` junto a la base | Cuenta y certificados de Let's Encrypt |
@@ -423,7 +425,8 @@ rutas y la clave, y cárgalo con `launchctl load`:
 
 El [manual de usuario](docs/manual-de-usuario.md) explica cómo configurar OBS, vincular
 canales y qué hacer cuando uno falla. Incluye las particularidades de cada plataforma que
-descubrimos probando contra ellas de verdad.
+descubrimos probando contra ellas de verdad. También cómo conectar tu cuenta de Twitch
+para cambiar el título y la categoría en vivo y leer el chat desde el panel.
 
 ---
 
@@ -459,8 +462,9 @@ cada fase, incluidos los errores que cometimos y cómo se corrigieron.
 
 Retransmisión y grabación local. Graba en FLV, sin transcodificar: lo que entra por RTMP
 se muxea tal cual a disco, igual que se reenvía tal cual a cada destino. Sin
-transcodificación, sin chat unificado y sin multi-tenant. Si necesitas cambiar la
-resolución o el bitrate por destino, esto no es la herramienta: hace falta
+transcodificación, chat de **lectura** en el panel, por plataforma y solo donde la API lo
+permite (hoy Twitch); escribir y moderar quedan fuera. Sin multi-tenant. Si necesitas
+cambiar la resolución o el bitrate por destino, esto no es la herramienta: hace falta
 transcodificar, y eso es otro producto.
 
 ## Licencia

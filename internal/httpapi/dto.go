@@ -46,6 +46,68 @@ func newMetricsDTO(m relay.Metrics) metricsDTO {
 	}
 }
 
+// capabilitiesDTO es lo que el destino puede hacer a través de su plataforma (roadmap §2:
+// capacidades por destino, no una lista uniforme). Todo false para custom, TikTok o X.
+type capabilitiesDTO struct {
+	Title    bool `json:"title"`
+	Category bool `json:"category"`
+	Chat     bool `json:"chat"`
+}
+
+// accountRefDTO es la cuenta vinculada tal como la ve la tarjeta del destino. Sin tokens.
+type accountRefDTO struct {
+	ID          int64  `json:"id"`
+	DisplayName string `json:"display_name"`
+	Platform    string `json:"platform"`
+	Status      string `json:"status"`
+}
+
+type accountDTO struct {
+	ID           int64      `json:"id"`
+	Platform     string     `json:"platform"`
+	DisplayName  string     `json:"display_name"`
+	Status       string     `json:"status"`
+	Scopes       []string   `json:"scopes"`
+	ExpiresAt    *time.Time `json:"expires_at"`
+	Destinations []int64    `json:"destinations"`
+	CreatedAt    time.Time  `json:"created_at"`
+}
+
+// newAccountDTO. Ni el token de acceso ni el de refresco tienen campo en Account, así que
+// no hay forma de que se filtren aquí por descuido.
+func newAccountDTO(a store.Account, dests []int64) accountDTO {
+	if dests == nil {
+		dests = []int64{}
+	}
+	scopes := a.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	return accountDTO{ID: a.ID, Platform: string(a.Platform), DisplayName: a.DisplayName, Status: a.Status,
+		Scopes: scopes, ExpiresAt: a.ExpiresAt, Destinations: dests, CreatedAt: a.CreatedAt}
+}
+
+type platformDTO struct {
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Capabilities capabilitiesDTO `json:"capabilities"`
+	Configured   bool            `json:"configured"`
+}
+
+type chatMessageDTO struct {
+	ID        int64     `json:"id"`
+	SessionID int64     `json:"session_id"`
+	Platform  string    `json:"platform"`
+	AccountID *int64    `json:"account_id"`
+	AuthorID  string    `json:"author_id"`
+	Author    string    `json:"author"`
+	Text      string    `json:"text"`
+	Color     string    `json:"color"`
+	Badges    []string  `json:"badges"`
+	MessageID string    `json:"message_id"`
+	At        time.Time `json:"at"`
+}
+
 type destinationDTO struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
@@ -65,6 +127,12 @@ type destinationDTO struct {
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
 	Metrics   *metricsDTO `json:"metrics"`
+	// Account es la cuenta vinculada, sin tokens; nil sin cuenta. Capabilities son las de
+	// la plataforma del destino, ceros si no hay proveedor (custom, TikTok, X). Los llena
+	// decorar, no newDestinationDTO: así este constructor sigue sin depender de la base ni
+	// del registro de plataformas.
+	Account      *accountRefDTO  `json:"account"`
+	Capabilities capabilitiesDTO `json:"capabilities"`
 }
 
 // newDestinationDTO. m es nil cuando no hay sesión viva o el destino está apagado: el

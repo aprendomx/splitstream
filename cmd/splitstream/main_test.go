@@ -10,12 +10,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -509,6 +511,86 @@ func TestRunServesTheAPI(t *testing.T) {
 	cuerpo, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(cuerpo), "setpassword") {
 		t.Errorf("la respuesta no parece la nuestra: %s", cuerpo)
+	}
+
+	cancel()
+	select {
+	case err := <-hecho:
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run no volvió tras cancelar")
+	}
+}
+
+// TestRunExposesPlatforms: run() cablea internal/platforms hasta la API. El client_id se
+// fija en el entorno del test para que la afirmación no dependa de la máquina ni de que
+// alguna vez se rellene `twitch.ClientID` en el binario: con él, Twitch sale en la lista
+// con `configured` en true. No hay cuentas en la base, así que nada dispara una petición
+// real a Twitch (tokens.Manager.Run solo actúa sobre cuentas existentes y chat.Aggregator
+// solo arranca lectores cuando hay una sesión de ingesta publicando).
+func TestRunExposesPlatforms(t *testing.T) {
+	t.Setenv("SPLITSTREAM_TWITCH_CLIENT_ID", "cid-de-prueba")
+	addr, cancel, hecho := arrancaRun(t, io.Discard)
+	defer cancel()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliente := &http.Client{Jar: jar, Timeout: 5 * time.Second}
+	base := "http://" + addr
+
+	var resp *http.Response
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err = cliente.Get(base + "/api/setup")
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("la API nunca respondió en %s: %v", addr, err)
+	}
+	resp.Body.Close()
+
+	// "contraseña-larga-1" cumple minPasswordLen (8), como en el test TLS.
+	resp, err = cliente.Post(base+"/api/setup", "application/json", strings.NewReader(`{"password":"contraseña-larga-1"}`))
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("setup = %d, quería 204", resp.StatusCode)
+	}
+	resp, err = cliente.Post(base+"/api/auth/login", "application/json", strings.NewReader(`{"password":"contraseña-larga-1"}`))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("login = %d, quería 204", resp.StatusCode)
+	}
+
+	resp, err = cliente.Get(base + "/api/platforms")
+	if err != nil {
+		t.Fatalf("GET /api/platforms: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/platforms = %d, quería 200", resp.StatusCode)
+	}
+	var out []struct {
+		ID         string `json:"id"`
+		Configured bool   `json:"configured"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decodificar /api/platforms: %v", err)
+	}
+	if len(out) != 1 || out[0].ID != "twitch" || !out[0].Configured {
+		t.Errorf("/api/platforms = %+v, quería [{id:twitch configured:true}]", out)
 	}
 
 	cancel()

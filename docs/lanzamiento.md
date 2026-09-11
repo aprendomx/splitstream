@@ -1,7 +1,9 @@
 # Entrada de lanzamiento
 
 Borrador listo para publicar y el trabajo de posicionamiento que lo acompaña.
-Escrito para la v0.10.0, la primera que se instala con `brew`, `winget` o un script, con TLS integrado y aviso de versión nueva; si cambian las plataformas soportadas o lo que la herramienta no hace, hay que revisarlo. Son las dos cosas que el texto promete.
+Escrito para la v0.11.0, la primera que conecta una cuenta (Twitch) para cambiar el
+título y leer el chat desde el panel; si cambian las plataformas soportadas o lo que la
+herramienta no hace, hay que revisarlo. Son las dos cosas que el texto promete.
 
 ---
 
@@ -80,6 +82,12 @@ La v0.9 añade grabación, y con la misma cautela: si el disco no aguanta el rit
 escritura, la regla es que se degrada la grabación, nunca el directo, exactamente como un
 destino con la subida corta pierde vídeo sin arrastrar a los demás.
 
+La v0.11 empieza a abrir la puerta a algo más ambicioso: cambia el título en todas tus
+plataformas desde un solo campo. Por ahora está acotado a Twitch —es la única que conecta
+una cuenta propia—, pero conectada esa cuenta puedes cambiar el título y la categoría del
+canal, y leer el chat, sin salir del panel. Las demás plataformas se irán sumando a
+medida que tengan una integración así de directa.
+
 > Los tres fallos producían exactamente el mismo mensaje en el registro. Por eso el panel no
 > te enseña el error técnico: te dice «conecta y se corta» y te sugiere revisar si alcanzaste
 > el límite de emisiones de la plataforma.
@@ -87,9 +95,10 @@ destino con la subida corta pierde vídeo sin arrastrar a los demás.
 #### Qué no hace
 
 No transcodifica, así que no puedes emitir a distinta calidad en cada plataforma. Graba en
-FLV, sin transcodificar, con segmentos y tope de disco. No unifica el chat. Y no es
-multiusuario. Si necesitas cualquiera de esas cosas, esto no es la herramienta — y
-preferimos decirlo antes de que la descargues.
+FLV, sin transcodificar, con segmentos y tope de disco. El chat es de lectura, por
+plataforma, y hoy solo con Twitch; escribir y moderar quedan fuera. Y no es multiusuario.
+Si necesitas cualquiera de esas cosas, esto no es la herramienta — y preferimos decirlo
+antes de que la descargues.
 
 #### Pruébalo
 

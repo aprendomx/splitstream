@@ -1,5 +1,5 @@
 <script setup>
-import { iArrastrar, iBroadcast, iCopiar, iGrabar, iMas, iRotar } from '@/iconos'
+import { iArrastrar, iBroadcast, iChat, iCopiar, iGrabar, iMas, iRotar } from '@/iconos'
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useQuasar } from 'quasar'
 import draggable from 'vuedraggable'
@@ -10,6 +10,8 @@ import DialogoDestino from '@/components/DialogoDestino.vue'
 import TarjetaDestino from '@/components/TarjetaDestino.vue'
 import VistaPrevia from '@/components/VistaPrevia.vue'
 import RegistroEventos from '@/components/RegistroEventos.vue'
+import TituloEnVivo from '@/components/TituloEnVivo.vue'
+import Chat from '@/components/Chat.vue'
 
 const $q = useQuasar()
 const panel = usePanel()
@@ -35,6 +37,8 @@ function cerrarPrevia(motivo) {
   verPrevia.value = false
   if (motivo) $q.notify({ type: 'warning', message: motivo })
 }
+// El chat también existe solo mientras se enseña: se abre y se cierra a mano.
+const verChat = ref(false)
 
 watch(
   () => panel.destinos,
@@ -346,6 +350,8 @@ async function rotarClave() {
         </q-chip>
         <q-btn v-if="panel.haySesion && !verPrevia" flat dense no-caps size="sm"
                label="Vista previa" @click="verPrevia = true" />
+        <q-btn v-if="panel.haySesion && !verChat && panel.destinos.some((d) => d.account && d.capabilities?.chat)"
+               flat dense no-caps size="sm" :icon="iChat" label="Chat" @click="verChat = true" />
       </q-card-section>
 
       <q-separator />
@@ -368,6 +374,9 @@ async function rotarClave() {
     </q-card>
 
     <VistaPrevia v-if="verPrevia" @cerrar="cerrarPrevia" />
+    <Chat v-if="verChat" @cerrar="verChat = false" />
+
+    <TituloEnVivo />
 
     <div class="row items-center q-mb-sm q-gutter-sm">
       <div class="text-h6">Canales</div>

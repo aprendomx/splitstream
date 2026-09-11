@@ -118,6 +118,15 @@ export const api = {
   // enseñando el anterior desde su caché.
   urlLogo: (d) => `/api/destinations/${d.id}/logo?v=${d.logo_etag}`,
 
+  plataformas: () => pedir('GET', '/api/platforms'),
+  iniciarAuth: (p) => pedir('POST', `/api/platforms/${p}/auth`),
+  estadoAuth: (p, state) => pedir('GET', `/api/platforms/${p}/auth/${state}`),
+  cuentas: () => pedir('GET', '/api/accounts'),
+  borrarCuenta: (id) => pedir('DELETE', `/api/accounts/${id}`),
+  aplicarTitulo: (body) => pedir('POST', '/api/live/title', body),
+  categoriasTwitch: (q) => pedir('GET', `/api/platforms/twitch/categories?q=${encodeURIComponent(q)}`),
+  chatSesion: (id, after = 0, limit = 200) => pedir('GET', `/api/sessions/${id}/chat?after=${after}&limit=${limit}`),
+
   webhooks: () => pedir('GET', '/api/webhooks'),
   crearWebhook: (w) => pedir('POST', '/api/webhooks', w),
   editarWebhook: (id, patch) => pedir('PATCH', `/api/webhooks/${id}`, patch),

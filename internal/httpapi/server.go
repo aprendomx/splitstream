@@ -8,12 +8,23 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync"
+	"time"
 
+	"github.com/aprendomx/splitstream/internal/chat"
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/platforms"
 	"github.com/aprendomx/splitstream/internal/probe"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/store"
 )
+
+// TokenGetter es lo que la API necesita del gestor de tokens: entregar el token vigente de
+// una cuenta. Es una interfaz, y no tokens.Manager, para que este paquete no importe
+// internal/platforms/tokens ni de forma transitiva.
+type TokenGetter interface {
+	Token(ctx context.Context, accountID int64) (crypto.Secret, error)
+}
 
 // Disconnecter corta la publicación de ingesta en curso sin dejar de escuchar. Lo cumple
 // *rtmpio.Ingest (Task 9).
@@ -138,6 +149,20 @@ type Config struct {
 	// UpdateInfo da el último resultado del checker de versiones (Task 5). Nil: sin
 	// aviso, igual que ExtraMetrics, para que este paquete no importe internal/update.
 	UpdateInfo func() UpdateStatus
+	// Platforms es el registro de proveedores (Twitch, y en la v0.12 YouTube y Kick).
+	// Nil en los tests que no lo ejercitan: /api/platforms devuelve una lista vacía.
+	Platforms *platforms.Registry
+	// Tokens entrega tokens vigentes; es tokens.Manager sin importarlo.
+	Tokens TokenGetter
+	// Chat es el bus del chat de la sesión; nil desactiva /api/chat/ws (404).
+	Chat *chat.Bus
+	// ChatStats alimenta /metrics.
+	ChatStats func() (map[platforms.ID]uint64, map[platforms.ID]bool, uint64)
+	// BaseContext es el padre de los flujos de autorización en curso (platforms.go): al
+	// cancelarlo, todos los sondeos en marcha cortan en vez de seguir vivos hasta que
+	// venza su código de dispositivo. Nil usa context.Background(); main.go le pasará el
+	// contexto de vida de los sinks en la Task 7.
+	BaseContext context.Context
 }
 
 // Server sirve la API del spec §9.
@@ -166,6 +191,19 @@ type Server struct {
 	tls          bool
 	publicURL    string
 	updateInfo   func() UpdateStatus
+	platforms    *platforms.Registry
+	tokens       TokenGetter
+	chat         *chat.Bus
+	chatStats    func() (map[platforms.ID]uint64, map[platforms.ID]bool, uint64)
+	// liveTimeout es el plazo por destino de POST /api/live/title (ver live.go). Campo y
+	// no constante para que los tests puedan bajarlo sin dormir diez segundos.
+	liveTimeout time.Duration
+	// auths son los flujos de dispositivo en curso (ver platforms.go).
+	auths *authFlows
+	// baseCtx es el padre de los flujos de autorización en curso; wg cuenta sus
+	// goroutines de sondeo para que Wait() pueda esperarlas.
+	baseCtx context.Context
+	wg      sync.WaitGroup
 }
 
 func New(cfg Config) (*Server, error) {
@@ -183,6 +221,10 @@ func New(cfg Config) (*Server, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	baseCtx := cfg.BaseContext
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
 
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
@@ -195,6 +237,10 @@ func New(cfg Config) (*Server, error) {
 		proxies: cfg.TrustedProxies,
 		tls:     cfg.TLS, publicURL: cfg.PublicURL,
 		updateInfo: cfg.UpdateInfo,
+		platforms:  cfg.Platforms, tokens: cfg.Tokens, chat: cfg.Chat, chatStats: cfg.ChatStats,
+		auths:       &authFlows{flows: map[string]*authFlow{}},
+		baseCtx:     baseCtx,
+		liveTimeout: liveTimeoutPorDefecto,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto
@@ -260,6 +306,21 @@ func (s *Server) routes() {
 	protegida("DELETE /api/recordings/{id}", s.handleDeleteRecording)
 	protegida("GET /ws", s.handleWS)
 	protegida("GET /api/preview/ws", s.handlePreviewWS)
+
+	// Plataformas, flujo de autorización sondeado en el servidor, y cuentas (v0.11 §6.1).
+	protegida("GET /api/platforms", s.handleListPlatforms)
+	protegida("POST /api/platforms/{p}/auth", s.handleStartAuth)
+	// El literal "twitch/categories" es más específico que "{p}/auth/{state}" y tiene un
+	// segmento menos, así que no compite con él en el mux.
+	protegida("GET /api/platforms/twitch/categories", s.handleSearchCategories)
+	protegida("GET /api/platforms/{p}/auth/{state}", s.handleAuthStatus)
+	protegida("GET /api/accounts", s.handleListAccounts)
+	protegida("DELETE /api/accounts/{id}", s.handleDeleteAccount)
+	protegida("POST /api/live/title", s.handleLiveTitle)
+
+	// Chat de la sesión: en vivo por WebSocket, e historial paginado por sesión.
+	protegida("GET /api/chat/ws", s.handleChatWS)
+	protegida("GET /api/sessions/{id}/chat", s.handleSessionChat)
 
 	// El panel va en la raíz y se registra el ÚLTIMO: en el mux de Go 1.22 los patrones
 	// más específicos ganan, así que /api/... y /ws siguen entrando por sus handlers.
