@@ -35,6 +35,13 @@ type Options struct {
 	APIBase    string
 	Now        func() time.Time
 	Logger     *slog.Logger
+	// PublicKeyTTL es cuánto vale la clave pública del webhook cacheada (24 h por
+	// defecto), ReplayWindow el desfase máximo de la marca de tiempo de un webhook
+	// (5 min) y SeenTTL cuánto se recuerda un message_id para no procesarlo dos veces
+	// (10 min). Los tres solo los usa el webhook del chat (webhook.go).
+	PublicKeyTTL time.Duration
+	ReplayWindow time.Duration
+	SeenTTL      time.Duration
 }
 
 type Provider struct {
@@ -43,6 +50,9 @@ type Provider struct {
 	apiBase  string
 	now      func() time.Time
 	logger   *slog.Logger
+	// wh es el estado del webhook del chat: la clave pública cacheada y los message_id
+	// ya vistos. Vive en webhook.go.
+	wh webhookState
 }
 
 // New construye el proveedor. Los tests SIEMPRE deben inyectar AuthBase y APIBase (los
@@ -65,6 +75,7 @@ func New(o Options) *Provider {
 	if p.logger == nil {
 		p.logger = slog.Default()
 	}
+	p.wh.init(o)
 	return p
 }
 
@@ -155,4 +166,5 @@ var (
 	_ platforms.TitleSetter       = (*Provider)(nil)
 	_ platforms.CategorySetter    = (*Provider)(nil)
 	_ platforms.IngestKeyProvider = (*Provider)(nil)
+	_ platforms.ChatWebhook       = (*Provider)(nil)
 )

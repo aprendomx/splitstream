@@ -1,0 +1,35 @@
+{
+  "message": "",
+  "data": [
+    {
+      "id": "01HZQ3T5V0SUBSCRIPTION001",
+      "app_id": "01HZQ3T5V0APP00000000001",
+      "broadcaster_user_id": 123,
+      "event": "chat.message.sent",
+      "version": 1,
+      "method": "webhook",
+      "created_at": "2026-09-11T10:00:00Z",
+      "updated_at": "2026-09-11T10:00:00Z"
+    },
+    {
+      "id": "01HZQ3T5V0SUBSCRIPTION002",
+      "app_id": "01HZQ3T5V0APP00000000001",
+      "broadcaster_user_id": 456,
+      "event": "chat.message.sent",
+      "version": 1,
+      "method": "webhook",
+      "created_at": "2026-09-11T10:00:00Z",
+      "updated_at": "2026-09-11T10:00:00Z"
+    },
+    {
+      "id": "01HZQ3T5V0SUBSCRIPTION003",
+      "app_id": "01HZQ3T5V0APP00000000001",
+      "broadcaster_user_id": 123,
+      "event": "channel.followed",
+      "version": 1,
+      "method": "webhook",
+      "created_at": "2026-09-11T10:00:00Z",
+      "updated_at": "2026-09-11T10:00:00Z"
+    }
+  ]
+}

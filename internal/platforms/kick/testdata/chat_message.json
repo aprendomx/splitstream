@@ -1,0 +1,31 @@
+{
+  "message_id": "01HZQ3T5V0MESSAGE00000001",
+  "broadcaster": {
+    "is_anonymous": false,
+    "user_id": 123,
+    "username": "broadcaster_name",
+    "is_verified": true,
+    "profile_picture": "https://kick.com/img/default-profile-pictures/default-avatar-2.webp",
+    "channel_slug": "broadcaster-name",
+    "identity": null
+  },
+  "sender": {
+    "is_anonymous": false,
+    "user_id": 987654321,
+    "username": "sender_name",
+    "is_verified": false,
+    "profile_picture": "https://kick.com/img/default-profile-pictures/default-avatar-5.webp",
+    "channel_slug": "sender-name",
+    "identity": {
+      "username_color": "#FF5733",
+      "badges": [
+        { "text": "Moderator", "type": "moderator", "count": 0 },
+        { "text": "Sub Gifter", "type": "sub_gifter", "count": 5 },
+        { "text": "Subscriber", "type": "subscriber", "count": 3 }
+      ]
+    }
+  },
+  "content": "Hello [emote:4148074:HYPERCLAP]",
+  "emotes": null,
+  "created_at": "2026-09-11T11:59:40Z"
+}
