@@ -308,3 +308,148 @@ func TestLiveTitleUsesTheBroadcastWhenThereIsOne(t *testing.T) {
 		t.Errorf("se cambió el título del canal en vez del de la emisión: %v", p.titulos)
 	}
 }
+
+// destinoDesdeCuenta crea un destino con emisión por el camino normal y devuelve su id.
+func destinoDesdeCuenta(t *testing.T, srv *Server, ck []*http.Cookie, a *store.Account, nombre string) int64 {
+	t.Helper()
+	rec := do(t, srv, ck, http.MethodPost, "/api/destinations/from-account",
+		`{"account_id":`+itoa(a.ID)+`,"name":"`+nombre+`"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("from-account = %d %s", rec.Code, rec.Body)
+	}
+	return decodeDest(t, rec).ID
+}
+
+// TestFromAccountNoDejaDestinosHuerfanos: entre crear el destino y vincularle la cuenta
+// caben fallos (la cuenta se desconectó desde otra pestaña, la base falló). Antes, el
+// destino quedaba creado —con la clave que la plataforma acababa de dar— pero sin cuenta
+// ni emisión, y quien pedía el alta recibía un error sin saber que se le había quedado un
+// destino a medias en el panel.
+func TestFromAccountNoDejaDestinosHuerfanos(t *testing.T) {
+	p := &fakeProvider{configured: true, id: platforms.YouTube, schedule: true}
+	srv, db, ck := servidorPlataformas(t, p)
+	a := cuentaDePlataforma(t, srv, db, store.PlatformYouTube, "123", "canal")
+	// La cuenta desaparece justo después de que la plataforma diera la emisión: el destino
+	// llega a crearse, pero LinkDestination ya no encuentra a quién vincularlo.
+	p.trasEmision = func() {
+		if err := db.DeleteAccount(context.Background(), a.ID); err != nil {
+			t.Errorf("DeleteAccount: %v", err)
+		}
+	}
+
+	rec := do(t, srv, ck, http.MethodPost, "/api/destinations/from-account",
+		`{"account_id":`+itoa(a.ID)+`,"name":"YouTube"}`)
+	if rec.Code < 400 {
+		t.Fatalf("from-account = %d %s, quería un error", rec.Code, rec.Body)
+	}
+
+	dests, err := db.ListDestinations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dests) != 0 {
+		t.Errorf("quedaron %d destinos a medio crear: %+v", len(dests), dests)
+	}
+}
+
+// TestCreateBroadcastNoDejaLaClaveSinSuEmision: la clave nueva del destino y la emisión
+// que la justifica viven en tablas distintas. Escritas por separado, un fallo de la
+// segunda dejaba el destino emitiendo con una clave cuya emisión no conocíamos: el panel
+// enseñaba el broadcast_ref viejo y «terminar emisión» habría cerrado la que no era.
+func TestCreateBroadcastNoDejaLaClaveSinSuEmision(t *testing.T) {
+	p := &fakeProvider{configured: true, id: platforms.YouTube, schedule: true}
+	srv, db, ck := servidorPlataformas(t, p)
+	a := cuentaDePlataforma(t, srv, db, store.PlatformYouTube, "123", "canal")
+	id := destinoDesdeCuenta(t, srv, ck, a, "YouTube")
+
+	antes, err := db.DestinationByID(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// La segunda emisión sale bien de la plataforma, pero la cuenta se desconecta antes de
+	// que se escriba: SetBroadcast se topa con la clave ajena y la transacción cae entera.
+	p.trasEmision = func() {
+		if err := db.DeleteAccount(context.Background(), a.ID); err != nil {
+			t.Errorf("DeleteAccount: %v", err)
+		}
+	}
+	rec := do(t, srv, ck, http.MethodPost, destPath(id)+"/broadcast", "")
+	if rec.Code < 400 {
+		t.Fatalf("broadcast = %d %s, quería un error", rec.Code, rec.Body)
+	}
+
+	despues, err := db.DestinationByID(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if despues.RTMPURL != antes.RTMPURL || despues.KeyMask != antes.KeyMask {
+		t.Errorf("el destino se quedó con la clave de una emisión que no se guardó: antes %s/%s, después %s/%s",
+			antes.RTMPURL, antes.KeyMask, despues.RTMPURL, despues.KeyMask)
+	}
+}
+
+// TestPatchDestinationQuitaLaEmisionAlCambiarDeCuenta: la emisión es de la cuenta que la
+// creó. Si el destino pasa a otra cuenta o se queda sin ninguna, lo que quedaba en
+// destination_broadcasts ya no es suyo.
+func TestPatchDestinationQuitaLaEmisionAlCambiarDeCuenta(t *testing.T) {
+	p := &fakeProvider{configured: true, id: platforms.YouTube, schedule: true}
+	srv, db, ck := servidorPlataformas(t, p)
+	a := cuentaDePlataforma(t, srv, db, store.PlatformYouTube, "123", "canal")
+	otra := cuentaDePlataforma(t, srv, db, store.PlatformYouTube, "456", "otro canal")
+	id := destinoDesdeCuenta(t, srv, ck, a, "YouTube")
+
+	// A otra cuenta: la emisión de la primera se va.
+	rec := do(t, srv, ck, http.MethodPatch, destPath(id), `{"account_id":`+itoa(otra.ID)+`}`)
+	if rec.Code != 200 {
+		t.Fatalf("patch = %d %s", rec.Code, rec.Body)
+	}
+	if dto := decodeDest(t, rec); dto.Broadcast != nil {
+		t.Errorf("la emisión sobrevivió al cambio de cuenta: %+v", dto.Broadcast)
+	}
+	if _, err := db.BroadcastFor(context.Background(), id); err == nil {
+		t.Errorf("destination_broadcasts sigue teniendo la fila de la cuenta anterior")
+	}
+
+	// Y desvincular del todo también la quita.
+	id2 := destinoDesdeCuenta(t, srv, ck, a, "YouTube 2")
+	rec = do(t, srv, ck, http.MethodPatch, destPath(id2), `{"account_id":null}`)
+	if rec.Code != 200 {
+		t.Fatalf("patch null = %d %s", rec.Code, rec.Body)
+	}
+	if _, err := db.BroadcastFor(context.Background(), id2); err == nil {
+		t.Errorf("desvincular dejó la emisión en pie")
+	}
+	// La clave NO se toca: desvincular una cuenta no es dejar de poder emitir.
+	d, err := db.DestinationByID(context.Background(), id2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyMask == "" || d.RTMPURL == "" {
+		t.Errorf("desvincular se llevó por delante la clave del destino: %+v", d)
+	}
+}
+
+// TestDeleteAccountQuitaLasEmisionesDeSusDestinos: desconectar la cuenta se lleva las
+// emisiones que había creado. La clave del destino se queda: quien desconecta una cuenta
+// no está pidiendo dejar de emitir.
+func TestDeleteAccountQuitaLasEmisionesDeSusDestinos(t *testing.T) {
+	p := &fakeProvider{configured: true, id: platforms.YouTube, schedule: true}
+	srv, db, ck := servidorPlataformas(t, p)
+	a := cuentaDePlataforma(t, srv, db, store.PlatformYouTube, "123", "canal")
+	id := destinoDesdeCuenta(t, srv, ck, a, "YouTube")
+
+	if rec := do(t, srv, ck, http.MethodDelete, "/api/accounts/"+itoa(a.ID), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body)
+	}
+	if _, err := db.BroadcastFor(context.Background(), id); err == nil {
+		t.Errorf("la emisión sobrevivió a la desconexión de la cuenta")
+	}
+	d, err := db.DestinationByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("el destino tenía que seguir ahí: %v", err)
+	}
+	if d.KeyMask == "" || d.KeyFromAPI {
+		t.Errorf("destino tras desconectar la cuenta = %+v", d)
+	}
+}

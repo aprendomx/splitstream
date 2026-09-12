@@ -73,6 +73,12 @@ func (s *Server) handleKickWebhook(w http.ResponseWriter, r *http.Request) {
 	// 200 ANTES de tocar la base y el bus: la plataforma mide cuánto tardamos en aceptar
 	// la entrega y reintenta si nos demoramos. Lo que queda es rápido —una lectura por
 	// id de canal y un Ingest que no bloquea—, pero se hace con la entrega ya aceptada.
+	//
+	// El Content-Length explícito es lo que hace que el 200 sea de verdad: sin él, Go no
+	// sabe cuánto cuerpo viene y manda la respuesta troceada, así que el cliente no la da
+	// por terminada hasta el trozo final —que solo se escribe cuando este handler
+	// retorna—. Con Content-Length: 0, el flush entrega una respuesta completa.
+	w.Header().Set("Content-Length", "0")
 	w.WriteHeader(http.StatusOK)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()

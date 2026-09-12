@@ -688,6 +688,22 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.desuscribirChat(*acct)
+	// Las emisiones de esta cuenta se quitan antes de borrarla. La clave del destino se
+	// queda: quien desconecta una cuenta no está pidiendo dejar de emitir, y la clave que
+	// ya tiene sigue valiendo hasta que la plataforma la rote. La FK de
+	// destination_broadcasts también borraría estas filas en cascada; hacerlo aquí deja el
+	// invariante escrito donde se decide, y no colgando de que el pragma esté puesto.
+	dests, err := s.db.DestinationsOfAccount(r.Context(), id)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	for _, destID := range dests {
+		if err := s.db.ClearBroadcast(r.Context(), destID); err != nil {
+			s.writeStoreError(w, err)
+			return
+		}
+	}
 	if err := s.db.DeleteAccount(r.Context(), id); err != nil {
 		s.writeStoreError(w, err)
 		return

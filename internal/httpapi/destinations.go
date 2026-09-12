@@ -264,6 +264,17 @@ func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) 
 	// El enlace con la cuenta va aparte del resto del patch: distingue "no lo mandaron"
 	// (json.RawMessage vacío) de `null` (desvincular) de un número ya validado (vincular).
 	if len(in.AccountID) > 0 {
+		// La emisión guardada es de la cuenta que la creó. Si el destino pasa a otra
+		// cuenta —o se queda sin ninguna— lo que hay en destination_broadcasts deja de
+		// ser suyo: seguiría enseñando un broadcast_ref ajeno y «terminar emisión» lo
+		// mandaría a la cuenta equivocada. La clave del destino NO se toca: la persona
+		// pidió cambiar de cuenta, no quedarse sin poder emitir.
+		if b, err := s.db.BroadcastFor(r.Context(), id); err == nil && (vincular == nil || b.AccountID != *vincular) {
+			if err := s.db.ClearBroadcast(r.Context(), id); err != nil {
+				s.writeStoreError(w, err)
+				return
+			}
+		}
 		if vincular == nil {
 			if err := s.db.UnlinkDestination(r.Context(), id); err != nil {
 				s.writeStoreError(w, err)

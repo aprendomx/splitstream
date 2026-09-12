@@ -71,6 +71,10 @@ type fakeProvider struct {
 	cerradas       int
 	titulosEmision []string
 	fallaEmision   error
+	// trasEmision se llama cuando CreateBroadcast ya devolvió, sin el candado puesto: deja
+	// que un test sabotee la base justo entre la llamada a la plataforma y las escrituras
+	// del handler, que es donde viven los fallos a medias.
+	trasEmision func()
 }
 
 // envolverProveedor compone el proveedor con las capacidades que pidan sus banderas. Los
@@ -198,6 +202,9 @@ func (c capWebhook) ParseWebhook(hdr http.Header, _ []byte) ([]platforms.ChatMes
 type capSchedule struct{ p *fakeProvider }
 
 func (c capSchedule) CreateBroadcast(_ context.Context, _ store.Account, _ crypto.Secret, req platforms.BroadcastRequest) (platforms.Broadcast, error) {
+	if c.p.trasEmision != nil {
+		defer c.p.trasEmision()
+	}
 	c.p.mu.Lock()
 	defer c.p.mu.Unlock()
 	c.p.peticiones = append(c.p.peticiones, req)
@@ -1090,6 +1097,7 @@ func TestStatusCarriesTheYouTubeChatBudget(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &out)
 	if out.Panel.YouTubeChatBudget != 5000 {
 		t.Errorf("youtube_chat_budget = %d, quería 5000", out.Panel.YouTubeChatBudget)
+
 	}
 }
 

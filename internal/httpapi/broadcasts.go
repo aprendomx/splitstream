@@ -119,16 +119,23 @@ func (s *Server) escribirErrorEmision(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadGateway, codeInternal, mensajePlataforma(err))
 }
 
-// guardarEmision deja la emisión vinculada al destino y la registra. KeyFromAPI va SIEMPRE
-// a true: se llega aquí solo cuando la clave la dio la plataforma, y es lo que hace que
-// «probar destino» se salte y que el panel no invite a editar la clave.
-func (s *Server) guardarEmision(ctx context.Context, d store.Destination, acct store.Account, b platforms.Broadcast) error {
-	if err := s.db.SetBroadcast(ctx, store.Broadcast{
+// escribirEmision deja la emisión vinculada al destino. KeyFromAPI va SIEMPRE a true: se
+// llega aquí solo cuando la clave la dio la plataforma, y es lo que hace que «probar
+// destino» se salte y que el panel no invite a editar la clave.
+//
+// Recibe el *store.DB por parámetro para poder correr dentro de una transacción junto al
+// UPDATE del destino: la clave y la emisión son la misma verdad partida en dos tablas.
+func escribirEmision(ctx context.Context, db *store.DB, d store.Destination, acct store.Account, b platforms.Broadcast) error {
+	return db.SetBroadcast(ctx, store.Broadcast{
 		DestinationID: d.ID, AccountID: acct.ID, Platform: acct.Platform,
 		BroadcastRef: b.Ref, StreamRef: b.StreamRef, LiveChatID: b.LiveChatID, KeyFromAPI: true,
-	}); err != nil {
-		return err
-	}
+	})
+}
+
+// registrarEmision deja constancia de lo que la plataforma dio. Va DESPUÉS de que las
+// escrituras hayan cuajado: un evento contando una emisión que luego se deshizo sería
+// peor que no contar nada, porque el registro del panel no se puede desdecir.
+func (s *Server) registrarEmision(ctx context.Context, d store.Destination, acct store.Account, b platforms.Broadcast) {
 	id := d.ID
 	nombre := nombresPlataforma[platforms.ID(acct.Platform)]
 	sinCancelar := context.WithoutCancel(ctx)
@@ -138,7 +145,17 @@ func (s *Server) guardarEmision(ctx context.Context, d store.Destination, acct s
 	}
 	s.db.LogEvent(sinCancelar, store.Event{DestinationID: &id, Level: store.LevelInfo, Kind: "destination_key_from_api",
 		Message: "la clave de " + d.Name + " la dio " + nombre})
-	return nil
+}
+
+// borrarDestinoAMedias deshace un destino recién creado cuyo alta no llegó a terminar. Sin
+// esto, un fallo entre CreateDestination y el resto dejaba en el panel un destino con la
+// clave de la plataforma pero sin cuenta ni emisión: nadie lo pidió, nadie sabe qué es y
+// hay que borrarlo a mano. El contexto va sin cancelar porque si lo que falló fue el plazo
+// de la emisión, el de la petición también estaría muerto.
+func (s *Server) borrarDestinoAMedias(ctx context.Context, id int64) {
+	if err := s.db.DeleteDestination(context.WithoutCancel(ctx), id); err != nil {
+		s.logger.Warn("no se pudo borrar el destino a medio crear", "destino", id, "err", err)
+	}
 }
 
 // handleCreateDestinationFromAccount crea el destino con lo que da la plataforma: ni la
@@ -183,14 +200,21 @@ func (s *Server) handleCreateDestinationFromAccount(w http.ResponseWriter, r *ht
 		s.writeStoreError(w, err)
 		return
 	}
+	// Las tres escrituras no caben en una transacción (LinkDestination abre la suya y no
+	// se anidan), así que lo que hay es limpieza: si el enlace o la emisión fallan, el
+	// destino recién creado se deshace y quien llamó recibe el error, no un destino a
+	// medio hacer con un 201.
 	if err := s.db.LinkDestination(ctx, d.ID, acct.ID); err != nil {
+		s.borrarDestinoAMedias(ctx, d.ID)
 		s.writeStoreError(w, err)
 		return
 	}
-	if err := s.guardarEmision(ctx, *d, *acct, b); err != nil {
+	if err := escribirEmision(ctx, s.db, *d, *acct, b); err != nil {
+		s.borrarDestinoAMedias(ctx, d.ID)
 		s.writeStoreError(w, err)
 		return
 	}
+	s.registrarEmision(ctx, *d, *acct, b)
 	s.applyHot(r, *d)
 
 	w.Header().Set("Location", "/api/destinations/"+strconv.FormatInt(d.ID, 10))
@@ -236,16 +260,27 @@ func (s *Server) handleCreateBroadcast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// La clave nueva del destino y la emisión que la justifica van en la MISMA
+	// transacción. Partidas, un fallo a mitad dejaba el destino emitiendo con una clave
+	// cuya emisión no conocíamos (o al revés): el panel enseñaría un `broadcast_ref` que
+	// no corresponde a donde está yendo el vídeo, y «terminar emisión» cerraría la que no
+	// es.
 	clave := b.Key
-	d, err = s.db.UpdateDestination(ctx, s.cipher, id, store.DestinationPatch{RTMPURL: &b.IngestURL, Key: &clave})
-	if err != nil {
+	if err := s.db.InTx(ctx, func(tx *store.DB) error {
+		if err := escribirEmision(ctx, tx, *d, *acct, b); err != nil {
+			return err
+		}
+		_, err := tx.UpdateDestination(ctx, s.cipher, id, store.DestinationPatch{RTMPURL: &b.IngestURL, Key: &clave})
+		return err
+	}); err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
-	if err := s.guardarEmision(ctx, *d, *acct, b); err != nil {
+	if d, err = s.db.DestinationByID(ctx, id); err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
+	s.registrarEmision(ctx, *d, *acct, b)
 	s.applyHot(r, *d)
 	s.escribirDestino(ctx, w, http.StatusOK, id)
 }
