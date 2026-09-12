@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -83,7 +84,7 @@ func (p *Provider) PollAuth(ctx context.Context, creds platforms.Credentials, pr
 			case "authorization_pending", "slow_down":
 				return store.NewAccount{}, platforms.ErrAuthPending
 			case "access_denied":
-				return store.NewAccount{}, errors.New("la persona rechazó la autorización")
+				return store.NewAccount{}, fmt.Errorf("%w: %s", platforms.ErrAuthDenied, ae.reason)
 			case "expired_token", "invalid_grant":
 				return store.NewAccount{}, platforms.ErrAuthExpired
 			}

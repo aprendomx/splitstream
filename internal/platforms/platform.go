@@ -42,6 +42,10 @@ var (
 	ErrAuthPending = errors.New("autorización pendiente")
 	// ErrAuthExpired: el código venció; hay que empezar de nuevo.
 	ErrAuthExpired = errors.New("el código de autorización venció")
+	// ErrAuthDenied: la persona rechazó la autorización en la plataforma. Es definitivo,
+	// no transitorio: quien sondea tiene que terminar el flujo en el acto en vez de seguir
+	// preguntando hasta que venza el código (media hora mirando un «esperando…»).
+	ErrAuthDenied = errors.New("la persona rechazó la autorización")
 	// ErrNoClientID: el proveedor no tiene client_id (ni incluido ni por entorno).
 	ErrNoClientID = errors.New("la plataforma no tiene client_id configurado")
 	// ErrUnauthorized: la plataforma rechazó el token (401): toca refrescar o reconectar.

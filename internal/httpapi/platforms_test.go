@@ -23,6 +23,9 @@ type fakeProvider struct {
 	mu         sync.Mutex
 	pendientes int
 	sondeos    int
+	// rechaza hace que PollAuth devuelva ErrAuthDenied al primer sondeo: la persona dijo
+	// que no en la plataforma.
+	rechaza    bool
 	configured bool
 	titulos    []string
 	categorias []string
@@ -280,6 +283,9 @@ func (f *fakeProvider) PollAuth(context.Context, platforms.Credentials, platform
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sondeos++
+	if f.rechaza {
+		return store.NewAccount{}, fmt.Errorf("%w: access_denied", platforms.ErrAuthDenied)
+	}
 	if f.sondeos <= f.pendientes {
 		return store.NewAccount{}, platforms.ErrAuthPending
 	}
@@ -428,6 +434,47 @@ func TestAuthFlowReportsExpiredAndNoClientID(t *testing.T) {
 	}
 	if rec := do(t, srv2, ck2, http.MethodPost, "/api/platforms/facebook/auth", ""); rec.Code != 404 {
 		t.Errorf("plataforma sin proveedor = %d", rec.Code)
+	}
+}
+
+// TestAuthFlowTerminaSiLaPersonaRechaza: ErrAuthDenied es definitivo. Antes volvía como
+// error pelado, `sondear` lo tomaba por transitorio y seguía preguntando: el panel se
+// quedaba «esperando a que autorices…» hasta que venciera el código, media hora después.
+func TestAuthFlowTerminaSiLaPersonaRechaza(t *testing.T) {
+	f := &fakeProvider{configured: true, rechaza: true}
+	srv, _, ck := servidorPlataformas(t, f)
+	rec := do(t, srv, ck, http.MethodPost, "/api/platforms/twitch/auth", "")
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	var inicio authStartDTO
+	json.Unmarshal(rec.Body.Bytes(), &inicio)
+
+	var estado authStatusDTO
+	deadline := time.Now().Add(3 * time.Second)
+	for estado.Status == "" || estado.Status == "pending" {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("el flujo seguía en %q: un rechazo no debe esperar a que venza el código", estado.Status)
+		}
+		rec = do(t, srv, ck, http.MethodGet, "/api/platforms/twitch/auth/"+inicio.State, "")
+		json.Unmarshal(rec.Body.Bytes(), &estado)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if estado.Status != "error" {
+		t.Errorf("estado = %q, quería \"error\"", estado.Status)
+	}
+	if estado.Message != "rechazaste la autorización" {
+		t.Errorf("mensaje = %q", estado.Message)
+	}
+	if estado.Account != nil {
+		t.Errorf("un rechazo no debe traer cuenta: %+v", estado.Account)
+	}
+	// Y no siguió sondeando después de la negativa.
+	f.mu.Lock()
+	sondeos := f.sondeos
+	f.mu.Unlock()
+	if sondeos != 1 {
+		t.Errorf("sondeos = %d, quería 1", sondeos)
 	}
 }
 

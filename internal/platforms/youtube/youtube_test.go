@@ -158,10 +158,12 @@ func TestDeviceFlowPendingSlowDownDeniedAndDone(t *testing.T) {
 		t.Errorf("slow_down cambió el prompt: antes %+v, ahora %+v", antes, prompt)
 	}
 
+	// access_denied va envuelto en el centinela: sin él, quien sondea no puede
+	// distinguirlo de un fallo transitorio y sigue preguntando hasta que venza el código.
 	s.tokenRes = func(*http.Request) (int, []byte) { return 400, fixture(t, "denied.json") }
-	if _, err := p.PollAuth(ctx, creds(), prompt); err == nil || errors.Is(err, platforms.ErrAuthPending) ||
-		!strings.Contains(err.Error(), "rechaz") {
-		t.Fatalf("access_denied: err = %v", err)
+	if _, err := p.PollAuth(ctx, creds(), prompt); !errors.Is(err, platforms.ErrAuthDenied) ||
+		errors.Is(err, platforms.ErrAuthPending) || errors.Is(err, platforms.ErrAuthExpired) {
+		t.Fatalf("access_denied: err = %v, quería ErrAuthDenied", err)
 	}
 
 	s.tokenRes = func(r *http.Request) (int, []byte) {

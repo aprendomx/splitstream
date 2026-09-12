@@ -76,6 +76,10 @@ func (p *Provider) PollAuth(ctx context.Context, _ platforms.Credentials, prompt
 			switch he.msg {
 			case "authorization_pending", "slow_down":
 				return store.NewAccount{}, platforms.ErrAuthPending
+			case "access_denied":
+				// Twitch no lo documenta en el flujo de dispositivo, pero si llega es
+				// definitivo y se trata igual que en YouTube: no es un código vencido.
+				return store.NewAccount{}, fmt.Errorf("%w: %s", platforms.ErrAuthDenied, he.msg)
 			}
 			return store.NewAccount{}, fmt.Errorf("%w: %s", platforms.ErrAuthExpired, he.msg)
 		}

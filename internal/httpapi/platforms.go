@@ -321,6 +321,12 @@ func (s *Server) sondear(ctx context.Context, p platforms.Provider, creds platfo
 			if espera < 30*time.Second {
 				espera += intervalo / 2
 			}
+		case errors.Is(err, platforms.ErrAuthDenied):
+			// Rechazar la autorización es una respuesta, no un fallo transitorio: sin
+			// este caso el sondeo seguía preguntando y el panel se quedaba «esperando a
+			// que autorices…» hasta que venciera el código, media hora después.
+			s.terminar(f, "error", nil, "rechazaste la autorización")
+			return
 		case errors.Is(err, platforms.ErrAuthExpired):
 			s.terminar(f, "expired", nil, "el código venció; vuelve a empezar")
 			return
