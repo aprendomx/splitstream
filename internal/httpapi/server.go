@@ -26,6 +26,13 @@ type TokenGetter interface {
 	Token(ctx context.Context, accountID int64) (crypto.Secret, error)
 }
 
+// QuotaReader dice cuánta cuota lleva gastada hoy una cuenta. Lo cumple *quota.Counter
+// (Task 6); es una interfaz para que este paquete no importe internal/platforms/quota ni
+// —por su cadena— los proveedores, igual que TokenGetter.
+type QuotaReader interface {
+	UsedToday(ctx context.Context, accountID int64) (int, error)
+}
+
 // Disconnecter corta la publicación de ingesta en curso sin dejar de escuchar. Lo cumple
 // *rtmpio.Ingest (Task 9).
 //
@@ -158,6 +165,17 @@ type Config struct {
 	Chat *chat.Bus
 	// ChatStats alimenta /metrics.
 	ChatStats func() (map[platforms.ID]uint64, map[platforms.ID]bool, uint64)
+	// ChatIngest mete en el bus los mensajes que llegan por webhook (Kick) y devuelve
+	// cuántos aceptó; es chat.Aggregator.Ingest sin importarlo. No bloquea. Nil: el
+	// webhook sigue respondiendo 200 y los mensajes se descartan.
+	ChatIngest func([]platforms.ChatMessage) int
+	// ChatBudget acota cuántos mensajes se aceptan de UNA entrega de webhook: la
+	// plataforma decide cuántos manda, y sin tope un lote enorme llenaría el bus de golpe.
+	// 0 o menos: sin tope.
+	ChatBudget int
+	// Quota lee la cuota gastada hoy por cuenta (YouTube). Nil: el panel y /metrics no
+	// enseñan cuota, que es distinto de enseñar cero.
+	Quota QuotaReader
 	// BaseContext es el padre de los flujos de autorización en curso (platforms.go): al
 	// cancelarlo, todos los sondeos en marcha cortan en vez de seguir vivos hasta que
 	// venza su código de dispositivo. Nil usa context.Background(); main.go le pasará el
@@ -195,6 +213,18 @@ type Server struct {
 	tokens       TokenGetter
 	chat         *chat.Bus
 	chatStats    func() (map[platforms.ID]uint64, map[platforms.ID]bool, uint64)
+	chatIngest   func([]platforms.ChatMessage) int
+	chatBudget   int
+	quota        QuotaReader
+	// now es la hora del servidor para firmar y verificar el state del flujo con redirect.
+	// Campo y no time.Now directo para que un test pueda firmar un state ya caducado sin
+	// esperar once minutos.
+	now func() time.Time
+	// rechazoMu y ultimoRechazo acotan el evento `webhook_rejected` a uno por minuto: un
+	// atacante —o una plataforma mal configurada— podría llenar el registro con un bucle
+	// de webhooks inválidos (ver webhook.go).
+	rechazoMu     sync.Mutex
+	ultimoRechazo time.Time
 	// liveTimeout es el plazo por destino de POST /api/live/title (ver live.go). Campo y
 	// no constante para que los tests puedan bajarlo sin dormir diez segundos.
 	liveTimeout time.Duration
@@ -238,9 +268,11 @@ func New(cfg Config) (*Server, error) {
 		tls:     cfg.TLS, publicURL: cfg.PublicURL,
 		updateInfo: cfg.UpdateInfo,
 		platforms:  cfg.Platforms, tokens: cfg.Tokens, chat: cfg.Chat, chatStats: cfg.ChatStats,
+		chatIngest: cfg.ChatIngest, chatBudget: cfg.ChatBudget, quota: cfg.Quota,
 		auths:       &authFlows{flows: map[string]*authFlow{}},
 		baseCtx:     baseCtx,
 		liveTimeout: liveTimeoutPorDefecto,
+		now:         time.Now,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto
@@ -269,6 +301,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/setup", s.handleSetupEstado)
 	s.mux.HandleFunc("POST /api/setup", s.handleSetup)
 
+	// El callback del flujo con redirect es público a la fuerza: quien llega es el
+	// navegador que vuelve de la plataforma, y puede no traer la cookie del panel (otro
+	// navegador, o el móvil). Lo que lo protege es el `state` firmado: sin una firma
+	// nuestra y sin un flujo pendiente que le corresponda, no hace nada.
+	s.mux.HandleFunc("GET /api/platforms/{p}/callback", s.handleAuthCallback)
+	// El webhook del chat de Kick lo llama la plataforma, que tampoco tiene sesión. Lo
+	// protege la firma del payload, que verifica el proveedor en ParseWebhook.
+	s.mux.HandleFunc("POST /api/platforms/kick/webhook", s.handleKickWebhook)
+
 	protegida := func(pattern string, h http.HandlerFunc) {
 		s.mux.Handle(pattern, s.requireSession(h))
 	}
@@ -284,6 +325,13 @@ func (s *Server) routes() {
 	// toggle-all va con nombre fijo, no con {id}: el mux de Go da preferencia al patrón
 	// más específico, así que no compite con PATCH/DELETE /api/destinations/{id}.
 	protegida("POST /api/destinations/toggle-all", s.handleToggleAllDestinations)
+	// from-account va con nombre fijo, como toggle-all: tiene los mismos segmentos que
+	// POST /api/destinations pero uno más, así que no compite con el alta normal.
+	protegida("POST /api/destinations/from-account", s.handleCreateDestinationFromAccount)
+	protegida("POST /api/destinations/{id}/broadcast", s.handleCreateBroadcast)
+	protegida("GET /api/destinations/{id}/broadcast", s.handleGetBroadcast)
+	protegida("POST /api/destinations/{id}/broadcast/start", s.handleStartBroadcast)
+	protegida("POST /api/destinations/{id}/broadcast/end", s.handleEndBroadcast)
 	protegida("GET /api/destinations/{id}/key", s.handleRevealDestinationKey)
 	protegida("POST /api/destinations/{id}/retry", s.handleRetryDestination)
 	protegida("POST /api/destinations/{id}/test", s.handleTestDestination)

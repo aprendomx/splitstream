@@ -48,10 +48,44 @@ func newMetricsDTO(m relay.Metrics) metricsDTO {
 
 // capabilitiesDTO es lo que el destino puede hacer a través de su plataforma (roadmap §2:
 // capacidades por destino, no una lista uniforme). Todo false para custom, TikTok o X.
+//
+// Los dos últimos campos no son cosas que la plataforma sepa hacer sino condiciones para
+// poder usarla: YouTube exige credenciales de una app propia (la cuota es por app) y Kick
+// exige una URL pública por HTTPS donde recibir el webhook del chat. El panel los usa para
+// explicar ANTES de intentarlo, en vez de dejar que el flujo falle a mitad.
 type capabilitiesDTO struct {
-	Title    bool `json:"title"`
-	Category bool `json:"category"`
-	Chat     bool `json:"chat"`
+	Title             bool `json:"title"`
+	Category          bool `json:"category"`
+	Chat              bool `json:"chat"`
+	Schedule          bool `json:"schedule"`
+	IngestKey         bool `json:"ingest_key"`
+	RequiresOwnApp    bool `json:"requires_own_app"`
+	RequiresPublicURL bool `json:"requires_public_url"`
+}
+
+// broadcastDTO es la emisión que la plataforma dio para un destino: la de YouTube (con sus
+// ids) o solo la marca de que la clave vino por API (Kick). Ni la clave ni el token
+// aparecen: la clave vive cifrada en el destino y solo sale enmascarada en key_mask.
+type broadcastDTO struct {
+	Platform     string `json:"platform"`
+	BroadcastRef string `json:"broadcast_ref"`
+	Status       string `json:"status"`
+	LiveChatID   string `json:"live_chat_id"`
+	KeyFromAPI   bool   `json:"key_from_api"`
+	WatchURL     string `json:"watch_url"`
+}
+
+// newBroadcastDTO. La URL para ver la emisión se compone aquí y solo para YouTube: es la
+// única de las tres plataformas donde la emisión tiene una página propia deducible del id.
+func newBroadcastDTO(b store.Broadcast) broadcastDTO {
+	dto := broadcastDTO{
+		Platform: string(b.Platform), BroadcastRef: b.BroadcastRef, Status: b.Status,
+		LiveChatID: b.LiveChatID, KeyFromAPI: b.KeyFromAPI,
+	}
+	if b.Platform == store.PlatformYouTube && b.BroadcastRef != "" {
+		dto.WatchURL = "https://www.youtube.com/watch?v=" + b.BroadcastRef
+	}
+	return dto
 }
 
 // accountRefDTO es la cuenta vinculada tal como la ve la tarjeta del destino. Sin tokens.
@@ -70,7 +104,14 @@ type accountDTO struct {
 	Scopes       []string   `json:"scopes"`
 	ExpiresAt    *time.Time `json:"expires_at"`
 	Destinations []int64    `json:"destinations"`
-	CreatedAt    time.Time  `json:"created_at"`
+	// OwnApp dice que la cuenta trajo credenciales propias (YouTube, Kick). Es un booleano:
+	// ni el client_id ni el client_secret salen nunca de la base.
+	OwnApp bool `json:"own_app"`
+	// QuotaUsedToday son las unidades de cuota gastadas hoy por la cuenta. Solo YouTube la
+	// tiene, y solo si el servidor arrancó con contador: null significa «no aplica» o «no
+	// se sabe», que el panel distingue de un cero.
+	QuotaUsedToday *int      `json:"quota_used_today"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // newAccountDTO. Ni el token de acceso ni el de refresco tienen campo en Account, así que
@@ -84,7 +125,7 @@ func newAccountDTO(a store.Account, dests []int64) accountDTO {
 		scopes = []string{}
 	}
 	return accountDTO{ID: a.ID, Platform: string(a.Platform), DisplayName: a.DisplayName, Status: a.Status,
-		Scopes: scopes, ExpiresAt: a.ExpiresAt, Destinations: dests, CreatedAt: a.CreatedAt}
+		Scopes: scopes, ExpiresAt: a.ExpiresAt, Destinations: dests, OwnApp: a.OwnApp, CreatedAt: a.CreatedAt}
 }
 
 type platformDTO struct {
@@ -92,6 +133,11 @@ type platformDTO struct {
 	Name         string          `json:"name"`
 	Capabilities capabilitiesDTO `json:"capabilities"`
 	Configured   bool            `json:"configured"`
+	// PublicURLOK dice si esta instalación cumple lo que la plataforma exige de URL
+	// pública: true siempre que no la pida, y solo con TLS integrado y PublicURL cuando sí
+	// (Kick). Con un proxy delante es false aunque el navegador vea HTTPS, porque el
+	// binario no sabe por qué nombre lo alcanzan.
+	PublicURLOK bool `json:"public_url_ok"`
 }
 
 type chatMessageDTO struct {
@@ -127,6 +173,11 @@ type destinationDTO struct {
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
 	Metrics   *metricsDTO `json:"metrics"`
+	// KeyFromAPI: la clave la trajo la plataforma, no la pegó nadie. El panel lo usa para
+	// no ofrecer «probar destino» (no hay clave inválida que probar) ni invitar a editarla.
+	KeyFromAPI bool `json:"key_from_api"`
+	// Broadcast es la emisión vinculada al destino; nil si no tiene. Lo rellena decorar.
+	Broadcast *broadcastDTO `json:"broadcast"`
 	// Account es la cuenta vinculada, sin tokens; nil sin cuenta. Capabilities son las de
 	// la plataforma del destino, ceros si no hay proveedor (custom, TikTok, X). Los llena
 	// decorar, no newDestinationDTO: así este constructor sigue sin depender de la base ni
@@ -146,7 +197,7 @@ func newDestinationDTO(d store.Destination, m *relay.Metrics, logoETag string) d
 		ID: d.ID, Name: d.Name, Platform: string(d.Platform),
 		RTMPURL: d.RTMPURL, KeyMask: d.KeyMask, Enabled: d.Enabled,
 		SortOrder: d.SortOrder, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
-		LogoETag: logoETag,
+		LogoETag: logoETag, KeyFromAPI: d.KeyFromAPI,
 	}
 	if m != nil {
 		x := newMetricsDTO(*m)

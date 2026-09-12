@@ -63,6 +63,12 @@ func probeMessage(r probe.Result) string {
 	}
 }
 
+// testSkippedDTO es la respuesta de «probar destino» cuando no hay nada que probar.
+type testSkippedDTO struct {
+	Skipped bool   `json:"skipped"`
+	Message string `json:"message"`
+}
+
 // handleTestDestination sondea un destino sin emitir (spec v0.8 §3).
 func (s *Server) handleTestDestination(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.pathID(w, r)
@@ -72,6 +78,14 @@ func (s *Server) handleTestDestination(w http.ResponseWriter, r *http.Request) {
 	d, err := s.db.DestinationByID(r.Context(), id)
 	if err != nil {
 		s.writeStoreError(w, err)
+		return
+	}
+	// Con la clave traída por API no hay nada que probar: no hay clave mal pegada posible,
+	// y abrir una conexión de prueba contra la emisión recién creada solo sirve para
+	// gastar cuota. Se contesta ANTES de cualquier sonda.
+	if d.KeyFromAPI {
+		writeJSON(w, http.StatusOK, testSkippedDTO{Skipped: true,
+			Message: "la clave vino por API: no hay clave inválida que probar"})
 		return
 	}
 	if s.tester == nil {

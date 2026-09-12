@@ -68,10 +68,14 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 	if err != nil {
 		return out, err
 	}
+	emisiones, err := s.db.BroadcastsByDestination(ctx)
+	if err != nil {
+		return out, err
+	}
 	out.Destinations = make([]destinationDTO, 0, len(dests))
 	for _, d := range dests {
 		dto := newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID])
-		s.decorar(ctx, &dto, d, cuentas)
+		s.decorar(ctx, &dto, d, cuentas, emisiones)
 		out.Destinations = append(out.Destinations, dto)
 	}
 

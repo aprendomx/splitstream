@@ -179,7 +179,9 @@ func TestNewEventDTOKeepsTheOptionalIDs(t *testing.T) {
 // así que conviene que sean consistentes desde el principio.
 func TestDTOFieldNamesAreSnakeCase(t *testing.T) {
 	tipos := []any{metricsDTO{}, destinationDTO{}, eventDTO{}, sessionDTO{}, ingestDTO{}, statusDTO{}, panelDTO{}, updateDTO{},
-		capabilitiesDTO{}, accountRefDTO{}, accountDTO{}, platformDTO{}, chatMessageDTO{}}
+		capabilitiesDTO{}, accountRefDTO{}, accountDTO{}, platformDTO{}, chatMessageDTO{},
+		broadcastDTO{}, testSkippedDTO{}, authStartDTO{}, authStartRequest{}, fromAccountRequest{},
+		broadcastRequest{}, liveResultDTO{}}
 
 	for _, v := range tipos {
 		rt := reflect.TypeOf(v)

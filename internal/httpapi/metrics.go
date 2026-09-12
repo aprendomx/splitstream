@@ -133,6 +133,22 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		add("splitstream_chat_dropped_total", "Mensajes de chat descartados por un suscriptor lento.", "counter", nil, float64(dropped))
 	}
 
+	// Cuota de YouTube: la etiqueta es el nombre visible de la cuenta, no su id, para que
+	// una alerta diga de quién es sin tener que cruzarlo con la base. Solo YouTube reparte
+	// cuota por app, así que cuentaDeCuota devuelve nil para el resto.
+	if s.quota != nil {
+		if cuentas, err := s.db.Accounts(r.Context()); err == nil {
+			for _, a := range cuentas {
+				if n := s.cuotaDeCuenta(r.Context(), a); n != nil {
+					add("splitstream_youtube_quota_units", "Unidades de cuota de YouTube gastadas hoy por la cuenta.",
+						"gauge", map[string]string{"account": a.DisplayName}, float64(*n))
+				}
+			}
+		} else {
+			s.logger.Debug("no se pudieron listar las cuentas para la cuota", "err", err)
+		}
+	}
+
 	for _, extra := range s.extra {
 		ms = append(ms, extra()...)
 	}

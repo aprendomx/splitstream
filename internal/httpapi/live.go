@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aprendomx/splitstream/internal/crypto"
 	"github.com/aprendomx/splitstream/internal/platforms"
 	"github.com/aprendomx/splitstream/internal/store"
 )
@@ -112,13 +113,8 @@ func (s *Server) aplicarEnDestino(ctx context.Context, id int64, in liveTitleReq
 	}
 	var cambios []string
 	if in.Title != "" {
-		ts, ok := p.(platforms.TitleSetter)
-		if !ok {
-			res.Message = d.Name + " no permite cambiar el título"
-			return res
-		}
-		if err := ts.SetTitle(ctx, *acct, tok, in.Title); err != nil {
-			res.Message = mensajePlataforma(err)
+		if err := s.ponerTitulo(ctx, p, *d, *acct, tok, in.Title); err != nil {
+			res.Message = mensajeTitulo(err, d.Name)
 			return res
 		}
 		cambios = append(cambios, "título")
@@ -140,6 +136,48 @@ func (s *Server) aplicarEnDestino(ctx context.Context, id int64, in liveTitleReq
 	s.db.LogEvent(context.WithoutCancel(ctx), store.Event{DestinationID: &id, Level: store.LevelInfo, Kind: "channel_updated",
 		Message: "canal actualizado (" + strings.Join(cambios, ", ") + ") en " + d.Name})
 	return res
+}
+
+// errSinTitulo: ni la plataforma sabe poner título ni hay emisión donde ponerlo.
+var errSinTitulo = errors.New("la plataforma no permite cambiar el título")
+
+// ponerTitulo pone el título donde viva.
+//
+// En YouTube el título es de la EMISIÓN, no del canal: con una emisión creada desde aquí
+// se cambia por su id, que es exacto y no gasta una búsqueda. Sin emisión vinculada se
+// cae al camino de siempre —el del canal—, que es lo que hacen Twitch y Kick.
+func (s *Server) ponerTitulo(ctx context.Context, p platforms.Provider, d store.Destination,
+	acct store.Account, tok crypto.Secret, titulo string,
+) error {
+	bts, esEmision := p.(platforms.BroadcastTitleSetter)
+	var ref string
+	if esEmision {
+		if b, err := s.db.BroadcastFor(ctx, d.ID); err == nil {
+			ref = b.BroadcastRef
+		}
+	}
+	if esEmision && ref != "" {
+		return bts.SetBroadcastTitle(ctx, acct, tok, ref, titulo)
+	}
+	if ts, ok := p.(platforms.TitleSetter); ok {
+		return ts.SetTitle(ctx, acct, tok, titulo)
+	}
+	if esEmision {
+		return platforms.ErrNoBroadcast
+	}
+	return errSinTitulo
+}
+
+// mensajeTitulo explica el fallo en términos de lo que se puede hacer: sin emisión no hay
+// título que cambiar, y lo que toca es crearla.
+func mensajeTitulo(err error, nombre string) string {
+	switch {
+	case errors.Is(err, errSinTitulo):
+		return nombre + " no permite cambiar el título"
+	case errors.Is(err, platforms.ErrNoBroadcast):
+		return "crea la emisión primero en " + nombre
+	}
+	return mensajePlataforma(err)
 }
 
 // mensajePlataforma convierte un error del proveedor en algo que leer. Nunca lleva el
