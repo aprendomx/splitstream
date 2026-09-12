@@ -19,6 +19,10 @@ const visibles = computed(() => (pestaña.value === 'todos' ? mensajes.value : m
 // Presupuesto de cuota del chat de YouTube (spec §6/§7.1): viene del arranque del panel,
 // no de /api/platforms, porque es un límite de esta instalación y no de la plataforma.
 const presupuesto = computed(() => panel.estado?.panel?.youtube_chat_budget ?? 0)
+// La cuota diaria del proyecto de Google (SPLITSTREAM_YOUTUBE_QUOTA): el presupuesto del
+// chat es solo una parte de ella, así que enseñarla al lado explica cuánto margen queda
+// para lo demás (crear emisiones, leer el canal). 0: no se enseña.
+const cuotaDiaria = computed(() => panel.estado?.panel?.youtube_quota ?? 0)
 // Solo se cuenta si hay una cuenta de YouTube con cifra (null = «no aplica o no se sabe»).
 const cuentaConCuota = computed(
   () => panel.cuentas.find((c) => c.platform === 'youtube' && c.quota_used_today != null) ?? null,
@@ -54,8 +58,23 @@ function conectar() {
   ws.onerror = () => ws?.close()
 }
 
-onMounted(() => { conectar(); panel.cargarCuentas() })
-onUnmounted(() => { clearTimeout(temporizador); if (ws) { ws.onclose = null; ws.close() } })
+// La cuota gastada viaja en /api/accounts, no en el estado que empuja el WebSocket: sin
+// refrescarla, la barra se quedaba con la foto del momento en que se abrió el chat y no
+// se movía en toda la emisión. Un minuto basta: la cuota se gasta de cinco en cinco
+// unidades por sondeo.
+const REFRESCO_CUOTA = 60_000
+let refresco = null
+
+onMounted(() => {
+  conectar()
+  panel.cargarCuentas()
+  refresco = setInterval(() => panel.cargarCuentas(), REFRESCO_CUOTA)
+})
+onUnmounted(() => {
+  clearTimeout(temporizador)
+  clearInterval(refresco)
+  if (ws) { ws.onclose = null; ws.close() }
+})
 </script>
 
 <template>
@@ -70,7 +89,7 @@ onUnmounted(() => { clearTimeout(temporizador); if (ws) { ws.onclose = null; ws.
     <div v-if="mostrarCuota" class="q-px-sm q-pt-xs cuota">
       <q-linear-progress :value="fraccionCuota" color="warning" track-color="grey-9" size="6px" rounded />
       <div class="text-caption text-grey-5 q-mt-xs">
-        {{ cuentaConCuota.quota_used_today.toLocaleString('es') }} / {{ presupuesto.toLocaleString('es') }} unidades hoy
+        {{ cuentaConCuota.quota_used_today.toLocaleString('es') }} / {{ presupuesto.toLocaleString('es') }} unidades hoy<template v-if="cuotaDiaria > 0"> (cuota diaria {{ cuotaDiaria.toLocaleString('es') }})</template>
         · el chat se pausará a {{ presupuesto.toLocaleString('es') }}
       </div>
     </div>

@@ -23,7 +23,10 @@ const verSecreto = ref(false)
 const porQue = ref(false)
 
 const redirectUrl = computed(() => `${props.origin}/api/platforms/kick/callback`)
-const hayUrlPublica = computed(() => Boolean(panel.estado?.panel?.tls && panel.estado?.panel?.public_url))
+// `public_url_ok` lo decide el servidor (platformDTO): es él quien sabe si termina TLS y
+// con qué URL pública. Recalcularlo aquí con `tls` y `public_url` duplicaba esa regla y se
+// desviaría en cuanto el servidor la cambiara.
+const hayUrlPublica = computed(() => Boolean(panel.plataformas.find((p) => p.id === 'kick')?.public_url_ok))
 const webhookUrl = computed(() => `${panel.estado?.panel?.public_url ?? ''}/api/platforms/kick/webhook`)
 
 const puedeContinuar = computed(() => clientId.value.trim() && clientSecret.value.trim())

@@ -13,6 +13,12 @@ const props = defineProps({
 })
 const emit = defineEmits(['conectada'])
 
+// El origen se lee AQUÍ, no en la plantilla: dentro de `<template>` una expresión se
+// compila contra el contexto del componente (`_ctx.location`), que no existe, y abrir el
+// asistente reventaba con un TypeError. Los globales del navegador van siempre en el
+// `<script setup>`.
+const origen = location.origin
+
 const mostrarAsistente = ref(false)
 const inicio = ref(null)   // {state, verification_uri, user_code, redirect_url, expires_in}
 const estado = ref('idle') // idle | pending | done | expired | error
@@ -25,6 +31,12 @@ function empezarClick() {
     return
   }
   empezar()
+}
+
+// Volver al botón de conectar sin cerrar el diálogo ni empezar ningún flujo.
+function cancelarAsistente() {
+  mostrarAsistente.value = false
+  error.value = null
 }
 
 // El servidor sondea a Twitch (o espera el redirect de Kick); el panel solo pregunta cada
@@ -70,12 +82,19 @@ onUnmounted(() => clearTimeout(temporizador))
            unelevated no-caps color="primary"
            :icon="iVincular" :label="`Conectar cuenta de ${nombre || plataforma}`" @click="empezarClick" />
 
-    <AsistenteCredenciales
-      v-if="mostrarAsistente"
-      :plataforma="plataforma"
-      :origin="location.origin"
-      @listo="empezar"
-    />
+    <template v-if="mostrarAsistente">
+      <AsistenteCredenciales
+        :plataforma="plataforma"
+        :origin="origen"
+        @listo="empezar"
+      />
+      <!-- Cancelar cierra SOLO el asistente: el diálogo que envuelve a este componente
+           sigue abierto, que es lo que espera quien se arrepiente a mitad de pegar las
+           credenciales y quiere volver al botón de conectar. -->
+      <div>
+        <a href="#" class="text-caption enlace-cancelar" @click.prevent="cancelarAsistente">Cancelar</a>
+      </div>
+    </template>
 
     <!-- Kick: vuelve por el navegador. Un enlace de verdad, nunca un window.open a mano: el
          segundo lo bloquea cualquier bloqueador de ventanas emergentes. -->
@@ -104,5 +123,6 @@ onUnmounted(() => clearTimeout(temporizador))
 
 <style scoped>
 .codigo-dispositivo { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); }
+.enlace-cancelar { color: rgba(255,255,255,0.7); text-decoration: underline; }
 .codigo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.2em; user-select: all; }
 </style>
