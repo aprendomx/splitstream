@@ -46,4 +46,8 @@ export {
   mdiAccountCircle as iCuenta,
   mdiLinkVariant as iVincular,
   mdiFormatTitle as iTitulo,
+  mdiOpenInNew as iAbrir,
+  mdiPlayCircle as iAlAire,
+  mdiStopCircle as iTerminar,
+  mdiKeyLink as iClaveApi,
 } from '@quasar/extras/mdi-v7'

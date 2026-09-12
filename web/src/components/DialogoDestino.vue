@@ -1,10 +1,18 @@
 <script setup>
-import { iBorrar, iCerrar, iError, iInfo, iOcultar, iVer } from '@/iconos'
+import { iBorrar, iCerrar, iClaveApi, iError, iInfo, iOcultar, iVer } from '@/iconos'
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { PLATAFORMAS, porId, pideServidor } from '@/plataformas'
 import { api, ApiError } from '@/api'
 import { usePanel } from '@/stores/panel'
 import ConectarCuenta from '@/components/ConectarCuenta.vue'
+
+// Privacidad de la emisión al crearla por API (YouTube). Por defecto «no listado»: una
+// emisión creada desde el panel no se anuncia sola (spec §5).
+const OPCIONES_PRIVACIDAD = [
+  { label: 'Público', value: 'public' },
+  { label: 'No listado', value: 'unlisted' },
+  { label: 'Privado', value: 'private' },
+]
 
 const panel = usePanel()
 
@@ -53,6 +61,69 @@ const capacidades = computed(
   () => panel.plataformas.find((p) => p.id === plataforma.value)?.capabilities ?? null,
 )
 
+// Clave por API (YouTube, Kick): la plataforma da la URL y la clave, no se pegan a mano.
+const usaClaveAPI = computed(() => Boolean(capacidades.value?.ingest_key))
+// En el alta, un enlace deja volver al formulario de siempre; en edición no aplica, porque
+// ahí la clave a mano sigue siendo el campo «Clave nueva» de toda la vida.
+const claveManual = ref(false)
+const mostrarBloqueAPI = computed(() => usaClaveAPI.value && !editando.value && !claveManual.value)
+
+const tituloEmision = ref('')
+const privacidadEmision = ref('unlisted')
+const horaEmision = ref('') // datetime-local; vacío = ahora
+const creandoEmision = ref(false)
+const errorEmision = ref(null)
+
+/** ISO 8601 con zona, o undefined si no se puso hora: el backend trata la ausencia como «ahora». */
+function horaEmisionISO() {
+  return horaEmision.value ? new Date(horaEmision.value).toISOString() : undefined
+}
+
+/** Alta: crea el destino a partir de la cuenta, con la emisión (YouTube) o la clave (Kick). */
+async function crearConCuenta() {
+  if (!cuentaId.value) return
+  creandoEmision.value = true
+  errorEmision.value = null
+  try {
+    const body = { account_id: cuentaId.value, name: nombre.value }
+    if (plataforma.value === 'youtube') {
+      if (tituloEmision.value.trim()) body.title = tituloEmision.value.trim()
+      body.privacy = privacidadEmision.value
+      const iso = horaEmisionISO()
+      if (iso) body.scheduled_at = iso
+    }
+    await api.crearDestinoDesdeCuenta(body)
+    emit('guardado', null)
+    cerrar()
+  } catch (e) {
+    errorEmision.value = e instanceof ApiError ? e.message : 'No se pudo traer la clave'
+  } finally {
+    creandoEmision.value = false
+  }
+}
+
+/** Edición: releer la clave o abrir una emisión nueva sobre el destino ya existente. */
+async function nuevaEmision() {
+  creandoEmision.value = true
+  errorEmision.value = null
+  try {
+    const body = {}
+    if (plataforma.value === 'youtube') {
+      if (tituloEmision.value.trim()) body.title = tituloEmision.value.trim()
+      if (privacidadEmision.value) body.privacy = privacidadEmision.value
+      const iso = horaEmisionISO()
+      if (iso) body.scheduled_at = iso
+    }
+    await api.crearEmision(props.destino.id, body)
+    emit('guardado', null)
+    cerrar()
+  } catch (e) {
+    errorEmision.value = e instanceof ApiError ? e.message : 'No se pudo releer la clave'
+  } finally {
+    creandoEmision.value = false
+  }
+}
+
 async function cargarCuentas() {
   if (!plataforma.value) { cuentas.value = []; return }
   try {
@@ -73,6 +144,12 @@ watch(
     soltarPrevia()
     logoArchivo.value = null
     logoQuitado.value = false
+    claveManual.value = false
+    tituloEmision.value = ''
+    privacidadEmision.value = 'unlisted'
+    horaEmision.value = ''
+    errorEmision.value = null
+    creandoEmision.value = false
     if (props.destino) {
       plataforma.value = props.destino.platform
       nombre.value = props.destino.name
@@ -305,66 +382,120 @@ async function guardar() {
         <div v-if="plataformaConProveedor" class="bloque-cuenta q-gutter-y-sm">
           <div class="text-caption text-grey-5">Cuenta</div>
           <div class="row items-center q-gutter-xs">
-            <q-chip v-for="c in ['title','category','chat']" :key="c" dense square size="sm"
+            <q-chip v-for="c in ['title','category','chat','ingest_key','schedule']" :key="c" dense square size="sm"
                     :color="capacidades?.[c] ? 'primary' : 'grey-8'" :text-color="capacidades?.[c] ? 'white' : 'grey-5'">
-              {{ { title: 'Título', category: 'Categoría', chat: 'Chat' }[c] }}
+              {{ { title: 'Título', category: 'Categoría', chat: 'Chat', ingest_key: 'Clave por API', schedule: 'Programar' }[c] }}
             </q-chip>
           </div>
           <q-select v-if="cuentas.length" v-model="cuentaId" :options="[{label: 'Sin cuenta', value: null}, ...cuentas.map(c => ({label: c.display_name + (c.status === 'reauth' ? ' (reconectar)' : ''), value: c.id}))]"
                     emit-value map-options outlined dense label="Cuenta vinculada" />
-          <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="plat?.nombre" @conectada="trasConectar" />
+          <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="plat?.nombre"
+                          :requiere-app="Boolean(capacidades?.requires_own_app)" @conectada="trasConectar" />
           <q-banner v-else dense class="bg-grey-9 text-grey-3 rounded-borders">
             Conectar cuentas de {{ plat?.nombre }} necesita un client_id: pon <code>SPLITSTREAM_TWITCH_CLIENT_ID</code> o espera a una versión con la app incluida.
           </q-banner>
         </div>
 
-        <q-input
-          v-if="necesitaServidor"
-          v-model="servidor"
-          label="Servidor"
-          placeholder="rtmp://…"
-          :hint="plat ? `Lo encuentras en: ${plat.donde}` : ''"
-          outlined
-          dense
-          inputmode="url"
-          autocapitalize="off"
-          autocorrect="off"
-          spellcheck="false"
-        />
-        <div v-else class="servidor-fijo">
-          <div class="etiqueta">Servidor</div>
-          <div class="valor">{{ servidor }}</div>
+        <!-- Clave por API en el alta: la plataforma da la URL y la clave, no se pegan a
+             mano. Sustituye por completo a servidor + clave mientras no se pida lo
+             contrario. -->
+        <div v-if="mostrarBloqueAPI" class="bloque-clave-api q-gutter-y-sm">
+          <div class="text-caption text-grey-5">Clave por API</div>
+          <template v-if="plataforma === 'youtube'">
+            <q-input v-model="tituloEmision" label="Título de la emisión" :placeholder="nombre" outlined dense maxlength="140" />
+            <q-select v-model="privacidadEmision" :options="OPCIONES_PRIVACIDAD" emit-value map-options outlined dense label="Privacidad" />
+            <q-input v-model="horaEmision" type="datetime-local" outlined dense label="Hora (opcional)" hint="Vacío: emitir ahora" />
+          </template>
+          <div v-if="!cuentaId" class="text-caption text-grey-6">Elige o conecta una cuenta arriba para traer la clave.</div>
+          <q-btn
+            unelevated
+            no-caps
+            color="primary"
+            :icon="iClaveApi"
+            :loading="creandoEmision"
+            :disable="!cuentaId"
+            :label="plataforma === 'youtube' ? 'Crear emisión y traer la clave' : 'Traer la clave de Kick'"
+            @click="crearConCuenta"
+          />
+          <div><a href="#" class="text-caption" @click.prevent="claveManual = true">pegar la clave a mano</a></div>
+          <q-banner v-if="errorEmision" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">{{ errorEmision }}</q-banner>
         </div>
 
-        <q-input
-          v-model="clave"
-          :label="editando ? 'Clave nueva' : 'Clave de retransmisión'"
-          :type="verClave ? 'text' : 'password'"
-          :hint="
-            editando
-              ? `Déjala vacía para conservar la actual (${destino.key_mask})`
-              : plat
-                ? `La encuentras en: ${plat.donde}`
-                : ''
-          "
-          outlined
-          dense
-          autocapitalize="off"
-          autocorrect="off"
-          spellcheck="false"
-          autocomplete="off"
-        >
-          <template #append>
+        <template v-else>
+          <q-input
+            v-if="necesitaServidor"
+            v-model="servidor"
+            label="Servidor"
+            placeholder="rtmp://…"
+            :hint="plat ? `Lo encuentras en: ${plat.donde}` : ''"
+            outlined
+            dense
+            inputmode="url"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+          />
+          <div v-else class="servidor-fijo">
+            <div class="etiqueta">Servidor</div>
+            <div class="valor">{{ servidor }}</div>
+          </div>
+
+          <q-input
+            v-model="clave"
+            :label="editando ? 'Clave nueva' : 'Clave de retransmisión'"
+            :type="verClave ? 'text' : 'password'"
+            :hint="
+              editando
+                ? `Déjala vacía para conservar la actual (${destino.key_mask})`
+                : plat
+                  ? `La encuentras en: ${plat.donde}`
+                  : ''
+            "
+            outlined
+            dense
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            autocomplete="off"
+          >
+            <template #append>
+              <q-btn
+                flat
+                round
+                dense
+                :icon="verClave ? iOcultar : iVer"
+                :aria-label="verClave ? 'Ocultar la clave' : 'Mostrar la clave'"
+                @click="verClave = !verClave"
+              />
+            </template>
+          </q-input>
+
+          <!-- Alta: si esta plataforma da clave por API, un enlace vuelve al bloque de
+               arriba en vez de pegarla a mano. -->
+          <div v-if="usaClaveAPI && !editando">
+            <a href="#" class="text-caption" @click.prevent="claveManual = false">traer la clave por API en su lugar</a>
+          </div>
+
+          <!-- Edición: sobre un destino con cuenta y clave por API, releer la clave o abrir
+               una emisión nueva sin tocar el resto del formulario. -->
+          <div v-if="usaClaveAPI && editando" class="bloque-clave-api q-gutter-y-sm">
+            <template v-if="plataforma === 'youtube'">
+              <q-input v-model="tituloEmision" label="Título de la nueva emisión" :placeholder="nombre" outlined dense maxlength="140" />
+              <q-select v-model="privacidadEmision" :options="OPCIONES_PRIVACIDAD" emit-value map-options outlined dense label="Privacidad" />
+              <q-input v-model="horaEmision" type="datetime-local" outlined dense label="Hora (opcional)" hint="Vacío: emitir ahora" />
+            </template>
             <q-btn
               flat
-              round
-              dense
-              :icon="verClave ? iOcultar : iVer"
-              :aria-label="verClave ? 'Ocultar la clave' : 'Mostrar la clave'"
-              @click="verClave = !verClave"
+              no-caps
+              color="primary"
+              :icon="iClaveApi"
+              :loading="creandoEmision"
+              label="Nueva emisión / releer la clave"
+              @click="nuevaEmision"
             />
-          </template>
-        </q-input>
+            <q-banner v-if="errorEmision" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">{{ errorEmision }}</q-banner>
+          </div>
+        </template>
 
         <q-toggle v-model="habilitado" label="Retransmitir a este destino" />
 
@@ -377,7 +508,11 @@ async function guardar() {
 
       <q-card-actions v-if="paso === 2" align="right" class="q-pa-md">
         <q-btn flat no-caps label="Cancelar" @click="cerrar" />
+        <!-- Con la clave por API, la petición sale del botón «Crear emisión…» de arriba:
+             este cierra el diálogo por su cuenta, así que aquí no hace falta un «Vincular»
+             que intentaría guardar sin clave. -->
         <q-btn
+          v-if="!mostrarBloqueAPI"
           unelevated
           no-caps
           color="primary"

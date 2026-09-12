@@ -1,5 +1,5 @@
 <script setup>
-import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar, iProbar, iCuenta } from '@/iconos'
+import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar, iProbar, iCuenta, iAlAire, iTerminar, iAbrir } from '@/iconos'
 import { computed } from 'vue'
 import { porId } from '@/plataformas'
 import { api } from '@/api'
@@ -9,7 +9,7 @@ const props = defineProps({
   destino: { type: Object, required: true },
   haySesion: Boolean,
 })
-defineEmits(['editar', 'alternar', 'borrar', 'revelar', 'reintentar', 'probar'])
+defineEmits(['editar', 'alternar', 'borrar', 'revelar', 'reintentar', 'probar', 'alAire', 'terminar'])
 
 const plat = computed(() => porId(props.destino.platform))
 const diag = computed(() => diagnosticar(props.destino, props.haySesion))
@@ -59,11 +59,11 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
                 <q-item-label caption>Queda registrado</q-item-label>
               </q-item-section>
             </q-item>
-            <q-item clickable v-close-popup @click="$emit('probar')">
+            <q-item clickable v-close-popup :disable="destino.key_from_api" @click="$emit('probar')">
               <q-item-section avatar><q-icon :name="iProbar" /></q-item-section>
               <q-item-section>
                 Probar
-                <q-item-label caption>Conecta sin emitir</q-item-label>
+                <q-item-label caption>{{ destino.key_from_api ? 'no hace falta' : 'Conecta sin emitir' }}</q-item-label>
               </q-item-section>
             </q-item>
             <q-separator />
@@ -110,7 +110,11 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
     <div class="pie q-px-md q-pb-sm q-pt-sm">
       <div class="mono ellipsis" :title="destino.rtmp_url">{{ destino.rtmp_url }}</div>
       <div class="row items-center justify-between q-mt-xs">
-        <span class="mono">clave {{ destino.key_mask }}</span>
+        <span v-if="destino.key_from_api" class="mono">
+          clave por API
+          <q-tooltip>La trajo la plataforma; no hace falta probarla.</q-tooltip>
+        </span>
+        <span v-else class="mono">clave {{ destino.key_mask }}</span>
         <span v-if="conCifras" class="cifras">
           {{ bytesLegibles(m.bytes_sent) }}
           <template v-if="m.dropped_frames">
@@ -120,6 +124,27 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
             · {{ m.reconnections }} reconexiones
           </template>
         </span>
+      </div>
+      <div v-if="destino.broadcast?.broadcast_ref" class="row items-center q-gutter-sm q-mt-xs">
+        <q-btn
+          v-if="destino.broadcast.status !== 'live'"
+          dense no-caps unelevated color="primary" size="sm"
+          :icon="iAlAire" label="Salir al aire" @click="$emit('alAire')"
+        />
+        <q-btn
+          v-else
+          dense no-caps unelevated color="negative" size="sm"
+          :icon="iTerminar" label="Terminar" @click="$emit('terminar')"
+        />
+        <a
+          v-if="destino.broadcast.watch_url"
+          :href="destino.broadcast.watch_url"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="enlace-ver text-caption row items-center no-wrap"
+        >
+          <q-icon :name="iAbrir" size="12px" class="q-mr-xs" />ver en YouTube
+        </a>
       </div>
     </div>
   </q-card>
@@ -201,6 +226,13 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
   touch-action: none;
   /* Área táctil por encima del icono, que es pequeño a propósito. */
   padding: 10px 4px;
+}
+.enlace-ver {
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+}
+.enlace-ver:hover {
+  text-decoration: underline;
 }
 @media (prefers-reduced-motion: reduce) {
   .tarjeta-destino { transition: none; }

@@ -15,6 +15,7 @@ export const usePanel = defineStore('panel', {
     cargando: true,
     estado: null,      // statusDTO
     plataformas: [],   // platformDTO[]: capacidades y si hay client_id configurado
+    cuentas: [],       // accountDTO[]: cuentas conectadas (own_app, quota_used_today…)
     errorConexion: null,
     ws: null,
     reintentoWs: 0,
@@ -83,6 +84,11 @@ export const usePanel = defineStore('panel', {
     /** Catálogo de plataformas con proveedor: capacidades y si hay client_id configurado. */
     async cargarPlataformas() {
       try { this.plataformas = await api.plataformas() } catch { this.plataformas = [] }
+    },
+
+    /** Cuentas conectadas (Twitch, YouTube, Kick): own_app y quota_used_today (YouTube). */
+    async cargarCuentas() {
+      try { this.cuentas = await api.cuentas() } catch { this.cuentas = [] }
     },
 
     async comprobarSetup() {
