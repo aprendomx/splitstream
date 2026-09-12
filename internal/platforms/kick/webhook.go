@@ -98,6 +98,23 @@ func (w *webhookState) init(o Options) {
 	if w.seenTTL <= 0 {
 		w.seenTTL = defaultSeenTTL
 	}
+	// La ventana de repetición se mira en los dos sentidos, así que un mismo message_id
+	// puede volver a entrar durante 2*ventana (desde `ahora-ventana` hasta
+	// `ahora+ventana`). Con un SeenTTL más corto, el id se purgaría estando todavía dentro
+	// de la ventana y el mensaje se aceptaría dos veces: el tope de abajo lo impide.
+	if w.seenTTL < 2*w.ventana {
+		w.seenTTL = 2 * w.ventana
+	}
+}
+
+// mensajeDeKick saca el "message" del sobre de Kick, o "" si el cuerpo no lo trae (vacío,
+// no es JSON, o es un objeto sin ese campo).
+func mensajeDeKick(body []byte) string {
+	var ae apiError
+	if json.Unmarshal(body, &ae) != nil {
+		return ""
+	}
+	return ae.Message
 }
 
 // rechazo arma el error de un webhook rechazado. Solo lleva el motivo: ni el cuerpo, ni
@@ -126,9 +143,12 @@ func (p *Provider) ParseWebhook(hdr http.Header, body []byte) ([]platforms.ChatM
 	if tipo != eventoChat || hdr.Get(hdrVer) != versionChat {
 		return nil, nil
 	}
+	// Una marca que ni siquiera es RFC 3339 no es un webhook viejo: es una cabecera mal
+	// formada, y el motivo tiene que decir eso para que el registro del panel no haga
+	// pensar en un reloj desajustado.
 	momento, err := time.Parse(time.RFC3339, ts)
 	if err != nil {
-		return nil, rechazo("antigüedad")
+		return nil, rechazo("cabeceras")
 	}
 	// El desfase se mira en los dos sentidos: un webhook del futuro es tan sospechoso
 	// como uno de hace media hora.
@@ -150,17 +170,17 @@ func (p *Provider) ParseWebhook(hdr http.Header, body []byte) ([]platforms.ChatM
 	return []platforms.ChatMessage{msg}, nil
 }
 
-// verificar comprueba la firma con la clave cacheada y, si falla, refresca la clave UNA
-// vez (y solo si la cacheada ya tiene edad: Kick rota, pero no cada segundo) antes de
-// darla por mala. Nunca reintenta más: un bucle de refrescos ante firmas inválidas sería
-// un amplificador contra Kick.
+// verificar comprueba la firma con la clave cacheada y, si falla, pide un refresco UNA
+// vez antes de darla por mala. Quien decide si ese refresco se convierte en una petición
+// a Kick es clavePublica, bajo su candado: la edad mínima no se puede mirar desde aquí
+// porque entre mirarla y pedir la clave caben N goroutines más.
 func (p *Provider) verificar(id, ts, firma string, body []byte) error {
 	sig, err := base64.StdEncoding.DecodeString(firma)
 	if err != nil {
 		return rechazo("firma")
 	}
 	sum := sha256.Sum256([]byte(id + "." + ts + "." + string(body)))
-	pub, edad, err := p.clavePublica(false)
+	pub, err := p.clavePublica(false)
 	if err != nil {
 		// Sin clave no se puede verificar nada: se rechaza igual, pero el motivo del
 		// fallo queda en el registro (no en el error, que va a un endpoint público).
@@ -170,15 +190,17 @@ func (p *Provider) verificar(id, ts, firma string, body []byte) error {
 	if rsa.VerifyPKCS1v15(pub, stdcrypto.SHA256, sum[:], sig) == nil {
 		return nil
 	}
-	if edad < edadMinRefresco {
-		return rechazo("firma")
-	}
-	pub, _, err = p.clavePublica(true)
+	refrescada, err := p.clavePublica(true)
 	if err != nil {
 		p.logger.Warn("kick: no se pudo refrescar la clave pública del webhook", "err", err)
 		return rechazo("firma")
 	}
-	if rsa.VerifyPKCS1v15(pub, stdcrypto.SHA256, sum[:], sig) != nil {
+	// Si clavePublica devolvió la misma copia (recién refrescada por otra goroutine, o
+	// demasiado joven para volver a pedirla) no hay nada nuevo que probar.
+	if refrescada == pub {
+		return rechazo("firma")
+	}
+	if rsa.VerifyPKCS1v15(refrescada, stdcrypto.SHA256, sum[:], sig) != nil {
 		return rechazo("firma")
 	}
 	p.logger.Info("kick: clave pública del webhook refrescada tras un fallo de firma")
@@ -203,26 +225,35 @@ func (p *Provider) marcar(id string) bool {
 	return true
 }
 
-// clavePublica devuelve la clave pública de Kick y la antigüedad de la copia devuelta.
-// Pide una nueva si no hay, si venció PublicKeyTTL o si forzar es true. Un fallo de red
-// con una clave ya cacheada no la tira: se sigue con la que había.
-func (p *Provider) clavePublica(forzar bool) (*rsa.PublicKey, time.Duration, error) {
+// clavePublica devuelve la clave pública de Kick. Pide una nueva si no hay, si venció
+// PublicKeyTTL o si forzar es true y la cacheada ya tiene más de edadMinRefresco. Un fallo
+// de red con una clave ya cacheada no la tira: se sigue con la que había.
+//
+// Las dos condiciones se miran DENTRO del candado a propósito. El endpoint del webhook es
+// público y quien quiera puede mandar firmas inválidas a placer: con la guardia fuera,
+// N entregas simultáneas veían la clave envejecida a la vez y entraban las N a pedirla,
+// serializadas con el candado tomado. Aquí, la primera la pide y las demás se encuentran
+// con una copia recién traída y no piden nada.
+func (p *Provider) clavePublica(forzar bool) (*rsa.PublicKey, error) {
 	w := &p.wh
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	ahora := p.now()
-	if !forzar && w.pub != nil && ahora.Sub(w.fetchedAt) < w.claveTTL {
-		return w.pub, ahora.Sub(w.fetchedAt), nil
+	if w.pub != nil {
+		edad := ahora.Sub(w.fetchedAt)
+		if (!forzar && edad < w.claveTTL) || (forzar && edad < edadMinRefresco) {
+			return w.pub, nil
+		}
 	}
 	pub, err := p.pedirClave()
 	if err != nil {
 		if w.pub != nil {
-			return w.pub, ahora.Sub(w.fetchedAt), nil
+			return w.pub, nil
 		}
-		return nil, 0, err
+		return nil, err
 	}
 	w.pub, w.fetchedAt = pub, ahora
-	return pub, 0, nil
+	return pub, nil
 }
 
 // pedirClave hace GET /public/v1/public-key. Es el único endpoint de Kick que no lleva
@@ -410,9 +441,18 @@ func (p *Provider) UnsubscribeChat(ctx context.Context, acct store.Account, toke
 	if err != nil {
 		return err
 	}
-	if _, err := p.do(req, http.StatusNoContent); err != nil {
+	// Kick documenta 204, pero devuelve 200 a veces. Un 200 con el cuerpo vacío es la baja
+	// hecha; uno que trae {"message": "..."} es Kick contando por qué NO la hizo, y eso es
+	// un error aunque el código sea de éxito. Un 404 sí es el resultado que se buscaba: la
+	// suscripción ya no existe.
+	if cuerpo, err := p.do(req, http.StatusNoContent); err != nil {
 		var he *httpError
-		if errors.As(err, &he) && (he.code == http.StatusOK || he.code == http.StatusNotFound) {
+		switch {
+		case !errors.As(err, &he):
+			return err
+		case he.code == http.StatusNotFound:
+			return nil
+		case he.code == http.StatusOK && mensajeDeKick(cuerpo) == "":
 			return nil
 		}
 		return err

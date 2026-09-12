@@ -100,7 +100,12 @@ type servidorWebhook struct {
 	borrados []string
 	// altaError, si no está vacío, es el error que Kick devuelve dentro del data[] del
 	// alta (la petición sale 200 igual).
-	altaError    string
+	altaError string
+	// bajaCode y bajaCuerpo son con qué responde el DELETE de suscripciones. 0 significa
+	// el 204 documentado; sirven para reproducir el 200 con {"message": "..."} que Kick
+	// devuelve cuando NO borró nada.
+	bajaCode     int
+	bajaCuerpo   string
 	clavePedidas atomic.Int32
 }
 
@@ -143,8 +148,13 @@ func nuevoServidorWebhook(t *testing.T) *servidorWebhook {
 	mux.HandleFunc("DELETE /public/v1/events/subscriptions", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.borrados = append(s.borrados, r.URL.Query()["id"]...)
+		code, cuerpo := s.bajaCode, s.bajaCuerpo
 		s.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
+		if code == 0 {
+			code = http.StatusNoContent
+		}
+		w.WriteHeader(code)
+		w.Write([]byte(cuerpo))
 	})
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Close)
@@ -433,5 +443,125 @@ func TestSubscribeChatReportsTheErrorOfKick(t *testing.T) {
 	err := p.SubscribeChat(context.Background(), cuenta(), "kick-acceso-fixture", "https://panel.example/hook")
 	if err == nil || !strings.Contains(err.Error(), "el webhook de la app no está configurado") {
 		t.Fatalf("err = %v, quería el error que dio Kick", err)
+	}
+}
+
+// TestSeenTTLNuncaEsMenorQueDosVentanas cubre el tope de `init`. La firma de Kick cubre
+// "id.marca.cuerpo", así que una repetición reenvía las MISMAS cabeceras: la marca no
+// cambia. Una entrega legítima puede llegar en cualquier punto de [marca-ventana,
+// marca+ventana] —el desfase se mira en los dos sentidos—, así que entre la primera y la
+// última vez que esa marca sigue siendo aceptable caben 2*ventana. Con un SeenTTL menor,
+// el id se purga antes y la repetición entra por segunda vez.
+func TestSeenTTLNuncaEsMenorQueDosVentanas(t *testing.T) {
+	s := nuevoServidorWebhook(t)
+	r := nuevoReloj()
+	p := kick.New(kick.Options{
+		HTTPClient: s.Client(), AuthBase: s.URL, APIBase: s.URL, Now: r.ahora,
+		ReplayWindow: 10 * time.Minute, SeenTTL: 5 * time.Minute,
+	})
+	body := fixture(t, "chat_message.json")
+
+	// La entrega llega con la marca 9 min en el futuro (reloj de Kick adelantado): dentro
+	// de la ventana, y le quedan 19 min de vigencia.
+	h := cabeceras(t, s.clave(), "01HZTTL0000000000000001", r.ahora().Add(9*time.Minute), body)
+	if msgs, err := p.ParseWebhook(h, body); err != nil || len(msgs) != 1 {
+		t.Fatalf("primera entrega: msgs=%d err=%v", len(msgs), err)
+	}
+
+	// Seis minutos después, las mismas cabeceras otra vez. La marca sigue dentro de la
+	// ventana (3 min en el futuro), así que lo único que puede pararla es el id ya visto:
+	// con SeenTTL sin acotar (5 min) ya se habría purgado y el mensaje entraría dos veces.
+	r.avanzar(6 * time.Minute)
+	msgs, err := p.ParseWebhook(h, body)
+	exigirRechazo(t, msgs, err, "repetido")
+}
+
+// TestParseWebhookRechazaUnaMarcaIlegible: una marca que no es RFC 3339 es una cabecera
+// mal formada, no un webhook viejo, y el motivo tiene que decirlo.
+func TestParseWebhookRechazaUnaMarcaIlegible(t *testing.T) {
+	s := nuevoServidorWebhook(t)
+	r := nuevoReloj()
+	p := proveedorWebhook(s, r)
+	body := fixture(t, "chat_message.json")
+
+	h := cabeceras(t, s.clave(), "01HZMARCA000000000000001", r.ahora(), body)
+	h.Set("Kick-Event-Message-Timestamp", "11/09/2026 12:00")
+	msgs, err := p.ParseWebhook(h, body)
+	exigirRechazo(t, msgs, err, "cabeceras")
+	// Y la clave pública ni se pide: el rechazo ocurre antes de verificar la firma.
+	if n := s.clavePedidas.Load(); n != 0 {
+		t.Errorf("peticiones de clave = %d, quería 0", n)
+	}
+}
+
+// TestUnsubscribeChatTrataUn200ConMensajeComoError: Kick a veces responde 200 en vez del
+// 204 documentado. Vacío es la baja hecha; con {"message": "..."} está contando por qué
+// no la hizo, y eso no se puede dar por bueno.
+func TestUnsubscribeChatTrataUn200ConMensajeComoError(t *testing.T) {
+	s := nuevoServidorWebhook(t)
+	s.mu.Lock()
+	s.bajaCode, s.bajaCuerpo = http.StatusOK, `{"message":"no puedes borrar esta suscripción"}`
+	s.mu.Unlock()
+	p := proveedorWebhook(s, nuevoReloj())
+
+	err := p.UnsubscribeChat(context.Background(), cuenta(), "kick-acceso-fixture")
+	if err == nil || !strings.Contains(err.Error(), "no puedes borrar esta suscripción") {
+		t.Fatalf("err = %v, quería el mensaje que dio Kick", err)
+	}
+
+	// Un 200 con el cuerpo vacío sí es la baja hecha.
+	s.mu.Lock()
+	s.bajaCode, s.bajaCuerpo = http.StatusOK, ""
+	s.mu.Unlock()
+	if err := p.UnsubscribeChat(context.Background(), cuenta(), "kick-acceso-fixture"); err != nil {
+		t.Errorf("200 con el cuerpo vacío = %v, quería nil", err)
+	}
+}
+
+// TestFirmasInvalidasConcurrentesRefrescanLaClaveUnaVez es la defensa contra el
+// amplificador: el endpoint del webhook es público, así que cualquiera puede mandar N
+// entregas mal firmadas a la vez. Con la guardia de edad fuera del candado, las N veían la
+// clave envejecida y entraban todas a pedirla, serializadas con el candado tomado. Ahora
+// solo la pide una.
+func TestFirmasInvalidasConcurrentesRefrescanLaClaveUnaVez(t *testing.T) {
+	s := nuevoServidorWebhook(t)
+	r := nuevoReloj()
+	p := proveedorWebhook(s, r)
+	body := fixture(t, "chat_message.json")
+
+	// Una entrega buena deja la clave cacheada (1 petición).
+	if _, err := p.ParseWebhook(cabeceras(t, s.clave(), "01HZDOS0000000000000001", r.ahora(), body), body); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.clavePedidas.Load(); n != 1 {
+		t.Fatalf("peticiones de clave = %d, quería 1", n)
+	}
+
+	// La copia envejece por encima del minuto mínimo: ahora un fallo de firma SÍ da
+	// derecho a refrescar.
+	r.avanzar(5 * time.Minute)
+
+	const n = 20
+	ajena := nuevaClave(t)
+	hdrs := make([]http.Header, n)
+	for i := range n {
+		hdrs[i] = cabeceras(t, ajena, "01HZDOS000000000000010"+string(rune('a'+i)), r.ahora(), body)
+	}
+
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			msgs, err := p.ParseWebhook(hdrs[i], body)
+			if !errors.Is(err, platforms.ErrWebhookRejected) || msgs != nil {
+				t.Errorf("entrega %d: msgs=%v err=%v, quería ErrWebhookRejected", i, msgs, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := s.clavePedidas.Load(); got != 2 {
+		t.Errorf("peticiones de clave = %d, quería 2 (la del arranque y UN solo refresco para las %d entregas)", got, n)
 	}
 }
