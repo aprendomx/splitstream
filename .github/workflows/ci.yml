@@ -65,8 +65,8 @@ jobs:
       # platforms/tokens pueden aparecer en sus dependencias.
       - name: internal/httpapi no conoce go-rtmp, el TLS ni los proveedores
         run: |
-          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio|internal/webtls|internal/platforms/twitch|internal/platforms/tokens'; then
-            echo "::error::internal/httpapi importa go-rtmp, internal/rtmpio, internal/webtls, platforms/twitch o platforms/tokens"
+          if go list -deps ./internal/httpapi | grep -E 'go-rtmp|internal/rtmpio|internal/webtls|internal/platforms/twitch|internal/platforms/tokens|internal/platforms/youtube|internal/platforms/kick'; then
+            echo "::error::internal/httpapi importa go-rtmp, internal/rtmpio, internal/webtls, platforms/twitch, platforms/tokens, platforms/youtube o platforms/kick"
             exit 1
           fi
 

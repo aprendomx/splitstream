@@ -83,6 +83,13 @@ type Config struct {
 	// RetentionMaxChat es el tope de filas en la tabla de mensajes de chat, como
 	// RetentionMaxEvents pero para el chat.
 	RetentionMaxChat int
+	// YouTubeChatBudget son las unidades de cuota diarias que el lector de chat de
+	// YouTube puede gastar antes de pausarse hasta el día siguiente (spec v0.12). No
+	// limita el resto de llamadas (título, programación): solo el sondeo del chat.
+	YouTubeChatBudget int
+	// YouTubeQuota es la cuota diaria total que Google asigna al proyecto, puramente
+	// informativa para el panel: nada en el binario la hace cumplir.
+	YouTubeQuota int
 }
 
 // LogValue implementa slog.LogValuer. Omite MasterKey deliberadamente. Receptor por
@@ -105,6 +112,8 @@ func (c Config) LogValue() slog.Value {
 		slog.Bool("update_check", c.UpdateCheck),
 		slog.String("twitch_client_id", c.TwitchClientID),
 		slog.Int("retention_max_chat", c.RetentionMaxChat),
+		slog.Int("youtube_chat_budget", c.YouTubeChatBudget),
+		slog.Int("youtube_quota", c.YouTubeQuota),
 	)
 }
 
@@ -268,6 +277,12 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	cfg.TwitchClientID = strings.TrimSpace(get("SPLITSTREAM_TWITCH_CLIENT_ID", ""))
+	if cfg.YouTubeChatBudget, err = parseNonNegative(get("SPLITSTREAM_YOUTUBE_CHAT_BUDGET", "6000"), "SPLITSTREAM_YOUTUBE_CHAT_BUDGET"); err != nil {
+		return nil, err
+	}
+	if cfg.YouTubeQuota, err = parseNonNegative(get("SPLITSTREAM_YOUTUBE_QUOTA", "10000"), "SPLITSTREAM_YOUTUBE_QUOTA"); err != nil {
+		return nil, err
+	}
 
 	raw, ok := lookup("SPLITSTREAM_MASTER_KEY")
 	if !ok || raw == "" {

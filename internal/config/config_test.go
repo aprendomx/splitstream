@@ -629,3 +629,32 @@ func TestTwitchClientIDAndChatRetention(t *testing.T) {
 		t.Error("el client_id es público y sirve para diagnosticar: debería salir en el log")
 	}
 }
+
+func TestYouTubeChatBudgetAndQuota(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.YouTubeChatBudget != 6000 || cfg.YouTubeQuota != 10000 {
+		t.Errorf("defaults: budget=%d quota=%d", cfg.YouTubeChatBudget, cfg.YouTubeQuota)
+	}
+	cfg, err = config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64(),
+		"SPLITSTREAM_YOUTUBE_CHAT_BUDGET": "1000", "SPLITSTREAM_YOUTUBE_QUOTA": "5000"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.YouTubeChatBudget != 1000 || cfg.YouTubeQuota != 5000 {
+		t.Errorf("override: budget=%d quota=%d", cfg.YouTubeChatBudget, cfg.YouTubeQuota)
+	}
+	if _, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_YOUTUBE_CHAT_BUDGET": "-1"})); err == nil {
+		t.Error("presupuesto negativo debería fallar")
+	}
+	if _, err := config.LoadFrom(lookup(map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_YOUTUBE_QUOTA": "-1"})); err == nil {
+		t.Error("cuota negativa debería fallar")
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("cfg", "config", cfg)
+	if !strings.Contains(buf.String(), "youtube_chat_budget=1000") {
+		t.Error("el presupuesto del chat debería salir en el log")
+	}
+}

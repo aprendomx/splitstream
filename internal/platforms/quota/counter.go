@@ -31,6 +31,12 @@ func NewCounter(db *store.DB) *Counter {
 // Day es el día de cuota actual, YYYY-MM-DD en hora del Pacífico.
 func (c *Counter) Day() string { return c.Now().In(c.zona).Format("2006-01-02") }
 
+// DayBefore es el día de cuota de hace `days` días, en la misma zona que Day: lo que usa
+// el mantenimiento para podar quota_usage sin duplicar la conversión de zona horaria.
+func (c *Counter) DayBefore(days int) string {
+	return c.Now().In(c.zona).AddDate(0, 0, -days).Format("2006-01-02")
+}
+
 // Add suma unidades. Un fallo se loguea y no se propaga: contar la cuota nunca puede
 // impedir la llamada que la gasta.
 func (c *Counter) Add(ctx context.Context, accountID int64, units int) {

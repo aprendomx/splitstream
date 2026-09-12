@@ -583,14 +583,35 @@ func TestRunExposesPlatforms(t *testing.T) {
 		t.Fatalf("GET /api/platforms = %d, quería 200", resp.StatusCode)
 	}
 	var out []struct {
-		ID         string `json:"id"`
-		Configured bool   `json:"configured"`
+		ID           string `json:"id"`
+		Configured   bool   `json:"configured"`
+		Capabilities struct {
+			RequiresOwnApp    bool `json:"requires_own_app"`
+			RequiresPublicURL bool `json:"requires_public_url"`
+		} `json:"capabilities"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decodificar /api/platforms: %v", err)
 	}
-	if len(out) != 1 || out[0].ID != "twitch" || !out[0].Configured {
-		t.Errorf("/api/platforms = %+v, quería [{id:twitch configured:true}]", out)
+	// Orden alfabético por id, como Registry.All: kick, twitch, youtube.
+	if len(out) != 3 || out[0].ID != "kick" || out[1].ID != "twitch" || out[2].ID != "youtube" {
+		t.Fatalf("/api/platforms ids = %+v, quería [kick twitch youtube]", out)
+	}
+	kick, twitch, youtube := out[0], out[1], out[2]
+	if !twitch.Configured {
+		t.Errorf("twitch.configured = false, quería true (client_id de prueba)")
+	}
+	if !kick.Configured || !youtube.Configured {
+		t.Errorf("kick.configured=%v youtube.configured=%v, quería true en ambas (credenciales por cuenta)", kick.Configured, youtube.Configured)
+	}
+	if !kick.Capabilities.RequiresOwnApp || !youtube.Capabilities.RequiresOwnApp {
+		t.Errorf("requires_own_app kick=%v youtube=%v, quería true en ambas", kick.Capabilities.RequiresOwnApp, youtube.Capabilities.RequiresOwnApp)
+	}
+	if !kick.Capabilities.RequiresPublicURL {
+		t.Error("kick.requires_public_url = false, quería true")
+	}
+	if youtube.Capabilities.RequiresPublicURL {
+		t.Error("youtube.requires_public_url = true, quería false")
 	}
 
 	cancel()
