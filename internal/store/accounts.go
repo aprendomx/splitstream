@@ -233,8 +233,10 @@ func (d *DB) AccountCredentials(ctx context.Context, c *crypto.Cipher, id int64)
 	return out, nil
 }
 
-// AccountByExternalID busca una cuenta por plataforma e id externo. Lo usa el flujo de
-// OAuth para decidir si conecta una cuenta nueva o refresca la existente sin conocer su id.
+// AccountByExternalID busca una cuenta por plataforma e id externo. Lo usan el flujo de
+// OAuth —para decidir si conecta una cuenta nueva o refresca la existente sin conocer su
+// id— y la ingesta del webhook de Kick, que solo sabe de qué canal (BroadcasterID) viene
+// cada mensaje y tiene que resolver a qué cuenta nuestra pertenece.
 func (d *DB) AccountByExternalID(ctx context.Context, platform Platform, externalID string) (*Account, error) {
 	a, err := scanAccount(d.ex.QueryRowContext(ctx,
 		`SELECT `+accountCols+` FROM platform_accounts WHERE platform = ? AND external_id = ?`,

@@ -174,6 +174,11 @@ type Config struct {
 	// por qué el chat se pausa; aquí es un dato que se pasa tal cual, no un límite que
 	// este paquete aplique. 0: el panel no enseña presupuesto.
 	ChatBudget int
+	// YouTubeQuota es la cuota diaria del proyecto de Google, la que Google aplica y este
+	// binario solo repite (SPLITSTREAM_YOUTUBE_QUOTA). Viaja en el estado para que el
+	// panel pueda enseñar el presupuesto del chat como lo que es: una parte de ella.
+	// 0: el panel no la enseña.
+	YouTubeQuota int
 	// Quota lee la cuota gastada hoy por cuenta (YouTube). Nil: el panel y /metrics no
 	// enseñan cuota, que es distinto de enseñar cero.
 	Quota QuotaReader
@@ -216,6 +221,7 @@ type Server struct {
 	chatStats    func() (map[platforms.ID]uint64, map[platforms.ID]bool, uint64)
 	chatIngest   func([]platforms.ChatMessage) int
 	chatBudget   int
+	ytQuota      int
 	quota        QuotaReader
 	// now es la hora del servidor para firmar y verificar el state del flujo con redirect.
 	// Campo y no time.Now directo para que un test pueda firmar un state ya caducado sin
@@ -269,7 +275,7 @@ func New(cfg Config) (*Server, error) {
 		tls:     cfg.TLS, publicURL: cfg.PublicURL,
 		updateInfo: cfg.UpdateInfo,
 		platforms:  cfg.Platforms, tokens: cfg.Tokens, chat: cfg.Chat, chatStats: cfg.ChatStats,
-		chatIngest: cfg.ChatIngest, chatBudget: cfg.ChatBudget, quota: cfg.Quota,
+		chatIngest: cfg.ChatIngest, chatBudget: cfg.ChatBudget, ytQuota: cfg.YouTubeQuota, quota: cfg.Quota,
 		auths:       &authFlows{flows: map[string]*authFlow{}},
 		baseCtx:     baseCtx,
 		liveTimeout: liveTimeoutPorDefecto,

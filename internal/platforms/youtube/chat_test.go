@@ -2,6 +2,7 @@ package youtube_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -316,5 +317,38 @@ func TestReadChatNeverPollsBelowTwoSeconds(t *testing.T) {
 		if d < 2*time.Second {
 			t.Errorf("se pidió dormir %s entre sondeos, quería >= 2s (MinPoll por defecto), aunque el fixture pida 500ms", d)
 		}
+	}
+}
+
+// TestReadChatConQuotaExceededSinPresupuesto cubre avisarPausaPorCuota con ChatBudget nil.
+// Sin presupuesto inyectado no hay cifra que reportar, así que OnChatPaused NO se llama:
+// el error de cuota que sube ya basta para que quien orquesta se entere. Lo que no puede
+// pasar es que la función reviente al leer un ChatBudget que no existe.
+func TestReadChatConQuotaExceededSinPresupuesto(t *testing.T) {
+	s := nuevoServidorChat(t)
+	s.findRes = func(n int32) (int, []byte) { return 403, fixture(t, "error_quota.json") }
+
+	var pausas int
+	p := proveedorChat(s, youtube.Options{
+		// Sin ChatBudget a propósito.
+		OnChatPaused: func(acct store.Account, used, budget int) { pausas++ },
+	})
+	acct := cuentaYT()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := p.ReadChat(ctx, acct, tokenFijo("tok"), make(chan platforms.ChatMessage, 1))
+	if !errors.Is(err, platforms.ErrRateLimited) {
+		t.Fatalf("ReadChat = %v, quería ErrRateLimited (quotaExceeded corta la espera)", err)
+	}
+	if !strings.Contains(err.Error(), "quotaExceeded") {
+		t.Errorf("err = %q, quería que dijera el motivo de Google", err)
+	}
+	if pausas != 0 {
+		t.Errorf("OnChatPaused se llamó %d veces, quería 0: sin ChatBudget no hay presupuesto que reportar", pausas)
+	}
+	// Y no se quedó reintentando: un 403 de cuota corta la búsqueda de emisión activa.
+	if n := s.findCalls.Load(); n != 1 {
+		t.Errorf("liveBroadcasts se llamó %d veces, quería 1", n)
 	}
 }

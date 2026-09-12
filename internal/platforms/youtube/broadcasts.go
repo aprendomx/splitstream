@@ -202,7 +202,10 @@ func (p *Provider) transitionDeadline() time.Duration {
 // ctx.Done() con select.
 func (p *Provider) StartBroadcast(ctx context.Context, acct store.Account, token crypto.Secret, ref string) error {
 	retry, deadline := p.transitionRetry(), p.transitionDeadline()
-	limite := time.Now().Add(deadline)
+	// p.now() y no time.Now(): el reloj del proveedor es inyectable y el resto de este
+	// paquete lo respeta. La espera entre intentos sí es tiempo real (time.After), porque
+	// lo que se espera es a que YouTube vea llegar el vídeo.
+	limite := p.now().Add(deadline)
 	for {
 		err := p.transition(ctx, acct, token, ref, "live")
 		if err == nil {
@@ -212,7 +215,7 @@ func (p *Provider) StartBroadcast(ctx context.Context, acct store.Account, token
 		if !errors.As(err, &ae) || ae.reason != "errorStreamInactive" {
 			return err
 		}
-		if !time.Now().Before(limite) {
+		if !p.now().Before(limite) {
 			return errors.New("YouTube no recibe la señal todavía: arranca OBS y vuelve a intentarlo")
 		}
 		select {

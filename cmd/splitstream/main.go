@@ -543,6 +543,7 @@ func run(ctx context.Context, out io.Writer) error {
 		Quota:          cuota,
 		ChatIngest:     agregador.Ingest,
 		ChatBudget:     cfg.YouTubeChatBudget,
+		YouTubeQuota:   cfg.YouTubeQuota,
 		// El padre de los sondeos de autorización en curso: el mismo contexto de vida
 		// de los sinks, para que se corten en el apagado en vez de sobrevivir hasta que
 		// venza el código de dispositivo (30 min).

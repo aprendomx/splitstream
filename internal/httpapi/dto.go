@@ -285,6 +285,12 @@ type panelDTO struct {
 	// un número de unidades gastadas no dice si queda mucho o poco. 0: sin presupuesto
 	// configurado, y el panel no lo enseña.
 	YouTubeChatBudget int `json:"youtube_chat_budget"`
+	// YouTubeQuota es la cuota diaria que Google asigna al proyecto de la app propia
+	// (SPLITSTREAM_YOUTUBE_QUOTA). Aquí no se aplica nada: quien la aplica es Google. Está
+	// para que el panel la enseñe junto al presupuesto del chat, que es solo una parte de
+	// ella, y se entienda cuánto margen queda para crear emisiones y leer el canal. 0: sin
+	// cuota declarada, y el panel no la enseña.
+	YouTubeQuota int `json:"youtube_quota"`
 }
 
 // sessionSummaryDTO es una fila del historial: la sesión y cuántos eventos dejó por nivel.

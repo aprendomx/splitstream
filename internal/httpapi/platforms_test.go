@@ -1088,7 +1088,9 @@ func TestCallbackExchangesTheCodeOnlyOnce(t *testing.T) {
 // El presupuesto de cuota del chat de YouTube viaja en el estado del panel: sin él, las
 // unidades gastadas de cada cuenta no dicen si queda mucho o poco.
 func TestStatusCarriesTheYouTubeChatBudget(t *testing.T) {
-	srv, _, ck := servidorPlataformas(t, &fakeProvider{configured: true}, func(c *Config) { c.ChatBudget = 5000 })
+	srv, _, ck := servidorPlataformas(t, &fakeProvider{configured: true}, func(c *Config) {
+		c.ChatBudget, c.YouTubeQuota = 5000, 10000
+	})
 	rec := do(t, srv, ck, http.MethodGet, "/api/status", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d %s", rec.Code, rec.Body)
@@ -1097,6 +1099,11 @@ func TestStatusCarriesTheYouTubeChatBudget(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &out)
 	if out.Panel.YouTubeChatBudget != 5000 {
 		t.Errorf("youtube_chat_budget = %d, quería 5000", out.Panel.YouTubeChatBudget)
+	}
+	// La cuota diaria del proyecto viaja al lado: el presupuesto del chat solo se entiende
+	// como una parte de ella.
+	if out.Panel.YouTubeQuota != 10000 {
+		t.Errorf("youtube_quota = %d, quería 10000", out.Panel.YouTubeQuota)
 
 	}
 }

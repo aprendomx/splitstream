@@ -63,8 +63,9 @@ panel de Splitstream.
 ## Qué gasta cuota
 
 Cada llamada que Splitstream hace a la YouTube Data API en tu nombre suma a tu cuota
-diaria de 10 000 unidades (`SPLITSTREAM_YOUTUBE_QUOTA`, solo informativa: el límite real lo
-fija Google). El panel enseña lo gastado en **Ajustes → Cuentas conectadas** y en la barra
+diaria de 10 000 unidades (`SPLITSTREAM_YOUTUBE_QUOTA`: el límite real lo fija Google, aquí
+solo se declara para poder enseñarlo). El panel enseña lo gastado en **Ajustes → Cuentas
+conectadas** y, junto al presupuesto del chat y a esa cuota diaria, en la barra de cuota
 del chat.
 
 | Acción | Unidades |

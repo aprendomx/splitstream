@@ -253,7 +253,7 @@ Todo se controla con variables de entorno:
 | `SPLITSTREAM_RETENTION_MAX_CHAT` | `200000` | Tope de filas en `chat_messages`. `0` desactiva |
 | `SPLITSTREAM_TWITCH_CLIENT_ID` | vacío | Vacío: el client_id incluido en el binario; pon el tuyo si registras tu propia app en dev.twitch.tv. Es público, no un secreto. **Hasta que la app de Splitstream esté registrada, conectar cuentas de Twitch necesita esta variable** |
 | `SPLITSTREAM_YOUTUBE_CHAT_BUDGET` | `6000` | Unidades de cuota diarias tras las que el chat de YouTube se pausa solo (ver [`docs/youtube-credenciales.md`](docs/youtube-credenciales.md)) |
-| `SPLITSTREAM_YOUTUBE_QUOTA` | `10000` | Cuota diaria del proyecto de Google Cloud; solo informativa, el límite real lo fija Google |
+| `SPLITSTREAM_YOUTUBE_QUOTA` | `10000` | Cuota diaria del proyecto de Google Cloud; el límite real lo fija Google, aquí solo se declara para que el panel la enseñe junto al gasto en la barra de cuota del chat |
 | `SPLITSTREAM_RECORDINGS_DIR` | `recordings/` junto a la base | Dónde se escriben los archivos de grabación |
 | `SPLITSTREAM_TLS_DOMAIN` | vacío | Con valor, TLS integrado con Let's Encrypt para ese dominio; el panel pasa a `:443` |
 | `SPLITSTREAM_TLS_CACHE_DIR` | `tls-cache/` junto a la base | Cuenta y certificados de Let's Encrypt |
