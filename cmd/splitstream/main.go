@@ -439,7 +439,7 @@ func run(ctx context.Context, out io.Writer) error {
 				return fmt.Sprintf("cuota: %d filas borradas", n), err
 			}},
 			{Name: "webhooks_kick", Run: func(ctx context.Context) (string, error) {
-				return renovarWebhooksKick(ctx, db, registro, gestorTokens, logger, cfg.TLS(), publicURL)
+				return renovarWebhooksKick(ctx, db, registro, gestorTokens, publicURL, logger)
 			}},
 		},
 		OnDone: func(resumen string, err error) {
@@ -725,14 +725,25 @@ func run(ctx context.Context, out io.Writer) error {
 	return nil
 }
 
+// tokenGetter es lo mínimo que renovarWebhooksKick necesita del gestor de tokens: pedir
+// uno vigente por cuenta. La interfaz existe para poder testear el job con un doble, sin
+// levantar un tokens.Manager de verdad (que a su vez necesita el registro completo).
+type tokenGetter interface {
+	Token(ctx context.Context, accountID int64) (crypto.Secret, error)
+}
+
 // renovarWebhooksKick vuelve a suscribir el chat de Kick para cada cuenta conectada con un
 // destino habilitado vinculado. Kick da de baja una suscripción tras un día entero de
 // fallos de entrega, así que el mantenimiento diario la renueva sin esperar a que el
 // panel provoque una reconexión: es best-effort, un fallo con una cuenta no impide seguir
 // con las demás.
+//
+// publicURL vacía ya cubre tanto "sin TLS" como "con TLS pero con certificado propio sin
+// dominio" (webtls.Build solo rellena PublicURL con Let's Encrypt): no hace falta un
+// booleano aparte para TLS.
 func renovarWebhooksKick(ctx context.Context, db *store.DB, registro *platforms.Registry,
-	gestorTokens *tokens.Manager, logger *slog.Logger, conTLS bool, publicURL string) (string, error) {
-	if !conTLS || publicURL == "" {
+	tg tokenGetter, publicURL string, logger *slog.Logger) (string, error) {
+	if publicURL == "" {
 		return "kick: sin suscripciones que renovar", nil
 	}
 	p, ok := registro.Get(platforms.Kick)
@@ -772,12 +783,20 @@ func renovarWebhooksKick(ctx context.Context, db *store.DB, registro *platforms.
 	url := strings.TrimSuffix(publicURL, "/") + "/api/platforms/kick/webhook"
 	n := 0
 	for _, acct := range candidatas {
-		tok, err := gestorTokens.Token(ctx, acct.ID)
+		// Un timeout por cuenta, no uno solo para todo el job: una cuenta colgada no puede
+		// hacer esperar a las demás ni al mantenimiento entero. cancel() se llama al final
+		// de cada vuelta (no con defer, que las acumularía todas hasta que la función
+		// entera vuelva).
+		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		tok, err := tg.Token(cctx, acct.ID)
 		if err != nil {
+			cancel()
 			logger.Warn("kick: no se pudo obtener el token para renovar el webhook del chat", "cuenta", acct.DisplayName, "err", err)
 			continue
 		}
-		if err := cw.SubscribeChat(ctx, acct, tok, url); err != nil {
+		err = cw.SubscribeChat(cctx, acct, tok, url)
+		cancel()
+		if err != nil {
 			logger.Warn("kick: no se pudo renovar el webhook del chat", "cuenta", acct.DisplayName, "err", err)
 			continue
 		}

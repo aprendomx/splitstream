@@ -47,6 +47,21 @@ func TestDayUsesPacificTimeNotUTC(t *testing.T) {
 	}
 }
 
+// DayBefore tiene que fijar el cruce de día en la misma zona que Day, no restar días sobre
+// el UTC: 2026-09-12T03:00:00Z son las 20:00 del 2026-09-11 en Los Ángeles, así que tanto
+// Day() como el punto de partida de DayBefore son ese 2026-09-11.
+func TestDayBeforeUsesPacificTimeToo(t *testing.T) {
+	db, _ := abrir(t)
+	c := quota.NewCounter(db)
+	c.Now = func() time.Time { return time.Date(2026, 9, 12, 3, 0, 0, 0, time.UTC) }
+	if got := c.Day(); got != "2026-09-11" {
+		t.Errorf("Day() = %q, quería 2026-09-11", got)
+	}
+	if got := c.DayBefore(7); got != "2026-09-04" {
+		t.Errorf("DayBefore(7) = %q, quería 2026-09-04", got)
+	}
+}
+
 func TestSinkAndAddAccumulateOnTheSameDay(t *testing.T) {
 	db, id := abrir(t)
 	c := quota.NewCounter(db)
