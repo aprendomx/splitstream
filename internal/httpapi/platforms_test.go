@@ -49,6 +49,11 @@ type fakeProvider struct {
 	redirectURI string
 	state       string
 	creds       platforms.Credentials
+	completados int
+	// entroCanje avisa de que CompleteRedirect empezó y liberaCanje lo deja terminar: con
+	// los dos, un test puede tener dos callbacks dentro del mismo canje a la vez.
+	entroCanje  chan struct{}
+	liberaCanje chan struct{}
 
 	// Lo que registra el chat por webhook.
 	suscripciones   int
@@ -123,7 +128,19 @@ func (c capRedirect) BeginRedirect(_ context.Context, creds platforms.Credential
 		ExpiresAt: time.Now().Add(10 * time.Minute)}, nil
 }
 
-func (c capRedirect) CompleteRedirect(_ context.Context, creds platforms.Credentials, _ platforms.AuthPrompt, code string) (store.NewAccount, error) {
+func (c capRedirect) CompleteRedirect(ctx context.Context, creds platforms.Credentials, _ platforms.AuthPrompt, code string) (store.NewAccount, error) {
+	c.p.mu.Lock()
+	c.p.completados++
+	entro, libera := c.p.entroCanje, c.p.liberaCanje
+	c.p.mu.Unlock()
+	if entro != nil {
+		entro <- struct{}{}
+		select {
+		case <-libera:
+		case <-ctx.Done():
+			return store.NewAccount{}, ctx.Err()
+		}
+	}
 	if code != "ok" {
 		return store.NewAccount{}, errors.New("la plataforma rechazó el código")
 	}
@@ -160,6 +177,14 @@ func (c capWebhook) ParseWebhook(hdr http.Header, _ []byte) ([]platforms.ChatMes
 			Author: "alguien", Text: "hola", At: time.Now()}}, nil
 	case "bad":
 		return nil, fmt.Errorf("%w: firma inválida", platforms.ErrWebhookRejected)
+	case "lote":
+		// Un lote más grande de lo que se acepta de una entrega.
+		msgs := make([]platforms.ChatMessage, maxMensajesPorEntrega+5)
+		for i := range msgs {
+			msgs[i] = platforms.ChatMessage{Platform: platforms.Kick, BroadcasterID: "123",
+				AuthorID: "a1", Author: "alguien", Text: "hola", At: time.Now()}
+		}
+		return msgs, nil
 	}
 	return nil, nil
 }
@@ -910,5 +935,146 @@ func TestAccountsCarryOwnAppAndQuota(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `splitstream_youtube_quota_units{account="canal"} 4321`) {
 		t.Errorf("métricas sin la cuota: %s", rec.Body)
+	}
+}
+
+// provEmisionSinCanal es un proveedor que SOLO sabe poner el título de una emisión, sin
+// forma de tocar el del canal (que es como se comporta YouTube). Hace falta un tipo aparte
+// porque fakeProvider siempre trae SetTitle y en Go una capacidad no se puede quitar.
+type provEmisionSinCanal struct{}
+
+func (provEmisionSinCanal) ID() platforms.ID { return platforms.YouTube }
+func (provEmisionSinCanal) Capabilities() platforms.Capabilities {
+	return platforms.Capabilities{Title: true, Schedule: true, RequiresOwnApp: true}
+}
+func (provEmisionSinCanal) Configured() bool { return true }
+func (provEmisionSinCanal) BeginAuth(context.Context, platforms.Credentials) (platforms.AuthPrompt, error) {
+	return platforms.AuthPrompt{}, platforms.ErrNoClientID
+}
+func (provEmisionSinCanal) PollAuth(context.Context, platforms.Credentials, platforms.AuthPrompt) (store.NewAccount, error) {
+	return store.NewAccount{}, platforms.ErrAuthExpired
+}
+func (provEmisionSinCanal) Refresh(context.Context, store.Account, platforms.Credentials, crypto.Secret) (store.Tokens, error) {
+	return store.Tokens{}, nil
+}
+func (provEmisionSinCanal) Validate(context.Context, crypto.Secret) (platforms.Identity, error) {
+	return platforms.Identity{}, nil
+}
+func (provEmisionSinCanal) SetBroadcastTitle(context.Context, store.Account, crypto.Secret, string, string) error {
+	return nil
+}
+
+// Dos llegadas del mismo callback —un doble clic, un reintento del navegador— no pueden
+// canjear el código dos veces: la segunda encuentra el flujo ya reclamado.
+func TestCallbackExchangesTheCodeOnlyOnce(t *testing.T) {
+	p := &fakeProvider{configured: true, id: platforms.Kick, redirect: true,
+		entroCanje: make(chan struct{}), liberaCanje: make(chan struct{})}
+	srv, db, ck := servidorPlataformas(t, p)
+
+	rec := do(t, srv, ck, http.MethodPost, "/api/platforms/kick/auth", `{"origin":"http://localhost:5173"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inicio = %d %s", rec.Code, rec.Body)
+	}
+	var inicio authStartDTO
+	json.Unmarshal(rec.Body.Bytes(), &inicio)
+	ruta := "/api/platforms/kick/callback?state=" + url.QueryEscape(p.estadoFirmado()) + "&code=ok"
+
+	primera := make(chan int, 1)
+	go func() { primera <- do(t, srv, nil, http.MethodGet, ruta, "").Code }()
+
+	// Se espera a que el canje haya empezado de verdad: la segunda llegada tiene que caer
+	// justo dentro de esa ventana, que es donde estaba el problema.
+	select {
+	case <-p.entroCanje:
+	case <-time.After(3 * time.Second):
+		t.Fatal("CompleteRedirect no llegó a empezar")
+	}
+	// Mientras se canjea, el panel ve el flujo como pendiente y no como un estado raro.
+	rec = do(t, srv, ck, http.MethodGet, "/api/platforms/kick/auth/"+inicio.State, "")
+	var enCurso authStatusDTO
+	json.Unmarshal(rec.Body.Bytes(), &enCurso)
+	if enCurso.Status != "pending" {
+		t.Errorf("durante el canje el estado es %q, quería pending", enCurso.Status)
+	}
+
+	segunda := do(t, srv, nil, http.MethodGet, ruta, "").Code
+	close(p.liberaCanje)
+
+	var codigoPrimera int
+	select {
+	case codigoPrimera = <-primera:
+	case <-time.After(3 * time.Second):
+		t.Fatal("la primera llegada no terminó")
+	}
+	if codigoPrimera != http.StatusOK || segunda != http.StatusBadRequest {
+		t.Errorf("códigos = %d y %d, quería 200 y 400", codigoPrimera, segunda)
+	}
+	p.mu.Lock()
+	completados := p.completados
+	p.mu.Unlock()
+	if completados != 1 {
+		t.Errorf("CompleteRedirect se llamó %d veces, quería 1", completados)
+	}
+	if n := eventosPorTipo(t, db)["account_connected"]; n != 1 {
+		t.Errorf("eventos account_connected = %d, quería 1", n)
+	}
+	cuentas, _ := db.Accounts(context.Background())
+	if len(cuentas) != 1 {
+		t.Errorf("cuentas = %d, quería 1", len(cuentas))
+	}
+	// Y el flujo terminó en done pese al ir y venir.
+	rec = do(t, srv, ck, http.MethodGet, "/api/platforms/kick/auth/"+inicio.State, "")
+	var estado authStatusDTO
+	json.Unmarshal(rec.Body.Bytes(), &estado)
+	if estado.Status != "done" || estado.Account == nil {
+		t.Errorf("estado final = %+v", estado)
+	}
+}
+
+// El presupuesto de cuota del chat de YouTube viaja en el estado del panel: sin él, las
+// unidades gastadas de cada cuenta no dicen si queda mucho o poco.
+func TestStatusCarriesTheYouTubeChatBudget(t *testing.T) {
+	srv, _, ck := servidorPlataformas(t, &fakeProvider{configured: true}, func(c *Config) { c.ChatBudget = 5000 })
+	rec := do(t, srv, ck, http.MethodGet, "/api/status", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %s", rec.Code, rec.Body)
+	}
+	var out statusDTO
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Panel.YouTubeChatBudget != 5000 {
+		t.Errorf("youtube_chat_budget = %d, quería 5000", out.Panel.YouTubeChatBudget)
+	}
+}
+
+// Sin emisión creada, el título de YouTube no tiene dónde ponerse: el mensaje dice qué
+// hacer en vez de hablar de una capacidad que la plataforma sí tiene.
+func TestLiveTitleAsksForTheBroadcastFirst(t *testing.T) {
+	srv, db := newTestServer(t, func(c *Config) {
+		c.Platforms = platforms.NewRegistry(provEmisionSinCanal{})
+		c.Tokens = tokensFalsos{db: c.DB, c: c.Cipher}
+	})
+	ck := login(t, srv)
+	a := cuentaDePlataforma(t, srv, db, store.PlatformYouTube, "123", "canal")
+	d, err := db.CreateDestination(context.Background(), srv.cipher, store.NewDestination{
+		Name: "YouTube", Platform: store.PlatformYouTube, RTMPURL: "rtmp://a.rtmp.youtube.com/live2",
+		Key: "clave", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LinkDestination(context.Background(), d.ID, a.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, srv, ck, http.MethodPost, "/api/live/title", `{"title":"Hola","destinations":[`+itoa(d.ID)+`]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("title = %d %s", rec.Code, rec.Body)
+	}
+	var res []liveResultDTO
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if len(res) != 1 || res[0].OK {
+		t.Fatalf("resultado = %+v", res)
+	}
+	if !strings.Contains(res[0].Message, "crea la emisión primero") {
+		t.Errorf("mensaje = %q", res[0].Message)
 	}
 }

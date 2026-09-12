@@ -65,7 +65,11 @@ type authFlows struct {
 }
 
 type authFlow struct {
-	status   string // pending | done | expired | error
+	// status: pending | exchanging | done | expired | error. `exchanging` es el flujo con
+	// redirect que YA tiene un callback canjeando su código; existe para que una segunda
+	// llegada del mismo código —un doble clic, un reintento del navegador— no vuelva a
+	// canjearlo. Hacia fuera se cuenta como `pending`: al panel no le dice nada nuevo.
+	status   string
 	account  *store.Account
 	message  string
 	expira   time.Time
@@ -81,6 +85,9 @@ type authFlow struct {
 	// el primero no tiene goroutine sondeando, lo termina el callback.
 	redirect bool
 }
+
+// vivo dice si el flujo sigue esperando un desenlace. Debe llamarse con auths.mu tomado.
+func (f *authFlow) vivo() bool { return f.status == "pending" || f.status == "exchanging" }
 
 // maxFlujosPorPlataforma tope de flujos "pending" simultáneos por plataforma. Cada uno es
 // una goroutine sondeando de por vida (hasta 30 min): sin tope, refrescar la pestaña del
@@ -116,7 +123,7 @@ func (s *Server) flujosVivos(id platforms.ID) int {
 	s.limpiarVencidos()
 	var n int
 	for _, v := range s.auths.flows {
-		if v.platform == id && v.status == "pending" {
+		if v.platform == id && v.vivo() {
 			n++
 		}
 	}
@@ -255,9 +262,12 @@ func (s *Server) empezarRedirect(w http.ResponseWriter, r *http.Request, p platf
 		writeError(w, http.StatusBadGateway, codeInternal, "la plataforma no respondió")
 		return
 	}
-	expira := prompt.ExpiresAt
-	if expira.IsZero() {
-		expira = s.now().Add(stateTTL)
+	// El flujo no puede durar más que su state: pasado el TTL, el callback lo rechazaría
+	// igual, y dejarlo en el mapa hasta la hora que diga la plataforma solo sirve para que
+	// el panel siga esperando por algo que ya no puede llegar.
+	expira := s.now().Add(stateTTL)
+	if !prompt.ExpiresAt.IsZero() && prompt.ExpiresAt.Before(expira) {
+		expira = prompt.ExpiresAt
 	}
 	f := &authFlow{status: "pending", expira: expira, cancel: func() {}, platform: p.ID(),
 		creds: creds, prompt: prompt, redirect: true}
@@ -327,7 +337,9 @@ func (s *Server) sondear(ctx context.Context, p platforms.Provider, creds platfo
 func (s *Server) terminar(f *authFlow, status string, acct *store.Account, msg string) {
 	s.auths.mu.Lock()
 	defer s.auths.mu.Unlock()
-	if f.status == "pending" {
+	// `exchanging` también se puede terminar: es el estado en el que el callback deja el
+	// flujo mientras canjea el código, y es él quien viene luego a cerrarlo.
+	if f.vivo() {
 		f.status, f.account, f.message = status, acct, msg
 	}
 }
@@ -444,10 +456,15 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Los secretos del flujo se copian con el candado puesto, como en handleAuthStatus:
-	// el flujo lo pueden estar mirando desde la goroutine del panel.
+	// El flujo se RECLAMA con el candado puesto: se comprueba que está esperando y se deja
+	// en `exchanging` antes de soltarlo. Sin eso, dos llegadas del mismo código —un doble
+	// clic, un reintento del navegador— verían las dos un flujo `pending` y lo canjearían
+	// las dos, porque el canje tarda y ocurre fuera del candado. Los secretos se copian
+	// aquí mismo, como en handleAuthStatus.
 	s.auths.mu.Lock()
 	f, ok := s.auths.flows[flowID]
+	// `pending` exacto, no vivo(): un flujo ya en `exchanging` es precisamente el que hay
+	// que rechazar, porque su código lo está canjeando otra petición.
 	if ok && (f.platform != p.ID() || !f.redirect || f.status != "pending") {
 		ok = false
 	}
@@ -455,6 +472,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	var prompt platforms.AuthPrompt
 	if ok {
 		creds, prompt = f.creds, f.prompt
+		f.status = "exchanging"
 	}
 	s.auths.mu.Unlock()
 	if !ok {
@@ -473,6 +491,9 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := q.Get("code")
 	if code == "" {
+		// El flujo ya está reclamado: se cierra en error en vez de dejarlo en `exchanging`
+		// hasta que venza, que al panel le parecería que sigue esperando para siempre.
+		s.terminar(f, "error", nil, "la plataforma no devolvió el código de autorización")
 		s.callbackInvalido(w)
 		return
 	}
@@ -486,7 +507,9 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		// Sin el error del proveedor en el log: es la única vía por la que el código
 		// podría acabar escrito en disco si algún día alguien lo incluyera en el texto.
 		s.logger.Warn("no se pudo completar la autorización", "plataforma", p.ID())
-		s.terminar(f, "error", nil, mensajePlataforma(err))
+		// El mensaje acaba en el panel y puede arrastrar texto de la plataforma dentro del
+		// error: pasa por textoSeguro como el error_description de la query.
+		s.terminar(f, "error", nil, textoSeguro(mensajePlataforma(err)))
 		s.paginaCallback(w, "No se pudo conectar. Vuelve al panel e inténtalo otra vez.")
 		return
 	}
@@ -579,9 +602,9 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if ok && f.platform != p.ID() {
 		ok = false
 	}
-	if ok && f.status != "pending" {
+	if ok && !f.vivo() {
 		// Un flujo terminado se entrega una vez y se olvida; los expirados sin consultar
-		// se limpian de paso.
+		// se limpian de paso. Uno en `exchanging` NO se entrega: todavía está en marcha.
 		delete(s.auths.flows, state)
 	}
 	s.limpiarVencidos()
@@ -592,6 +615,11 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	var account *store.Account
 	if ok {
 		status, message, account = f.status, f.message, f.account
+		// `exchanging` es un detalle de cómo se cierra el flujo por dentro: para quien
+		// pregunta sigue siendo una conexión en curso.
+		if status == "exchanging" {
+			status = "pending"
+		}
 	}
 	s.auths.mu.Unlock()
 	if !ok {

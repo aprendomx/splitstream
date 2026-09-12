@@ -169,9 +169,10 @@ type Config struct {
 	// cuántos aceptó; es chat.Aggregator.Ingest sin importarlo. No bloquea. Nil: el
 	// webhook sigue respondiendo 200 y los mensajes se descartan.
 	ChatIngest func([]platforms.ChatMessage) int
-	// ChatBudget acota cuántos mensajes se aceptan de UNA entrega de webhook: la
-	// plataforma decide cuántos manda, y sin tope un lote enorme llenaría el bus de golpe.
-	// 0 o menos: sin tope.
+	// ChatBudget son las unidades de cuota diarias que el lector de chat de YouTube tiene
+	// permitido gastar. El panel lo enseña junto a la cuota consumida para que se entienda
+	// por qué el chat se pausa; aquí es un dato que se pasa tal cual, no un límite que
+	// este paquete aplique. 0: el panel no enseña presupuesto.
 	ChatBudget int
 	// Quota lee la cuota gastada hoy por cuenta (YouTube). Nil: el panel y /metrics no
 	// enseñan cuota, que es distinto de enseñar cero.

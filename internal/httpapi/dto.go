@@ -279,6 +279,12 @@ type updateDTO struct {
 type panelDTO struct {
 	TLS       bool   `json:"tls"`
 	PublicURL string `json:"public_url"`
+	// YouTubeChatBudget son las unidades de cuota diarias que el lector de chat de YouTube
+	// puede gastar. Va aquí, con el resto de lo que describe este arranque, para que el
+	// panel pueda contarlo junto a `quota_used_today` de cada cuenta: sin el presupuesto,
+	// un número de unidades gastadas no dice si queda mucho o poco. 0: sin presupuesto
+	// configurado, y el panel no lo enseña.
+	YouTubeChatBudget int `json:"youtube_chat_budget"`
 }
 
 // sessionSummaryDTO es una fila del historial: la sesión y cuántos eventos dejó por nivel.

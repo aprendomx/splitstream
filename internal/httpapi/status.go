@@ -18,7 +18,7 @@ const recentEventsInStatus = 20
 func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error) {
 	var out statusDTO
 	out.Version = s.version
-	out.Panel = panelDTO{TLS: s.tls, PublicURL: s.publicURL}
+	out.Panel = panelDTO{TLS: s.tls, PublicURL: s.publicURL, YouTubeChatBudget: s.chatBudget}
 
 	settings, err := s.db.Settings(ctx)
 	if err != nil {

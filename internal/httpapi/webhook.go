@@ -17,6 +17,11 @@ import (
 // retransmitiendo.
 const maxWebhookBody = 256 << 10
 
+// maxMensajesPorEntrega acota cuántos mensajes se aceptan de UNA entrega: la plataforma
+// decide cuántos manda, y sin tope un lote enorme llenaría el bus de golpe. Cien pasa de
+// sobra cualquier entrega real de Kick.
+const maxMensajesPorEntrega = 100
+
 // rechazoCadencia acota el evento `webhook_rejected` a uno por minuto. Sin esto, un bucle
 // de entregas mal firmadas llenaría el registro del panel y la tabla de eventos.
 const rechazoCadencia = time.Minute
@@ -82,8 +87,8 @@ func (s *Server) ingestarChat(ctx context.Context, msgs []platforms.ChatMessage)
 	if len(msgs) == 0 || s.chatIngest == nil {
 		return
 	}
-	if s.chatBudget > 0 && len(msgs) > s.chatBudget {
-		msgs = msgs[:s.chatBudget]
+	if len(msgs) > maxMensajesPorEntrega {
+		msgs = msgs[:maxMensajesPorEntrega]
 	}
 	// Una entrega trae normalmente mensajes de un solo canal: el mapa evita repetir la
 	// misma consulta por cada mensaje del lote. El 0 significa "ese canal no es nuestro".

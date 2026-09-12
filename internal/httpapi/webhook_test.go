@@ -141,3 +141,18 @@ func TestWebhookWithoutProviderIsNotFound(t *testing.T) {
 		t.Errorf("sin proveedor = %d, quería 404", rec.Code)
 	}
 }
+
+// Una entrega con más mensajes de los que se aceptan se recorta: la plataforma decide
+// cuántos manda, y un lote enorme no puede llenar el bus de golpe.
+func TestWebhookCapsMessagesPerDelivery(t *testing.T) {
+	srv, db, _, ing := servidorWebhook(t)
+	cuentaDePlataforma(t, srv, db, store.PlatformKick, "123", "kickdev")
+
+	if rec := webhook(t, srv, "lote", `{}`); rec.Code != http.StatusOK {
+		t.Fatalf("lote = %d", rec.Code)
+	}
+	llamadas, msgs := ing.leer()
+	if llamadas != 1 || len(msgs) != maxMensajesPorEntrega {
+		t.Errorf("ingesta = %d llamadas, %d mensajes; quería 1 y %d", llamadas, len(msgs), maxMensajesPorEntrega)
+	}
+}
