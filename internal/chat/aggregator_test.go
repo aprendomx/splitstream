@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -94,6 +95,65 @@ func montar(t *testing.T, n int) (*store.DB, *events.Bus, *chat.Bus, *lectorFals
 	ag := chat.NewAggregator(chat.Config{DB: db, Events: bus, Chat: cb, Registry: platforms.NewRegistry(lector),
 		Tokens: fuenteFija{}, BatchEvery: 20 * time.Millisecond, BatchSize: 50})
 	return db, bus, cb, lector, ag, acct
+}
+
+// webhookFalso implementa Provider + ChatWebhook (Kick), pero NO ChatReader: arrancar no
+// le lanza un lector, aunque cuentasConChat sí incluye su cuenta porque Capabilities.ChatRead
+// es true. Es el doble que ejercita el camino de Ingest, sin depender de httpapi ni de un
+// webhook real.
+type webhookFalso struct{}
+
+func (webhookFalso) ID() platforms.ID { return platforms.Kick }
+func (webhookFalso) Capabilities() platforms.Capabilities {
+	return platforms.Capabilities{ChatRead: true, RequiresPublicURL: true}
+}
+func (webhookFalso) Configured() bool { return true }
+func (webhookFalso) BeginAuth(context.Context, platforms.Credentials) (platforms.AuthPrompt, error) {
+	return platforms.AuthPrompt{}, nil
+}
+func (webhookFalso) PollAuth(context.Context, platforms.Credentials, platforms.AuthPrompt) (store.NewAccount, error) {
+	return store.NewAccount{}, nil
+}
+func (webhookFalso) Refresh(context.Context, store.Account, platforms.Credentials, crypto.Secret) (store.Tokens, error) {
+	return store.Tokens{}, nil
+}
+func (webhookFalso) Validate(context.Context, crypto.Secret) (platforms.Identity, error) {
+	return platforms.Identity{}, nil
+}
+func (webhookFalso) SubscribeChat(context.Context, store.Account, crypto.Secret, string) error {
+	return nil
+}
+func (webhookFalso) UnsubscribeChat(context.Context, store.Account, crypto.Secret) error {
+	return nil
+}
+func (webhookFalso) ParseWebhook(http.Header, []byte) ([]platforms.ChatMessage, error) {
+	return nil, nil
+}
+
+// montarKick es montar pero con una cuenta de Kick y un webhookFalso registrado en vez del
+// lectorFalso de Twitch: el destino de la prueba de Ingest, cuyo chat entra por webhook y
+// no por ReadChat.
+func montarKick(t *testing.T) (*store.DB, *events.Bus, *chat.Bus, *chat.Aggregator, *store.Account) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	var k [32]byte
+	c, _ := crypto.NewCipher(k)
+	acct, _ := db.UpsertAccount(ctx, c, store.NewAccount{Platform: store.PlatformKick, ExternalID: "1", DisplayName: "uno",
+		Tokens: store.Tokens{Access: "a"}})
+	d, _ := db.CreateDestination(ctx, c, store.NewDestination{Name: "kk", Platform: store.PlatformKick, RTMPURL: "rtmp://x/app", Key: "k", Enabled: true})
+	db.LinkDestination(ctx, d.ID, acct.ID)
+
+	bus := events.NewBus()
+	db.SetEventHook(bus.Publish)
+	cb := chat.NewBus()
+	ag := chat.NewAggregator(chat.Config{DB: db, Events: bus, Chat: cb, Registry: platforms.NewRegistry(webhookFalso{}),
+		Tokens: fuenteFija{}, BatchEvery: 20 * time.Millisecond, BatchSize: 50})
+	return db, bus, cb, ag, acct
 }
 
 func sesion(t *testing.T, db *store.DB) int64 {
@@ -214,4 +274,71 @@ func TestAggregatorDropsWhenTheStoreFailsInsteadOfBlocking(t *testing.T) {
 		_, _, dropped := ag.Stats()
 		return dropped == 30
 	}, "los 30 mensajes del lote fallido deberían contarse como descartados")
+}
+
+func TestIngestFeedsTheSessionOrDropsWithoutOne(t *testing.T) {
+	db, _, cb, ag, acct := montarKick(t)
+
+	// Sin sesión viva: se descartan y se cuentan, no hay canal a donde meterlos.
+	sinSesion := []platforms.ChatMessage{{Platform: platforms.Kick, AccountID: acct.ID, AuthorID: "u", Author: "v", Text: "hola", At: time.Now()}}
+	if n := ag.Ingest(sinSesion); n != 0 {
+		t.Errorf("Ingest sin sesión = %d, quería 0", n)
+	}
+	if _, _, dropped := ag.Stats(); dropped != uint64(len(sinSesion)) {
+		t.Errorf("dropped = %d, quería %d", dropped, len(sinSesion))
+	}
+
+	// Con sesión: la cuenta de Kick tiene ChatWebhook, no ChatReader, así que arrancar no
+	// le lanza un lector; aun así crea el canal y la escritora porque cuentasConChat la
+	// cuenta (Capabilities.ChatRead == true).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ag.Run(ctx)
+	ch, release := cb.Subscribe(256)
+	defer release()
+	sid := sesion(t, db)
+
+	msgs := []platforms.ChatMessage{
+		{Platform: platforms.Kick, AccountID: acct.ID, AuthorID: "u1", Author: "a1", Text: "hola1", At: time.Now()},
+		{Platform: platforms.Kick, AccountID: acct.ID, AuthorID: "u2", Author: "a2", Text: "hola2", At: time.Now()},
+		{Platform: platforms.Kick, AccountID: acct.ID, AuthorID: "u3", Author: "a3", Text: "hola3", At: time.Now()},
+	}
+	// El canal `in` se guarda bajo el mutex al arrancar la sesión, en una goroutine
+	// aparte: se reintenta hasta que arrancar termine, sin dormir un tiempo fijo.
+	// esperar puede volver a llamar a la condición después de que ya haya dado true (su
+	// chequeo final), así que la condición se vuelve idempotente con `entregado`: sin
+	// eso, Ingest metería los 3 mensajes dos veces.
+	entregado := false
+	esperar(t, func() bool {
+		if entregado {
+			return true
+		}
+		entregado = ag.Ingest(msgs) == len(msgs)
+		return entregado
+	}, "Ingest no entregó los mensajes a la sesión")
+
+	recibidos := 0
+	deadline := time.Now().Add(3 * time.Second)
+	for recibidos < len(msgs) && time.Now().Before(deadline) {
+		select {
+		case m := <-ch:
+			if m.SessionID != sid {
+				t.Errorf("SessionID = %d", m.SessionID)
+			}
+			recibidos++
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if recibidos != len(msgs) {
+		t.Fatalf("el bus repartió %d de %d", recibidos, len(msgs))
+	}
+	esperar(t, func() bool {
+		got, _ := db.ChatMessages(context.Background(), sid, 0, 10)
+		return len(got) == len(msgs)
+	}, "no se persistieron los mensajes de Ingest")
+
+	messages, _, _ := ag.Stats()
+	if messages[platforms.Kick] != uint64(len(msgs)) {
+		t.Errorf("Stats = %v, quería %d en kick", messages, len(msgs))
+	}
 }
