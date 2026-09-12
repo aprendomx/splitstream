@@ -28,6 +28,18 @@ disco, agregar chats, cuentas múltiples, y cualquier ingesta que no sea RTMP.
 > cualquier capacidad de plataforma para YouTube, Kick, Facebook, X y TikTok que no sea
 > retransmitir: solo Twitch tiene proveedor propio por ahora. Multi-tenant sigue fuera.
 
+> **Enmienda 2026-09-11 (v0.12):** el chat de lectura y el título en vivo se extienden a
+> YouTube (flujo de dispositivo, con credenciales de una app propia de Google Cloud) y a
+> Kick (redirect con PKCE al propio panel, con credenciales de una app propia de Kick).
+> YouTube gana además crear la emisión, vincular el *stream* y escribir en el destino la
+> URL y la clave que devuelve la API, con la emisión saliendo al aire y terminando sola
+> según la señal de OBS; Kick gana traer su clave de ingesta por API. El chat de YouTube
+> lleva presupuesto de cuota visible y se pausa al llegar a él; el de Kick llega por
+> webhook entrante firmado y solo está disponible con el panel accesible por URL pública
+> HTTPS. Facebook, X y TikTok siguen sin proveedor propio, documentados como «no» y con
+> la razón: Facebook por la verificación de negocio que exige su API, X y TikTok por no
+> tener una vía viable. Multi-tenant sigue fuera.
+
 ## 2. Decisiones tomadas
 
 | Decisión | Elegido | Por qué |
@@ -132,7 +144,12 @@ splitstream/
 │   ├── platforms/                 # interfaces por capacidad (título, categoría, chat)
 │   │   │                          # y el registro de proveedores (v0.11)
 │   │   ├── tokens/                 # gestor de tokens: refresco, validación al arrancar
-│   │   └── twitch/                 # proveedor Twitch: DCF, refresh, Helix, EventSub
+│   │   ├── twitch/                 # proveedor Twitch: DCF, refresh, Helix, EventSub
+│   │   ├── youtube/                # proveedor YouTube: device flow, Live Streaming API,
+│   │   │                           # chat por sondeo con presupuesto (v0.12)
+│   │   ├── kick/                   # proveedor Kick: redirect PKCE, API pública,
+│   │   │                           # webhook de chat firmado (v0.12)
+│   │   └── quota/                  # contador de cuota por cuenta y día (v0.12)
 │   ├── chat/                       # agregador de chat por sesión (v0.11)
 │   └── web/embed.go               # go:embed de web/dist/spa
 ├── web/                           # proyecto Quasar (Vite)
@@ -319,8 +336,18 @@ descartados, uptime de la conexión actual, número de reconexiones, último err
 - *(v0.11, migración 0008)* **`chat_messages`** — un mensaje leído del chat de una
   plataforma: `id`, `session_id` (cae con la sesión), `account_id`, `platform`,
   `author_id`, `author`, `text`, `color`, `badges`, `message_id`, `at`.
+- *(v0.12, migración 0009)* **`destination_broadcasts`** — la emisión (YouTube) o la
+  clave por API (Kick) vinculada a un destino: `destination_id` (clave primaria),
+  `account_id`, `platform`, `broadcast_ref` (id de la emisión; vacío en Kick),
+  `stream_ref` (id del `liveStream` de YouTube), `live_chat_id`, `key_from_api`,
+  `status` (`created|live|complete`), `created_at`, `updated_at`. `destinations` gana
+  `Destination.KeyFromAPI bool` por el mismo `LEFT JOIN` que ya trae `AccountID`.
+- *(v0.12, migración 0009)* **`quota_usage`** — cuota de la YouTube Data API gastada por
+  cuenta y día: `account_id`, `day` (fecha en hora del Pacífico, que es cuando Google
+  reinicia la cuota), `units`, clave primaria `(account_id, day)`. Se poda a los 7 días en
+  el job diario `cuota`.
 
-`SchemaVersion` es `8` desde la v0.11.
+`SchemaVersion` es `9` desde la v0.12.
 
 Migraciones versionadas en `internal/store/migrations/*.sql`, embebidas y aplicadas al
 arranque por un runner propio que lleva la versión en `PRAGMA user_version`. SQLite en
@@ -398,6 +425,20 @@ PATCH  /api/destinations/:id               → gana `account_id` para enlazar cu
 POST   /api/live/title                     → título/categoría en todos los que puedan (v0.11)
 GET    /api/chat/ws                        → chat en vivo por WebSocket             (v0.11)
 GET    /api/sessions/:id/chat              → historial de chat paginado por sesión  (v0.11)
+
+GET    /api/platforms/:p/callback          → PÚBLICA. Redirect OAuth (Kick); se       (v0.12)
+                                              protege con el `state` firmado
+POST   /api/platforms/kick/webhook         → PÚBLICA. Webhook de chat de Kick; se     (v0.12)
+                                              protege con la firma RSA de Kick
+POST   /api/destinations/from-account      → crea la emisión (YouTube) o lee la       (v0.12)
+                                              clave (Kick), crea el destino con URL y
+                                              clave reales y lo vincula
+POST   /api/destinations/:id/broadcast     → igual, sobre un destino existente        (v0.12)
+GET    /api/destinations/:id/broadcast     → estado de la emisión/clave del destino   (v0.12)
+POST   /api/destinations/:id/broadcast/start → `transition` a `live` (YouTube); 409   (v0.12)
+                                                en Kick
+POST   /api/destinations/:id/broadcast/end   → `transition` a `complete` (YouTube);   (v0.12)
+                                                409 en Kick
 ```
 
 Errores siempre con la forma `{"error": {"code": "...", "message": "..."}}`.
@@ -407,6 +448,12 @@ Errores siempre con la forma `{"error": {"code": "...", "message": "..."}}`.
 
 **Desde la v0.10:** `statusDTO` gana `panel {tls, public_url}` y
 `update {available, latest, url}`.
+
+**Desde la v0.12:** `capabilitiesDTO` pasa a siete campos (`title`, `category`, `chat`,
+`schedule`, `ingest_key`, `requires_own_app`, `requires_public_url`); `accountDTO` gana
+`own_app` y `quota_used_today` (YouTube); `GET /api/platforms` añade `public_url_ok` por
+plataforma. `POST /api/platforms/:p/auth` acepta `{client_id?, client_secret?, origin?}` —
+obligatorio cuando la plataforma exige app propia (YouTube, Kick), ignorado en Twitch.
 
 ## 10. Frontend
 
@@ -483,6 +530,17 @@ registre la app, así que conectar cuentas de Twitch necesita esta variable) y
 `SPLITSTREAM_RETENTION_MAX_CHAT` (`200000` por defecto; `0` desactiva el tope de filas en
 `chat_messages`). Eventos nuevos: `account_connected`, `account_disconnected`,
 `account_reauth_required`, `channel_updated`, `chat_connected`, `chat_disconnected`.
+
+**Desde la v0.12 (2026-09-11):** dos variables más — `SPLITSTREAM_YOUTUBE_CHAT_BUDGET`
+(`6000` por defecto; unidades de cuota diarias tras las que el chat de YouTube se pausa
+solo) y `SPLITSTREAM_YOUTUBE_QUOTA` (`10000` por defecto; cuota diaria del proyecto de
+Google Cloud, puramente informativa — el límite real lo fija Google). Sin variables
+propias para Kick: todo va por cuenta. Eventos nuevos: `broadcast_created`,
+`broadcast_started`, `broadcast_ended`, `destination_key_from_api` (info, por destino),
+`chat_paused_quota` (warn), `webhook_rejected` (warn, nunca con el cuerpo del webhook).
+Jobs de mantenimiento nuevos: `cuota` (poda `quota_usage` a los 7 días) y `webhooks_kick`
+(vuelve a suscribir el chat de las cuentas de Kick con URL pública que Kick dio de baja
+por fallos).
 
 README con instalación, configuración de OBS, y la nota de ancho de banda: **el subida
 necesario es bitrate × número de destinos**. Sin transcodificación no hay nada que hacer

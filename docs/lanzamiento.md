@@ -1,9 +1,11 @@
 # Entrada de lanzamiento
 
 Borrador listo para publicar y el trabajo de posicionamiento que lo acompaña.
-Escrito para la v0.11.0, la primera que conecta una cuenta (Twitch) para cambiar el
-título y leer el chat desde el panel; si cambian las plataformas soportadas o lo que la
-herramienta no hace, hay que revisarlo. Son las dos cosas que el texto promete.
+Escrito para la v0.12.0: a la conexión de cuenta de Twitch de la v0.11.0 —cambiar el
+título y leer el chat desde el panel— se suman YouTube y Kick, con las que además
+desaparece el copiar y pegar de la clave de stream; si cambian las plataformas soportadas
+o lo que la herramienta no hace, hay que revisarlo. Son las dos cosas que el texto
+promete.
 
 ---
 
@@ -88,6 +90,16 @@ una cuenta propia—, pero conectada esa cuenta puedes cambiar el título y la c
 canal, y leer el chat, sin salir del panel. Las demás plataformas se irán sumando a
 medida que tengan una integración así de directa.
 
+La v0.12 suma YouTube y Kick a esa misma cuenta propia, y con ellas se acaba el copiar y
+pegar de la clave de stream — el peor momento del arranque, con pestañas abiertas
+buscando dónde esconde cada plataforma su clave. Si Splitstream crea la emisión por API
+también recibe la clave de ingesta por API: en YouTube, un botón crea la emisión, la
+vincula y la escribe en el canal, y la emisión sale al aire y termina sola siguiendo la
+señal de OBS; en Kick, otro botón trae la clave y la URL directamente de tu cuenta. Las
+dos piden que registres tu propia app en la consola de Google o de Kick —lo explicamos
+paso a paso en la documentación—, porque ninguna de las dos plataformas admite compartir
+una app entre todos los usuarios de Splitstream.
+
 > Los tres fallos producían exactamente el mismo mensaje en el registro. Por eso el panel no
 > te enseña el error técnico: te dice «conecta y se corta» y te sugiere revisar si alcanzaste
 > el límite de emisiones de la plataforma.
@@ -96,7 +108,8 @@ medida que tengan una integración así de directa.
 
 No transcodifica, así que no puedes emitir a distinta calidad en cada plataforma. Graba en
 FLV, sin transcodificar, con segmentos y tope de disco. El chat es de lectura, por
-plataforma, y hoy solo con Twitch; escribir y moderar quedan fuera. Y no es multiusuario.
+plataforma, y hoy con Twitch, YouTube y Kick (este último solo con el panel accesible por
+URL pública); escribir y moderar quedan fuera. Y no es multiusuario.
 Si necesitas cualquiera de esas cosas, esto no es la herramienta — y preferimos decirlo
 antes de que la descargues.
 

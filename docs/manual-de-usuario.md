@@ -99,6 +99,45 @@ y eso está bien.
 > definas `SPLITSTREAM_TWITCH_CLIENT_ID` (ver el README). Sin ella, el bloque **Cuenta**
 > te lo dice en vez de mostrar el botón de conectar.
 
+### Conectar tu cuenta de YouTube
+
+Con la cuenta conectada, Splitstream puede crear la emisión y traer la clave de ingesta
+directamente de YouTube, cambiar el título en vivo y leer el chat (ver «Título en vivo y
+chat» para lo de la cuota). No hace falta para retransmitir: puedes seguir pegando la
+clave a mano.
+
+1. Edita el canal (o vincúlalo) y, en el bloque **Cuenta**, pulsa **Conectar cuenta de
+   YouTube**.
+2. YouTube exige una app propia de Google Cloud (la cuota de su API es por proyecto, no
+   por usuario), así que el asistente te pide `client_id` y `client_secret` con los pasos
+   de cada consola — la guía completa, con capturas, está en
+   [`docs/youtube-credenciales.md`](youtube-credenciales.md).
+3. Verás un código. Abre `google.com/device` (la dirección que enseña el panel) en
+   cualquier dispositivo, entra con tu cuenta de Google y escribe el código. El panel se
+   entera solo.
+4. Elige la cuenta en «Cuenta vinculada» y guarda.
+
+Mientras el proyecto de Google Cloud esté en «Testing», la autorización caduca a los 7
+días y hay que reconectar repitiendo los pasos 3 y 4; publicar la app lo evita.
+
+### Conectar tu cuenta de Kick
+
+Con la cuenta conectada, Splitstream puede traer la clave y la URL de ingesta
+directamente de Kick, cambiar el título y la categoría, y —si el panel es público por
+HTTPS— leer el chat por webhook.
+
+1. Edita el canal (o vincúlalo) y, en el bloque **Cuenta**, pulsa **Conectar cuenta de
+   Kick**.
+2. Kick tampoco admite una app compartida: el asistente pide `client_id` y
+   `client_secret` con los pasos exactos de su consola de desarrollador, incluida la
+   Redirect URL que hay que copiar tal cual — guía completa en
+   [`docs/kick-credenciales.md`](kick-credenciales.md).
+3. El panel abre Kick en una **pestaña nueva** para que autorices; vuelve a la pestaña del
+   panel cuando termines, se entera solo, sin que hagas nada más.
+4. Elige la cuenta en «Cuenta vinculada» y guarda.
+
+Desconectar borra los tokens de Splitstream, igual que con Twitch.
+
 ---
 
 ## 3. Empieza a emitir
@@ -245,8 +284,8 @@ solo un canal vinculado:
 | Plataforma | Qué puede hacer desde el panel |
 | --- | --- |
 | **Twitch** | Título, categoría, chat (de lectura) |
-| **YouTube** | Próximamente |
-| **Kick** | Próximamente |
+| **YouTube** | Título, crear la emisión y traer la clave por API, chat (de lectura, con presupuesto de cuota) |
+| **Kick** | Título, categoría, traer la clave por API, chat (de lectura, solo con URL pública) |
 | **Facebook** | Solo retransmitir — exige verificación de negocio para la API de canal |
 | **X** | Solo retransmitir — no tiene una API viable para esto |
 | **TikTok** | Solo retransmitir — no tiene una API viable para esto |
@@ -324,7 +363,35 @@ ffmpeg -i x.flv -c copy x.mp4
 
 ---
 
-## 10. Título en vivo y chat
+## 10. Crear la emisión desde el panel
+
+Con una cuenta de YouTube o Kick conectada, el diálogo del canal sustituye el campo de
+clave por un botón que trae la clave real desde la plataforma en vez de que la copies a
+mano.
+
+**YouTube — «Crear emisión y traer la clave».** Pon el título, la privacidad
+(`Público`, `No listado` o `Privado`; por defecto **no listado**) y, si quieres
+programarla, la hora — vacío es «emitir ahora». Splitstream crea la emisión y el *stream*
+en YouTube, y escribe la URL de ingesta y la clave reales en el canal.
+
+- YouTube **sale al aire sola** en cuanto le llega la señal de OBS, y **termina sola**
+  cuando la señal se va: no hace falta tocar nada más.
+- Los botones **Salir al aire** y **Terminar** de la tarjeta del canal están para casos en
+  los que quieras forzarlo (por ejemplo, cortar la emisión sin apagar OBS todavía). Cuando
+  hay una emisión creada, la tarjeta también lleva un enlace **ver en YouTube**.
+- La tarjeta muestra «clave por API» en el pie en vez de la clave enmascarada — **Probar**
+  dice que no hace falta, porque la clave vino de la propia plataforma.
+
+**Kick — «Traer la clave de Kick».** Un solo botón: lee la clave y la URL de ingesta del
+canal en Kick y las escribe en el destino. Kick no tiene concepto de «emisión» que crear
+ni programar, así que no hay más campos que rellenar.
+
+En ambos casos, **«pegar la clave a mano»** sigue disponible detrás de un enlace, por si
+prefieres seguir copiándola tú.
+
+---
+
+## 11. Título en vivo y chat
 
 **Título en vivo.** Con al menos un canal con cuenta conectada aparece un campo sobre la
 lista de canales. Escribe el título (y, para Twitch, busca la categoría) y pulsa **Aplicar
@@ -336,9 +403,23 @@ con los mensajes de las plataformas conectadas, con una pestaña por plataforma.
 lectura. El chat se guarda con la sesión y la retención lo poda igual que los eventos
 (`SPLITSTREAM_RETENTION_MAX_CHAT`, 200 000 mensajes por defecto).
 
+**Cuota y pausa en YouTube.** Leer el chat de YouTube cuesta cuota de la API (ver
+[`docs/youtube-credenciales.md`](youtube-credenciales.md)): la columna de chat enseña una
+barra con lo gastado hoy frente al presupuesto diario. Al llegar a
+`SPLITSTREAM_YOUTUBE_CHAT_BUDGET` (6 000 unidades por defecto), el chat de esa cuenta se
+pausa solo — antes de agotar la cuota del proyecto entero y dejarte sin poder crear una
+emisión o cambiar un título — y lo dice. Se reanuda al día siguiente, o si subes el
+presupuesto.
+
+**Kick y la URL pública.** El chat de Kick llega por un webhook que la propia plataforma
+llama, así que **solo funciona si el panel es accesible por HTTPS desde internet** — con
+el TLS integrado (ver «Ponerlo en internet» en el README) o con un proxy delante. En un
+equipo sin URL pública, el bloque **Cuenta** del canal de Kick lo dice: la retransmisión
+funciona igual, solo falta el chat.
+
 ---
 
-## 11. Avisos
+## 12. Avisos
 
 Splitstream puede avisarte cuando un canal falla o se corta la emisión, sin que tengas que
 tener el panel abierto: en **Ajustes → Avisos**, pulsa **Nuevo aviso** y dale una URL de
@@ -391,7 +472,7 @@ por su cuenta, y solo manda su propia versión.
 
 ---
 
-## 12. Respaldo
+## 13. Respaldo
 
 En **Ajustes → Respaldo**, el botón **Descargar respaldo** te da una copia de la base de
 datos completa: canales, claves cifradas y la contraseña del panel.
@@ -406,7 +487,7 @@ respaldo es sobrevivir a que pierdas el original.
 
 ---
 
-## 13. Preguntas frecuentes
+## 14. Preguntas frecuentes
 
 **¿Puedo cambiar la calidad por canal?**
 No. Splitstream reenvía el vídeo tal cual, sin tocarlo — por eso apenas consume CPU. Emitir
