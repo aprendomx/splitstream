@@ -47,6 +47,13 @@ jobs:
           GOMAXPROCS: "2"
         run: go test ./... -race -count=1
 
+      # third_party/go-rtmp es una copia de upstream con `replace` en go.mod (spec v1.0
+      # §3.4): sus propios tests corren aparte porque son del módulo yutopp/go-rtmp, no
+      # del nuestro. El test de integridad (que la copia es upstream + patches/, ni un
+      # byte más) ya corre arriba con `go test ./...` del módulo principal.
+      - name: la copia de go-rtmp compila y pasa sus tests
+        run: cd third_party/go-rtmp && go vet ./... && go test -race -count=1 ./...
+
       # El motor no debe conocer ni la librería RTMP ni la base de datos (spec §6).
       # Es una propiedad de la arquitectura, y sin esto se rompe sin que nadie se entere.
       - name: internal/relay sigue aislado
