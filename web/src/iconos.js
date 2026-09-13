@@ -39,7 +39,7 @@ export {
   mdiWebhook as iWebhook,
   mdiDownload as iDescargar,
   mdiHistory as iRegistro,
-  mdiHistory as iHistorial,
+  mdiClockOutline as iHistorial,
   mdiFilterVariant as iFiltro,
   mdiRecordRec as iGrabar,
   mdiFolderPlay as iGrabaciones,

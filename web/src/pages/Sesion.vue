@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import { iDescargar, iFiltro } from '@/iconos'
@@ -22,13 +22,27 @@ const panel = usePanel()
 const ficha = ref(null)
 const cargando = ref(true)
 
-onMounted(async () => {
+// La carga cuelga del id de la ruta y no de onMounted: al ir de /historial/5 a /historial/7
+// —o con el botón de atrás— Vue Router reutiliza esta misma instancia, y con onMounted la
+// ficha vieja se quedaba debajo de la URL nueva.
+//
+// `pedida` descarta la respuesta que llega tarde: si el id ya cambió mientras la petición
+// estaba en vuelo, esos datos son de otra sesión.
+let pedida = 0
+async function cargar() {
+  const id = idSesion.value
+  pedida = id
+  ficha.value = null
+  cargando.value = true
   // Los nombres de los destinos salen del estado del panel. Si esta página es la primera
   // que se abre —una recarga directa sobre /historial/7— todavía no hay estado que mirar.
   if (!panel.estado) panel.cargar()
   try {
-    ficha.value = await api.sesion(idSesion.value)
+    const datos = await api.sesion(id)
+    if (pedida !== id) return
+    ficha.value = datos
   } catch (e) {
+    if (pedida !== id) return
     if (e instanceof ApiError && e.status === 404) {
       $q.notify({ type: 'negative', message: t('sesion.no_existe') })
       router.replace({ name: 'historial' })
@@ -36,9 +50,10 @@ onMounted(async () => {
     }
     $q.notify({ type: 'negative', message: e.message })
   } finally {
-    cargando.value = false
+    if (pedida === id) cargando.value = false
   }
-})
+}
+watch(() => props.id, cargar, { immediate: true })
 
 // Un destino borrado después de la emisión sigue apareciendo en sus eventos: se enseña por
 // id en vez de dejar el hueco, que es peor pista que un número.
@@ -128,6 +143,7 @@ const nombreGrabacion = (g) => g.path.split('/').at(-1)
         <div class="text-caption text-grey-5 q-mb-md">
           {{ formatearFecha(ficha.started_at) }} · {{ duracion }} · {{ resolucion }}
           · {{ bitrateLegible(ficha.bitrate_bps) }}
+          · {{ t('sesion.chat_total', { n: ficha.chat_count, total: formatearNumero(ficha.chat_count) }) }}
         </div>
 
         <q-card flat bordered class="q-mb-md">
@@ -197,7 +213,7 @@ const nombreGrabacion = (g) => g.path.split('/').at(-1)
         </q-card>
 
         <div class="text-subtitle2 q-mb-sm">{{ t('sesion.chat_titulo') }}</div>
-        <Chat :sesion-id="idSesion" />
+        <Chat :key="idSesion" :sesion-id="idSesion" />
 
         <div class="text-subtitle2 q-mb-sm">{{ t('app.grabaciones') }}</div>
         <q-card v-if="!resumen.grabaciones.length" flat bordered class="q-pa-md text-center text-body2 text-grey-5">
