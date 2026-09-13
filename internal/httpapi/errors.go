@@ -39,8 +39,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// writeError escribe un error del spec §9. El `code` es el contrato y sale siempre igual;
+// el `message` es texto para personas y se traduce al idioma que pidió quien mira, que
+// viaja pegado al ResponseWriter desde el middleware conIdioma (spec v0.13 §2 y §4).
 func writeError(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, errorBody{Error: errorDetail{Code: code, Message: msg}})
+	writeJSON(w, status, errorBody{Error: errorDetail{Code: code, Message: traducir(idiomaDe(w), msg)}})
 }
 
 // writeStoreError traduce un error del store a una respuesta HTTP preguntando por su
