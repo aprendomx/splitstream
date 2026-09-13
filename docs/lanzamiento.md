@@ -1,11 +1,16 @@
 # Entrada de lanzamiento
 
 Borrador listo para publicar y el trabajo de posicionamiento que lo acompaña.
-Escrito para la v0.12.0: a la conexión de cuenta de Twitch de la v0.11.0 —cambiar el
-título y leer el chat desde el panel— se suman YouTube y Kick, con las que además
-desaparece el copiar y pegar de la clave de stream; si cambian las plataformas soportadas
-o lo que la herramienta no hace, hay que revisarlo. Son las dos cosas que el texto
-promete.
+Escrito para la v0.13.0, la primera bilingüe: el panel se conmuta entre español e inglés,
+el `README.md` principal pasa a inglés (el español queda en `README.es.md`) y hay una
+vista de historial para mirar una emisión ya terminada. Sigue en pie lo de la v0.12.0: a
+la conexión de cuenta de Twitch de la v0.11.0 —cambiar el título y leer el chat desde el
+panel— se sumaron YouTube y Kick, con las que además desapareció el copiar y pegar de la
+clave de stream. Si cambian las plataformas soportadas, los idiomas del panel o lo que la
+herramienta no hace, hay que revisarlo: son las cosas que el texto promete.
+
+El borrador está en español en «El borrador» y en inglés en «English draft», al final, con
+la misma estructura de encabezados.
 
 ---
 
@@ -100,6 +105,13 @@ dos piden que registres tu propia app en la consola de Google o de Kick —lo ex
 paso a paso en la documentación—, porque ninguna de las dos plataformas admite compartir
 una app entre todos los usuarios de Splitstream.
 
+La v0.13 quita la última barrera que quedaba para quien no habla español: el panel entero
+se conmuta a inglés desde un selector en la barra, y los mensajes de error de la API
+llegan en el idioma del navegador. El registro del servidor y el historial de eventos
+siguen en español a propósito — son evidencia escrita una vez, no interfaz. Y hay una
+página de historial: cada emisión terminada tiene su ficha con la línea de tiempo de lo
+que pasó, cuántas veces reconectó cada canal, el chat de esa sesión y sus grabaciones.
+
 > Los tres fallos producían exactamente el mismo mensaje en el registro. Por eso el panel no
 > te enseña el error técnico: te dice «conecta y se corta» y te sugiere revisar si alcanzaste
 > el límite de emisiones de la plataforma.
@@ -140,6 +152,11 @@ está escrito alrededor de esa intención — por eso nombra las plataformas, di
 | servidor RTMP propio | Técnica | Secundaria | Explicación de funcionamiento |
 | cómo emitir en tiktok y youtube al mismo tiempo | Cola larga | Cola larga | Preguntas frecuentes |
 | error alcanzaste el límite de streams activos facebook | Cola larga, alta conversión | Cola larga | Entrada aparte que enlace a esta |
+
+**En inglés**, las mismas intenciones se buscan como: `stream to youtube and twitch at the
+same time`, `free multistreaming`, `restream alternative`, `self hosted obs multistream`,
+`own rtmp server`, `how to stream to tiktok and youtube at once`,
+`facebook error you have reached the maximum number of active streams`.
 
 Esas dos últimas valen más de lo que su volumen sugiere. Quien busca un mensaje de error
 exacto tiene el problema *ahora mismo* y hay poquísimo contenido compitiendo. Una entrada
@@ -206,3 +223,124 @@ Un aviso honesto sobre expectativas: «multistreaming» es un término con compe
 detrás — Restream y Castr compran esos anuncios. Posicionar por ahí lleva meses. Las
 búsquedas de cola larga, los mensajes de error y las comparativas son donde un proyecto
 nuevo puede ganar en semanas.
+
+---
+
+## English draft
+
+### Stream to YouTube, Twitch and Facebook at once from your own computer
+
+Splitstream takes one stream from OBS and forwards it to all of your platforms at the same
+time. It is a single 4 MB file, it works without an account or a subscription, and the code
+is open under the MIT licence.
+
+If you stream live, you know the problem: your audience is spread across YouTube, Twitch,
+Facebook and TikTok, but your computer can only upload to one place at a time without
+choking. The usual answer is paid services that charge a monthly fee to act as
+middlemen — and that watch all of your video go through their servers.
+
+**Splitstream does that job on your own machine.** You point OBS at `localhost`, paste each
+platform's key once, and from then on you stream to all of them at once. No account, no
+fee, no video passing through anyone else.
+
+#### How it works
+
+It doesn't transcode: it forwards packets exactly as they arrive. That has two practical
+consequences. First, processor usage is negligible — you can keep it running on the same
+machine you play or edit on. Second, what limits you is your upload: streaming at 4 Mbps to
+three platforms means uploading 12.
+
+Every destination is independent. If Facebook goes down, YouTube and Twitch never notice.
+When the upload can't keep up, it drops video in whole groups on the destination that is
+falling behind, so that the picture doesn't break up, and the rest stay intact.
+
+#### Installation
+
+You download the file for your system, unzip it and double-click. It creates its own
+encryption key, opens the panel in your browser and asks you for a password. There is no
+installer, no dependencies and no environment variables to configure.
+
+```
+  ┌───────────────────────────────────────────────┐
+  │  Splitstream todavía no está configurado      │
+  └───────────────────────────────────────────────┘
+
+  Abre el panel y elige tu contraseña:
+
+      http://localhost:8080
+```
+
+(the command line still speaks Spanish; the web panel is bilingual.)
+
+Your channel keys are stored encrypted with AES-256-GCM and never appear in any log, not
+even masked. Viewing one leaves a trace in the history, always: if someone gets into your
+panel, you want to be able to know.
+
+#### What we learned by actually testing it
+
+Splitstream has over two hundred automated tests and all of them were passing. Then we
+connected it to real YouTube, Twitch and Facebook accounts, and four failures turned up
+that none of those tests had seen.
+
+The most instructive one: Twitch accepted the connection and cut it a second later. The log
+said `broken pipe`, which says nothing. Publishing with `ffmpeg` straight to Twitch with the
+same key, the stream held — so the problem was ours. It turned out to be the order of two
+RTMP protocol commands: we were sending them after creating the channel, and the client the
+platforms expect sends them before. YouTube forgave it; Twitch didn't.
+
+The most expensive one was with Facebook. On being rejected, we retried every second — and
+Facebook counts every attempt as an active stream. We used up the account's quota and it was
+left unable to stream. Retries are now spaced out, and sending a few kilobytes no longer
+counts as "the configuration is correct".
+
+v0.8 adds what would have saved us several of those surprises: `/metrics` in Prometheus
+format to watch it from outside, webhook alerts when something fails, and a "test
+destination" button that probes the configuration without streaming. And Facebook's own
+failure can no longer repeat itself: a destination that never manages to transmit is
+suspended after ten attempts in a row and says so, instead of retrying forever.
+
+v0.9 adds recording, with the same caution: if the disk can't keep up with the write rate,
+the rule is that the recording degrades, never the live stream, exactly as a destination
+with a short upload loses video without dragging the others down with it.
+
+v0.11 starts to open the door to something more ambitious: it changes the title on all of
+your platforms from a single field. For now it is limited to Twitch —the only one that
+connects an account of its own— but with that account connected you can change the
+channel's title and category, and read chat, without leaving the panel. The rest of the
+platforms will join as they get an integration that direct.
+
+v0.12 adds YouTube and Kick to that same account connection, and with them the copy-pasting
+of the stream key is over — the worst moment of getting started, with tabs open looking for
+where each platform hides its key. If Splitstream creates the broadcast through the API it
+also receives the ingest key through the API: on YouTube, one button creates the broadcast,
+binds it and writes it into the channel, and the broadcast goes live and ends by itself
+following the OBS signal; on Kick, another button brings the key and the URL straight from
+your account. Both ask you to register your own app in Google's or Kick's console —we
+explain it step by step in the documentation— because neither platform allows sharing one
+app across all Splitstream users.
+
+v0.13 removes the last barrier left for anyone who doesn't speak Spanish: the whole panel
+switches to English from a selector in the top bar, and the API's error messages arrive in
+the browser's language. The server log and the event history stay in Spanish on purpose —
+they are evidence written once, not interface. And there is a history page: every finished
+stream has its own record with a timeline of what happened, how many times each channel
+reconnected, that session's chat and its recordings.
+
+> The three failures produced exactly the same message in the log. That is why the panel
+> doesn't show you the technical error: it tells you "it connects and drops" and suggests
+> checking whether you hit the platform's limit on active streams.
+
+#### What it doesn't do
+
+It doesn't transcode, so you can't stream at a different quality to each platform. It
+records in FLV, without transcoding, with segments and a disk cap. Chat is read-only, per
+platform, and today with Twitch, YouTube and Kick (the last one only with the panel
+reachable at a public HTTPS URL); writing and moderating are out of scope. And it is not
+multi-user. If you need any of those things, this is not the tool — and we prefer to say so
+before you download it.
+
+#### Try it
+
+There are binaries for macOS (Intel and Apple Silicon), Linux (x86 and ARM, it works on a
+Raspberry Pi) and Windows, plus an 18 MB Docker image. The code is on GitHub under the MIT
+licence: use it, change it and deploy it wherever you want.

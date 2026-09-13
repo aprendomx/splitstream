@@ -1,18 +1,30 @@
 <script setup>
 import { iBorrar, iCerrar, iClaveApi, iError, iInfo, iOcultar, iVer } from '@/iconos'
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { PLATAFORMAS, porId, pideServidor } from '@/plataformas'
+import { PLATAFORMAS, porId, pideServidor, nombreDe } from '@/plataformas'
 import { api, ApiError } from '@/api'
 import { usePanel } from '@/stores/panel'
 import ConectarCuenta from '@/components/ConectarCuenta.vue'
+import { t } from '@/i18n'
 
 // Privacidad de la emisión al crearla por API (YouTube). Por defecto «no listado»: una
-// emisión creada desde el panel no se anuncia sola (spec §5).
-const OPCIONES_PRIVACIDAD = [
-  { label: 'Público', value: 'public' },
-  { label: 'No listado', value: 'unlisted' },
-  { label: 'Privado', value: 'private' },
-]
+// emisión creada desde el panel no se anuncia sola (spec §5). Computada, no un array
+// fijo, para que las etiquetas cambien con el idioma sin recargar el componente.
+const opcionesPrivacidad = computed(() => [
+  { label: t('dialogo_destino.privacidad_publico'), value: 'public' },
+  { label: t('dialogo_destino.privacidad_no_listado'), value: 'unlisted' },
+  { label: t('dialogo_destino.privacidad_privado'), value: 'private' },
+])
+
+// Igual que arriba: las etiquetas de las capacidades de cuenta, resueltas por t() en el
+// momento de pintar en vez de precalculadas.
+const CAP_CLAVE = {
+  title: 'dialogo_destino.cap_titulo',
+  category: 'dialogo_destino.cap_categoria',
+  chat: 'dialogo_destino.cap_chat',
+  ingest_key: 'dialogo_destino.cap_clave_api',
+  schedule: 'dialogo_destino.cap_programar',
+}
 
 const panel = usePanel()
 
@@ -46,6 +58,9 @@ const error = ref(null)
 
 const plat = computed(() => (plataforma.value ? porId(plataforma.value) : null))
 const necesitaServidor = computed(() => plataforma.value && pideServidor(plataforma.value))
+// «Otro (RTMP/RTMPS)» no tiene un menú real que describir, así que no lleva dondeKey: el
+// hint se calla en vez de enseñar «Lo encuentras en: undefined».
+const hintDonde = computed(() => (plat.value?.dondeKey ? t('dialogo_destino.hint_donde', { donde: t(plat.value.dondeKey) }) : ''))
 
 // Cuenta vinculada. Solo tiene sentido para plataformas con proveedor propio (Twitch, y
 // las que se sumen): custom, TikTok, X y Facebook no llevan bloque de cuenta.
@@ -96,7 +111,7 @@ async function crearConCuenta() {
     emit('guardado', null)
     cerrar()
   } catch (e) {
-    errorEmision.value = e instanceof ApiError ? e.message : 'No se pudo traer la clave'
+    errorEmision.value = e instanceof ApiError ? e.message : t('dialogo_destino.error_traer_clave')
   } finally {
     creandoEmision.value = false
   }
@@ -118,7 +133,7 @@ async function nuevaEmision() {
     emit('guardado', null)
     cerrar()
   } catch (e) {
-    errorEmision.value = e instanceof ApiError ? e.message : 'No se pudo releer la clave'
+    errorEmision.value = e instanceof ApiError ? e.message : t('dialogo_destino.error_releer_clave')
   } finally {
     creandoEmision.value = false
   }
@@ -210,7 +225,7 @@ const logoVisible = computed(() => {
 function elegir(p) {
   plataforma.value = p.id
   // El nombre se propone, no se impone: es lo que el usuario verá en la lista.
-  if (!nombre.value) nombre.value = p.nombre
+  if (!nombre.value) nombre.value = nombreDe(p)
   if (p.url) servidor.value = p.url
   cuentaId.value = null
   cargarCuentas()
@@ -261,21 +276,21 @@ async function guardar() {
       try {
         await api.editarDestino(id, { account_id: cuentaId.value })
       } catch (e) {
-        avisoLogo = e instanceof ApiError ? `no se pudo vincular la cuenta: ${e.message}` : 'no se pudo vincular la cuenta'
+        avisoLogo = e instanceof ApiError ? `${t('dialogo_destino.error_vincular_cuenta')}: ${e.message}` : t('dialogo_destino.error_vincular_cuenta')
       }
     }
     try {
       if (logoArchivo.value) await api.subirLogo(id, logoArchivo.value)
       else if (logoQuitado.value) await api.quitarLogo(id)
     } catch (e) {
-      const motivo = e instanceof ApiError ? e.message : 'No se pudo guardar el logo'
+      const motivo = e instanceof ApiError ? e.message : t('dialogo_destino.error_guardar_logo')
       avisoLogo = avisoLogo ? `${avisoLogo}; ${motivo}` : motivo
     }
 
     emit('guardado', avisoLogo)
     cerrar()
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'No se pudo guardar'
+    error.value = e instanceof ApiError ? e.message : t('comun.no_se_pudo_guardar')
   } finally {
     guardando.value = false
   }
@@ -293,17 +308,17 @@ async function guardar() {
     <q-card class="dialogo-destino column no-wrap">
       <q-card-section class="row items-center q-pb-sm">
         <div class="text-h6">
-          {{ editando ? 'Editar destino' : 'Vincular un canal' }}
+          {{ editando ? t('dialogo_destino.editar_destino') : t('dialogo_destino.vincular_canal') }}
         </div>
         <q-space />
-        <q-btn flat round dense :icon="iCerrar" aria-label="Cerrar" @click="cerrar" />
+        <q-btn flat round dense :icon="iCerrar" :aria-label="t('comun.cerrar')" @click="cerrar" />
       </q-card-section>
 
       <!-- Paso 1: elegir plataforma. Precargar la URL evita la clase entera de error
            "URL mal escrita", que el usuario no debería llegar a ver nunca. -->
       <q-card-section v-if="paso === 1" class="col scroll q-pt-none">
         <p class="text-body2 text-grey-5 q-mb-md">
-          Elige dónde quieres retransmitir. Cargaremos su servidor por ti.
+          {{ t('dialogo_destino.elige_plataforma') }}
         </p>
         <div class="rejilla-plataformas">
           <button
@@ -314,7 +329,7 @@ async function guardar() {
             @click="elegir(p)"
           >
             <q-icon :name="p.icono" size="28px" :style="{ color: p.color }" />
-            <span class="nombre">{{ p.nombre }}</span>
+            <span class="nombre">{{ nombreDe(p) }}</span>
           </button>
         </div>
       </q-card-section>
@@ -323,7 +338,7 @@ async function guardar() {
       <q-card-section v-else class="col scroll q-pt-none q-gutter-y-md">
         <div v-if="plat" class="row items-center q-gutter-sm cabecera-plataforma">
           <q-icon :name="plat.icono" size="24px" :style="{ color: plat.color }" />
-          <div class="text-subtitle1">{{ plat.nombre }}</div>
+          <div class="text-subtitle1">{{ nombreDe(plat) }}</div>
           <q-space />
           <q-btn
             v-if="!editando"
@@ -331,20 +346,20 @@ async function guardar() {
             dense
             no-caps
             size="sm"
-            label="Cambiar"
+            :label="t('dialogo_destino.cambiar')"
             @click="paso = 1"
           />
         </div>
 
-        <q-banner v-if="plat?.nota" dense class="bg-grey-9 text-grey-3 rounded-borders">
+        <q-banner v-if="plat?.notaKey" dense class="bg-grey-9 text-grey-3 rounded-borders">
           <template #avatar><q-icon :name="iInfo" color="info" /></template>
-          {{ plat.nota }}
+          {{ t(plat.notaKey) }}
         </q-banner>
 
         <q-input
           v-model="nombre"
-          label="Nombre"
-          hint="Solo para que lo reconozcas en la lista"
+          :label="t('comun.nombre')"
+          :hint="t('dialogo_destino.hint_nombre')"
           outlined
           dense
           maxlength="60"
@@ -352,15 +367,15 @@ async function guardar() {
 
         <div class="row items-center q-gutter-md bloque-logo">
           <div class="previa-logo">
-            <img v-if="logoVisible" :src="logoVisible" alt="Vista previa del logo" />
+            <img v-if="logoVisible" :src="logoVisible" :alt="t('dialogo_destino.alt_logo')" />
             <q-icon v-else :name="plat?.icono" size="24px" :style="{ color: plat?.color }" />
           </div>
           <div class="col column q-gutter-xs">
             <q-file
               :model-value="logoArchivo"
               @update:model-value="elegirLogo"
-              label="Logo"
-              hint="PNG o JPEG. Opcional."
+              :label="t('dialogo_destino.logo_label')"
+              :hint="t('dialogo_destino.hint_logo')"
               accept="image/png,image/jpeg"
               outlined
               dense
@@ -374,25 +389,25 @@ async function guardar() {
             dense
             round
             :icon="iBorrar"
-            aria-label="Quitar el logo"
+            :aria-label="t('dialogo_destino.quitar_logo')"
             @click="quitarLogo"
           />
         </div>
 
         <div v-if="plataformaConProveedor" class="bloque-cuenta q-gutter-y-sm">
-          <div class="text-caption text-grey-5">Cuenta</div>
+          <div class="text-caption text-grey-5">{{ t('dialogo_destino.cuenta_caption') }}</div>
           <div class="row items-center q-gutter-xs">
             <q-chip v-for="c in ['title','category','chat','ingest_key','schedule']" :key="c" dense square size="sm"
                     :color="capacidades?.[c] ? 'primary' : 'grey-8'" :text-color="capacidades?.[c] ? 'white' : 'grey-5'">
-              {{ { title: 'Título', category: 'Categoría', chat: 'Chat', ingest_key: 'Clave por API', schedule: 'Programar' }[c] }}
+              {{ t(CAP_CLAVE[c]) }}
             </q-chip>
           </div>
-          <q-select v-if="cuentas.length" v-model="cuentaId" :options="[{label: 'Sin cuenta', value: null}, ...cuentas.map(c => ({label: c.display_name + (c.status === 'reauth' ? ' (reconectar)' : ''), value: c.id}))]"
-                    emit-value map-options outlined dense label="Cuenta vinculada" />
-          <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="plat?.nombre"
+          <q-select v-if="cuentas.length" v-model="cuentaId" :options="[{label: t('dialogo_destino.sin_cuenta_opcion'), value: null}, ...cuentas.map(c => ({label: c.display_name + (c.status === 'reauth' ? t('dialogo_destino.reconectar_sufijo') : ''), value: c.id}))]"
+                    emit-value map-options outlined dense :label="t('dialogo_destino.cuenta_vinculada_label')" />
+          <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="nombreDe(plat)"
                           :requiere-app="Boolean(capacidades?.requires_own_app)" @conectada="trasConectar" />
           <q-banner v-else dense class="bg-grey-9 text-grey-3 rounded-borders">
-            Conectar cuentas de {{ plat?.nombre }} necesita un client_id: pon <code>SPLITSTREAM_TWITCH_CLIENT_ID</code> o espera a una versión con la app incluida.
+            {{ t('dialogo_destino.banner_necesita_client_id_pre', { plataforma: nombreDe(plat) }) }} <code>SPLITSTREAM_TWITCH_CLIENT_ID</code> {{ t('dialogo_destino.banner_necesita_client_id_post') }}
           </q-banner>
         </div>
 
@@ -400,13 +415,13 @@ async function guardar() {
              mano. Sustituye por completo a servidor + clave mientras no se pida lo
              contrario. -->
         <div v-if="mostrarBloqueAPI" class="bloque-clave-api q-gutter-y-sm">
-          <div class="text-caption text-grey-5">Clave por API</div>
+          <div class="text-caption text-grey-5">{{ t('dialogo_destino.clave_api_caption') }}</div>
           <template v-if="plataforma === 'youtube'">
-            <q-input v-model="tituloEmision" label="Título de la emisión" :placeholder="nombre" outlined dense maxlength="140" />
-            <q-select v-model="privacidadEmision" :options="OPCIONES_PRIVACIDAD" emit-value map-options outlined dense label="Privacidad" />
-            <q-input v-model="horaEmision" type="datetime-local" outlined dense label="Hora (opcional)" hint="Vacío: emitir ahora" />
+            <q-input v-model="tituloEmision" :label="t('dialogo_destino.titulo_emision_label')" :placeholder="nombre" outlined dense maxlength="140" />
+            <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined dense :label="t('dialogo_destino.privacidad_label')" />
+            <q-input v-model="horaEmision" type="datetime-local" outlined dense :label="t('dialogo_destino.hora_label')" :hint="t('dialogo_destino.hora_hint')" />
           </template>
-          <div v-if="!cuentaId" class="text-caption text-grey-6">Elige o conecta una cuenta arriba para traer la clave.</div>
+          <div v-if="!cuentaId" class="text-caption text-grey-6">{{ t('dialogo_destino.elige_cuenta_arriba') }}</div>
           <q-btn
             unelevated
             no-caps
@@ -414,10 +429,10 @@ async function guardar() {
             :icon="iClaveApi"
             :loading="creandoEmision"
             :disable="!cuentaId"
-            :label="plataforma === 'youtube' ? 'Crear emisión y traer la clave' : 'Traer la clave de Kick'"
+            :label="plataforma === 'youtube' ? t('dialogo_destino.crear_emision_youtube') : t('dialogo_destino.traer_clave_kick')"
             @click="crearConCuenta"
           />
-          <div><a href="#" class="text-caption" @click.prevent="claveManual = true">pegar la clave a mano</a></div>
+          <div><a href="#" class="text-caption" @click.prevent="claveManual = true">{{ t('dialogo_destino.pegar_clave_mano') }}</a></div>
           <q-banner v-if="errorEmision" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">{{ errorEmision }}</q-banner>
         </div>
 
@@ -425,9 +440,9 @@ async function guardar() {
           <q-input
             v-if="necesitaServidor"
             v-model="servidor"
-            label="Servidor"
+            :label="t('dialogo_destino.servidor_label')"
             placeholder="rtmp://…"
-            :hint="plat ? `Lo encuentras en: ${plat.donde}` : ''"
+            :hint="hintDonde"
             outlined
             dense
             inputmode="url"
@@ -436,20 +451,18 @@ async function guardar() {
             spellcheck="false"
           />
           <div v-else class="servidor-fijo">
-            <div class="etiqueta">Servidor</div>
+            <div class="etiqueta">{{ t('dialogo_destino.servidor_label') }}</div>
             <div class="valor">{{ servidor }}</div>
           </div>
 
           <q-input
             v-model="clave"
-            :label="editando ? 'Clave nueva' : 'Clave de retransmisión'"
+            :label="editando ? t('dialogo_destino.clave_nueva_label') : t('dialogo_destino.clave_retransmision_label')"
             :type="verClave ? 'text' : 'password'"
             :hint="
               editando
-                ? `Déjala vacía para conservar la actual (${destino.key_mask})`
-                : plat
-                  ? `La encuentras en: ${plat.donde}`
-                  : ''
+                ? t('dialogo_destino.hint_clave_actual', { mascara: destino.key_mask })
+                : hintDonde
             "
             outlined
             dense
@@ -464,7 +477,7 @@ async function guardar() {
                 round
                 dense
                 :icon="verClave ? iOcultar : iVer"
-                :aria-label="verClave ? 'Ocultar la clave' : 'Mostrar la clave'"
+                :aria-label="verClave ? t('dialogo_destino.ocultar_clave') : t('dialogo_destino.mostrar_clave')"
                 @click="verClave = !verClave"
               />
             </template>
@@ -473,16 +486,16 @@ async function guardar() {
           <!-- Alta: si esta plataforma da clave por API, un enlace vuelve al bloque de
                arriba en vez de pegarla a mano. -->
           <div v-if="usaClaveAPI && !editando">
-            <a href="#" class="text-caption" @click.prevent="claveManual = false">traer la clave por API en su lugar</a>
+            <a href="#" class="text-caption" @click.prevent="claveManual = false">{{ t('dialogo_destino.traer_clave_api') }}</a>
           </div>
 
           <!-- Edición: sobre un destino con cuenta y clave por API, releer la clave o abrir
                una emisión nueva sin tocar el resto del formulario. -->
           <div v-if="usaClaveAPI && editando" class="bloque-clave-api q-gutter-y-sm">
             <template v-if="plataforma === 'youtube'">
-              <q-input v-model="tituloEmision" label="Título de la nueva emisión" :placeholder="nombre" outlined dense maxlength="140" />
-              <q-select v-model="privacidadEmision" :options="OPCIONES_PRIVACIDAD" emit-value map-options outlined dense label="Privacidad" />
-              <q-input v-model="horaEmision" type="datetime-local" outlined dense label="Hora (opcional)" hint="Vacío: emitir ahora" />
+              <q-input v-model="tituloEmision" :label="t('dialogo_destino.titulo_nueva_emision_label')" :placeholder="nombre" outlined dense maxlength="140" />
+              <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined dense :label="t('dialogo_destino.privacidad_label')" />
+              <q-input v-model="horaEmision" type="datetime-local" outlined dense :label="t('dialogo_destino.hora_label')" :hint="t('dialogo_destino.hora_hint')" />
             </template>
             <q-btn
               flat
@@ -490,14 +503,14 @@ async function guardar() {
               color="primary"
               :icon="iClaveApi"
               :loading="creandoEmision"
-              label="Nueva emisión / releer la clave"
+              :label="t('dialogo_destino.nueva_emision_releer')"
               @click="nuevaEmision"
             />
             <q-banner v-if="errorEmision" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">{{ errorEmision }}</q-banner>
           </div>
         </template>
 
-        <q-toggle v-model="habilitado" label="Retransmitir a este destino" />
+        <q-toggle v-model="habilitado" :label="t('dialogo_destino.retransmitir_toggle')" />
 
         <!-- El error del backend, junto al formulario y anunciado a lectores de pantalla. -->
         <q-banner v-if="error" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">
@@ -507,7 +520,7 @@ async function guardar() {
       </q-card-section>
 
       <q-card-actions v-if="paso === 2" align="right" class="q-pa-md">
-        <q-btn flat no-caps label="Cancelar" @click="cerrar" />
+        <q-btn flat no-caps :label="t('comun.cancelar')" @click="cerrar" />
         <!-- Con la clave por API, la petición sale del botón «Crear emisión…» de arriba:
              este cierra el diálogo por su cuenta, así que aquí no hace falta un «Vincular»
              que intentaría guardar sin clave. -->
@@ -517,7 +530,7 @@ async function guardar() {
           no-caps
           color="primary"
           :loading="guardando"
-          :label="editando ? 'Guardar' : 'Vincular'"
+          :label="editando ? t('comun.guardar') : t('dialogo_destino.vincular')"
           @click="guardar"
         />
       </q-card-actions>

@@ -288,7 +288,9 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler envuelve el mux con conIdioma: así el idioma se negocia una vez por petición y
+// writeError lo encuentra sin que ninguno de sus ~90 sitios de llamada cambie.
+func (s *Server) Handler() http.Handler { return conIdioma(s.mux) }
 
 // routes registra las rutas del spec §9. Los patrones con método son de Go 1.22, así que
 // no hace falta router externo.
@@ -353,6 +355,7 @@ func (s *Server) routes() {
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
 	protegida("GET /api/sessions", s.handleSessions)
+	protegida("GET /api/sessions/{id}", s.handleSessionDetail)
 	protegida("POST /api/backup", s.handleBackup)
 	protegida("GET /api/recording/settings", s.handleGetRecordingSettings)
 	protegida("PATCH /api/recording/settings", s.handlePatchRecordingSettings)

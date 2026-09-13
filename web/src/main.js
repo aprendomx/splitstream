@@ -3,6 +3,8 @@ import { createPinia } from 'pinia'
 import { Quasar, Dark, Notify, Dialog } from 'quasar'
 // Sin importar el CSS de mdi-v7: los iconos entran uno a uno como SVG (ver src/iconos.js).
 import 'quasar/src/css/index.sass'
+// Aquí y no al final: los imports de ES se izan, así que el orden real es este.
+import '@/i18n'
 
 import App from './App.vue'
 import { router } from './router'
@@ -19,5 +21,7 @@ app.use(Quasar, {
     notify: { position: 'top', timeout: 4000 },
   },
 })
+// El watch inmediato de i18n aplica el paquete de idioma de Quasar y el lang del documento
+// al arrancar: no hace falta pasar `lang` en la config de arriba.
 Dark.set(true)
 app.mount('#app')

@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { iCerrar, iError } from '@/iconos'
 import { api, ApiError } from '@/api'
+import { t } from '@/i18n'
 
 const props = defineProps({ modelValue: Boolean, webhook: { type: Object, default: null } })
 const emit = defineEmits(['update:modelValue', 'guardado'])
@@ -16,16 +17,18 @@ const habilitado = ref(true)
 const guardando = ref(false)
 const error = ref(null)
 
-const FORMATOS = [
+// Computadas, no arrays fijos: «Discord»/«Slack» son nombres propios y no se traducen,
+// pero la etiqueta de JSON sí, y debe reaccionar al cambio de idioma.
+const formatos = computed(() => [
   { value: 'discord', label: 'Discord' },
   { value: 'slack', label: 'Slack' },
-  { value: 'json', label: 'JSON genérico (con firma)' },
-]
-const NIVELES = [
-  { value: 'error', label: 'Solo errores' },
-  { value: 'warn', label: 'Avisos y errores' },
-  { value: 'info', label: 'Todo' },
-]
+  { value: 'json', label: t('dialogo_webhook.formato_json') },
+])
+const niveles = computed(() => [
+  { value: 'error', label: t('dialogo_webhook.nivel_error') },
+  { value: 'warn', label: t('dialogo_webhook.nivel_warn') },
+  { value: 'info', label: t('dialogo_webhook.nivel_info') },
+])
 
 watch(() => props.modelValue, (abierto) => {
   if (!abierto) return
@@ -66,7 +69,7 @@ async function guardar() {
     emit('guardado')
     cerrar()
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'No se pudo guardar'
+    error.value = e instanceof ApiError ? e.message : t('comun.no_se_pudo_guardar')
   } finally {
     guardando.value = false
   }
@@ -78,29 +81,29 @@ async function guardar() {
             :maximized="$q.screen.lt.sm">
     <q-card class="dialogo-webhook column no-wrap">
       <q-card-section class="row items-center q-pb-sm">
-        <div class="text-h6">{{ editando ? 'Editar aviso' : 'Nuevo aviso' }}</div>
+        <div class="text-h6">{{ editando ? t('dialogo_webhook.editar_aviso') : t('dialogo_webhook.nuevo_aviso') }}</div>
         <q-space />
-        <q-btn flat round dense :icon="iCerrar" aria-label="Cerrar" @click="cerrar" />
+        <q-btn flat round dense :icon="iCerrar" :aria-label="t('comun.cerrar')" @click="cerrar" />
       </q-card-section>
       <q-card-section class="col scroll q-pt-none q-gutter-y-md">
-        <q-input v-model="nombre" label="Nombre" outlined dense maxlength="60" />
-        <q-select v-model="formato" :options="FORMATOS" emit-value map-options label="Formato" outlined dense />
-        <q-input v-model="url" label="URL" placeholder="https://…" outlined dense inputmode="url"
+        <q-input v-model="nombre" :label="t('comun.nombre')" outlined dense maxlength="60" />
+        <q-select v-model="formato" :options="formatos" emit-value map-options :label="t('dialogo_webhook.formato_label')" outlined dense />
+        <q-input v-model="url" :label="t('dialogo_webhook.url_label')" placeholder="https://…" outlined dense inputmode="url"
                  autocapitalize="off" autocorrect="off" spellcheck="false"
-                 hint="Discord y Slack te dan la URL al crear el webhook en el canal. Solo https." />
-        <q-input v-if="formato === 'json'" v-model="secreto" label="Secreto para firmar" outlined dense
+                 :hint="t('dialogo_webhook.hint_url')" />
+        <q-input v-if="formato === 'json'" v-model="secreto" :label="t('dialogo_webhook.secreto_label')" outlined dense
                  type="password" autocomplete="off"
-                 :hint="editando && webhook?.has_secret ? 'Déjalo vacío para conservar el actual' : 'Opcional. Se manda como HMAC-SHA256 en X-Splitstream-Signature'" />
-        <q-select v-model="nivel" :options="NIVELES" emit-value map-options label="Avisar de" outlined dense />
-        <q-toggle v-model="habilitado" label="Activo" />
+                 :hint="editando && webhook?.has_secret ? t('dialogo_webhook.hint_secreto_editar') : t('dialogo_webhook.hint_secreto_nuevo')" />
+        <q-select v-model="nivel" :options="niveles" emit-value map-options :label="t('dialogo_webhook.avisar_de_label')" outlined dense />
+        <q-toggle v-model="habilitado" :label="t('dialogo_webhook.activo')" />
         <q-banner v-if="error" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">
           <template #avatar><q-icon :name="iError" color="negative" /></template>
           {{ error }}
         </q-banner>
       </q-card-section>
       <q-card-actions align="right" class="q-pa-md">
-        <q-btn flat no-caps label="Cancelar" @click="cerrar" />
-        <q-btn unelevated no-caps color="primary" :loading="guardando" :label="editando ? 'Guardar' : 'Crear'" @click="guardar" />
+        <q-btn flat no-caps :label="t('comun.cancelar')" @click="cerrar" />
+        <q-btn unelevated no-caps color="primary" :loading="guardando" :label="editando ? t('comun.guardar') : t('dialogo_webhook.crear')" @click="guardar" />
       </q-card-actions>
     </q-card>
   </q-dialog>

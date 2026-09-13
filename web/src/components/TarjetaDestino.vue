@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import { porId } from '@/plataformas'
 import { api } from '@/api'
 import { diagnosticar, TONOS, bitrateLegible, bytesLegibles } from '@/diagnostico'
+import { t, formatearNumero } from '@/i18n'
 
 const props = defineProps({
   destino: { type: Object, required: true },
@@ -29,12 +30,12 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
         :name="iArrastrar"
         size="20px"
         class="arrastre text-grey-7"
-        :aria-label="`Reordenar ${destino.name}`"
+        :aria-label="t('destino.reordenar', { nombre: destino.name })"
       />
       <!-- Con logo, la imagen identifica el canal y la plataforma baja a sello: se gana
            identidad sin perder de vista a qué servicio va. Sin logo, queda el icono. -->
       <div v-if="logo" class="avatar q-mr-sm">
-        <img :src="logo" :alt="`Logo de ${destino.name}`" />
+        <img :src="logo" :alt="t('destino.alt_logo', { nombre: destino.name })" />
         <q-icon :name="plat.icono" size="12px" :style="{ color: plat.color }" class="sello" />
       </div>
       <q-icon v-else :name="plat.icono" size="22px" :style="{ color: plat.color }" class="q-mr-sm" />
@@ -43,33 +44,33 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
         :model-value="destino.enabled"
         dense
         @update:model-value="$emit('alternar')"
-        :aria-label="`${destino.enabled ? 'Apagar' : 'Encender'} ${destino.name}`"
+        :aria-label="`${destino.enabled ? t('destino.apagar') : t('destino.encender')} ${destino.name}`"
       />
-      <q-btn flat round dense :icon="iMenu" size="sm" aria-label="Más acciones">
+      <q-btn flat round dense :icon="iMenu" size="sm" :aria-label="t('destino.mas_acciones')">
         <q-menu anchor="bottom right" self="top right">
           <q-list style="min-width: 190px">
             <q-item clickable v-close-popup @click="$emit('editar')">
               <q-item-section avatar><q-icon :name="iEditar" /></q-item-section>
-              <q-item-section>Editar</q-item-section>
+              <q-item-section>{{ t('comun.editar') }}</q-item-section>
             </q-item>
             <q-item clickable v-close-popup @click="$emit('revelar')">
               <q-item-section avatar><q-icon :name="iClave" /></q-item-section>
               <q-item-section>
-                Ver la clave
-                <q-item-label caption>Queda registrado</q-item-label>
+                {{ t('destino.ver_clave') }}
+                <q-item-label caption>{{ t('destino.queda_registrado') }}</q-item-label>
               </q-item-section>
             </q-item>
             <q-item clickable v-close-popup :disable="destino.key_from_api" @click="$emit('probar')">
               <q-item-section avatar><q-icon :name="iProbar" /></q-item-section>
               <q-item-section>
-                Probar
-                <q-item-label caption>{{ destino.key_from_api ? 'no hace falta' : 'Conecta sin emitir' }}</q-item-label>
+                {{ t('destino.probar') }}
+                <q-item-label caption>{{ destino.key_from_api ? t('destino.no_hace_falta') : t('destino.conecta_sin_emitir') }}</q-item-label>
               </q-item-section>
             </q-item>
             <q-separator />
             <q-item clickable v-close-popup class="text-negative" @click="$emit('borrar')">
               <q-item-section avatar><q-icon :name="iBorrar" /></q-item-section>
-              <q-item-section>Eliminar</q-item-section>
+              <q-item-section>{{ t('comun.eliminar') }}</q-item-section>
             </q-item>
           </q-list>
         </q-menu>
@@ -80,7 +81,7 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
     <div class="row items-center q-gutter-xs q-px-md">
       <q-chip dense square :color="tono.color" text-color="white" :icon="tono.icono" size="sm"
               class="q-ml-none">
-        {{ diag.titulo }}
+        {{ t(diag.tituloKey) }}
       </q-chip>
       <span v-if="conCifras" class="bitrate">{{ bitrateLegible(m.bitrate_bps) }}</span>
     </div>
@@ -89,20 +90,20 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
       <q-chip v-if="destino.account" dense square size="sm" :icon="iCuenta"
               :color="destino.account.status === 'reauth' ? 'warning' : 'grey-8'" text-color="white">
         {{ destino.account.display_name }}
-        <q-tooltip>{{ destino.account.status === 'reauth' ? 'La cuenta necesita reconectarse (Editar → Cuenta)' : 'Cuenta conectada' }}</q-tooltip>
+        <q-tooltip>{{ destino.account.status === 'reauth' ? t('destino.cuenta_reconectar') : t('destino.cuenta_conectada') }}</q-tooltip>
       </q-chip>
-      <q-chip v-else-if="conProveedor" dense square size="sm" color="grey-9" text-color="grey-5">sin cuenta</q-chip>
+      <q-chip v-else-if="conProveedor" dense square size="sm" color="grey-9" text-color="grey-5">{{ t('destino.sin_cuenta') }}</q-chip>
     </div>
 
-    <div v-if="diag.detalle" class="detalle q-px-md q-pt-xs" :class="`text-${tono.color}`">
-      {{ diag.detalle }}
+    <div v-if="diag.detalleKey" class="detalle q-px-md q-pt-xs" :class="`text-${tono.color}`">
+      {{ t(diag.detalleKey, diag.params) }}
     </div>
-    <div v-if="diag.consejo" class="consejo q-px-md q-pt-xs">
-      <q-icon :name="iConsejo" size="14px" class="q-mr-xs" />{{ diag.consejo }}
+    <div v-if="diag.consejoKey" class="consejo q-px-md q-pt-xs">
+      <q-icon :name="iConsejo" size="14px" class="q-mr-xs" />{{ t(diag.consejoKey, diag.params) }}
     </div>
     <div v-if="suspendido" class="q-px-md q-pt-sm">
       <q-btn dense no-caps unelevated color="primary" size="sm" :icon="iRotar"
-             label="Reintentar" @click="$emit('reintentar')" />
+             :label="t('destino.reintentar')" @click="$emit('reintentar')" />
     </div>
 
     <!-- El detalle técnico va al final y en gris: importa cuando algo falla, no antes. -->
@@ -111,17 +112,17 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
       <div class="mono ellipsis" :title="destino.rtmp_url">{{ destino.rtmp_url }}</div>
       <div class="row items-center justify-between q-mt-xs">
         <span v-if="destino.key_from_api" class="mono">
-          clave por API
-          <q-tooltip>La trajo la plataforma; no hace falta probarla.</q-tooltip>
+          {{ t('destino.clave_api') }}
+          <q-tooltip>{{ t('destino.clave_api_tooltip') }}</q-tooltip>
         </span>
-        <span v-else class="mono">clave {{ destino.key_mask }}</span>
+        <span v-else class="mono">{{ t('destino.clave_mask', { mascara: destino.key_mask }) }}</span>
         <span v-if="conCifras" class="cifras">
           {{ bytesLegibles(m.bytes_sent) }}
           <template v-if="m.dropped_frames">
-            · {{ m.dropped_frames.toLocaleString('es') }} descartes
+            · {{ t('destino.descartes', { n: formatearNumero(m.dropped_frames) }) }}
           </template>
           <template v-if="m.reconnections">
-            · {{ m.reconnections }} reconexiones
+            · {{ t('destino.reconexiones', { n: formatearNumero(m.reconnections) }) }}
           </template>
         </span>
       </div>
@@ -129,12 +130,12 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
         <q-btn
           v-if="destino.broadcast.status !== 'live'"
           dense no-caps unelevated color="primary" size="sm"
-          :icon="iAlAire" label="Salir al aire" @click="$emit('alAire')"
+          :icon="iAlAire" :label="t('destino.salir_al_aire')" @click="$emit('alAire')"
         />
         <q-btn
           v-else
           dense no-caps unelevated color="negative" size="sm"
-          :icon="iTerminar" label="Terminar" @click="$emit('terminar')"
+          :icon="iTerminar" :label="t('destino.terminar')" @click="$emit('terminar')"
         />
         <a
           v-if="destino.broadcast.watch_url"
@@ -143,7 +144,7 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
           rel="noopener noreferrer"
           class="enlace-ver text-caption row items-center no-wrap"
         >
-          <q-icon :name="iAbrir" size="12px" class="q-mr-xs" />ver en YouTube
+          <q-icon :name="iAbrir" size="12px" class="q-mr-xs" />{{ t('destino.ver_en_youtube') }}
         </a>
       </div>
     </div>

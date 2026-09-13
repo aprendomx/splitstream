@@ -1,5 +1,6 @@
 <script setup>
 import { onBeforeUnmount, ref } from 'vue'
+import { t } from '@/i18n'
 
 // La vista previa silenciada: solo vídeo, decodificado con WebCodecs y pintado en un
 // canvas. Sin librerías — VideoDecoder y canvas son APIs del navegador, y el servidor
@@ -10,7 +11,9 @@ import { onBeforeUnmount, ref } from 'vue'
 const emit = defineEmits(['cerrar'])
 
 const lienzo = ref(null)
-const aviso = ref('Conectando…')
+// Se guarda la CLAVE, no el texto ya traducido: así, si el idioma cambia mientras se
+// enseña, la plantilla lo resuelve de nuevo con t() en vez de quedarse con el texto viejo.
+const avisoKey = ref('vista_previa.conectando')
 
 let ws = null
 let decoder = null
@@ -42,7 +45,7 @@ function pintar(frame) {
   canvas.getContext('2d').drawImage(frame, 0, 0)
   // Obligatorio: cada VideoFrame retiene memoria de GPU hasta que se cierra.
   frame.close()
-  aviso.value = null
+  avisoKey.value = null
 }
 
 async function configurar(avcc) {
@@ -66,19 +69,19 @@ async function configurar(avcc) {
   const config = { codec, description: avcc, optimizeForLatency: true }
 
   if (typeof VideoDecoder === 'undefined') {
-    cerrar('Tu navegador no soporta la vista previa')
+    cerrar(t('vista_previa.sin_soporte'))
     return
   }
   const soporte = await VideoDecoder.isConfigSupported(config).catch(() => null)
   if (cerrado || mia !== generacion) return
   if (!soporte?.supported) {
-    cerrar('Tu navegador no soporta la vista previa')
+    cerrar(t('vista_previa.sin_soporte'))
     return
   }
 
   decoder = new VideoDecoder({
     output: pintar,
-    error: () => cerrar('La vista previa falló al decodificar'),
+    error: () => cerrar(t('vista_previa.fallo_decodificar')),
   })
   decoder.configure(config)
   esperandoKeyframe = true
@@ -110,7 +113,10 @@ function conectar() {
   // Sin reconexión, a propósito: la vista es bajo demanda y gasta subida del servidor.
   // El servidor cierra con motivo («sin señal», «la emisión terminó») y ese texto es lo
   // que se le enseña al usuario, que decide si reabrir.
-  ws.onclose = (ev) => { ws = null; cerrar(ev.reason || 'La vista previa se cortó') }
+  // ev.reason viene ya en el idioma que se pidió en el handshake (el servidor lo negocia
+  // con Accept-Language antes de aceptar el WebSocket), así que se enseña tal cual. El
+  // respaldo de aquí abajo, para un cierre sin motivo, sí pasa por t().
+  ws.onclose = (ev) => { ws = null; cerrar(ev.reason || t('vista_previa.se_corto')) }
 }
 
 conectar()
@@ -120,14 +126,14 @@ onBeforeUnmount(() => cerrar())
 <template>
   <q-card flat bordered class="q-mb-md">
     <q-card-section class="row items-center q-py-xs">
-      <div class="text-caption text-grey-5">Vista previa · sin sonido</div>
+      <div class="text-caption text-grey-5">{{ t('vista_previa.encabezado') }}</div>
       <q-space />
-      <q-btn flat dense no-caps size="sm" label="Cerrar" @click="cerrar()" />
+      <q-btn flat dense no-caps size="sm" :label="t('comun.cerrar')" @click="cerrar()" />
     </q-card-section>
     <q-separator />
     <q-card-section class="q-pa-none cuadro">
       <canvas ref="lienzo" class="lienzo" />
-      <div v-if="aviso" class="text-caption text-grey-5 q-pa-md">{{ aviso }}</div>
+      <div v-if="avisoKey" class="text-caption text-grey-5 q-pa-md">{{ t(avisoKey) }}</div>
     </q-card-section>
   </q-card>
 </template>

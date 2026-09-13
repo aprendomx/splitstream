@@ -4,6 +4,7 @@ import { useQuasar } from 'quasar'
 import { api, ApiError } from '@/api'
 import { usePanel } from '@/stores/panel'
 import { iTitulo, iOk, iCerrar } from '@/iconos'
+import { t } from '@/i18n'
 
 const $q = useQuasar()
 const panel = usePanel()
@@ -34,9 +35,12 @@ async function aplicar() {
     if (categoria.value) body.category_id = categoria.value.id
     resultados.value = await api.aplicarTitulo(body)
     const ok = resultados.value.filter((r) => r.ok).length
-    $q.notify({ type: ok === resultados.value.length ? 'positive' : 'warning', message: `${ok} de ${resultados.value.length} canales actualizados` })
+    $q.notify({
+      type: ok === resultados.value.length ? 'positive' : 'warning',
+      message: t('titulo.resultado_notify', { ok, total: resultados.value.length }),
+    })
   } catch (e) {
-    $q.notify({ type: 'negative', message: e instanceof ApiError ? e.message : 'No se pudo aplicar' })
+    $q.notify({ type: 'negative', message: e instanceof ApiError ? e.message : t('titulo.error_aplicar') })
   } finally {
     aplicando.value = false
   }
@@ -47,12 +51,12 @@ const nombreDe = (id) => panel.destinos.find((d) => d.id === id)?.name ?? `#${id
 <template>
   <q-card v-if="candidatos.length" flat bordered class="q-mb-md">
     <q-card-section class="q-gutter-y-sm">
-      <div class="text-subtitle2 row items-center q-gutter-xs"><q-icon :name="iTitulo" size="18px" />Título en vivo</div>
+      <div class="text-subtitle2 row items-center q-gutter-xs"><q-icon :name="iTitulo" size="18px" />{{ t('titulo.titulo') }}</div>
       <div class="row q-col-gutter-sm items-start">
-        <div class="col-12 col-sm"><q-input v-model="titulo" outlined dense label="Título" maxlength="140" counter /></div>
+        <div class="col-12 col-sm"><q-input v-model="titulo" outlined dense :label="t('titulo.campo_titulo')" maxlength="140" counter /></div>
         <div v-if="hayTwitch" class="col-12 col-sm-5">
           <q-select v-model="categoria" :options="opciones" option-label="name" outlined dense use-input fill-input hide-selected
-                    input-debounce="300" label="Categoría (Twitch)" clearable @filter="buscar">
+                    input-debounce="300" :label="t('titulo.categoria_twitch_label')" clearable @filter="buscar">
             <template #option="{ itemProps, opt }">
               <q-item v-bind="itemProps"><q-item-section avatar><img :src="opt.box_art_url" width="24" alt="" /></q-item-section><q-item-section>{{ opt.name }}</q-item-section></q-item>
             </template>
@@ -60,10 +64,10 @@ const nombreDe = (id) => panel.destinos.find((d) => d.id === id)?.name ?? `#${id
         </div>
       </div>
       <div class="row items-center">
-        <div class="text-caption text-grey-5">Se aplica a {{ candidatos.map((d) => d.name).join(', ') }}.</div>
+        <div class="text-caption text-grey-5">{{ t('titulo.se_aplica_a', { lista: candidatos.map((d) => d.name).join(', ') }) }}</div>
         <q-space />
         <q-btn unelevated no-caps color="primary" :loading="aplicando" :disable="!titulo.trim() && !categoria"
-               label="Aplicar en todos los que puedan" @click="aplicar" />
+               :label="t('titulo.aplicar_boton')" @click="aplicar" />
       </div>
       <q-list v-if="resultados.length" dense>
         <q-item v-for="r in resultados" :key="r.destination_id">

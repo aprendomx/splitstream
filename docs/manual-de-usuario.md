@@ -363,7 +363,35 @@ ffmpeg -i x.flv -c copy x.mp4
 
 ---
 
-## 10. Crear la emisión desde el panel
+## 10. Historial
+
+Cada vez que OBS conecta empieza una **sesión**, y cada sesión queda guardada con lo que
+pasó dentro. El botón del reloj en la barra superior abre el **historial**.
+
+**La lista** enseña una fila por sesión, de la más reciente a la más antigua: cuándo
+empezó, cuánto duró (las que siguen vivas llevan la etiqueta «en curso»), a qué resolución
+y bitrate llegaba la señal, cuántos eventos dejó de cada nivel —información, avisos y
+errores, cada uno en su color— y un icono de grabación si esa sesión dejó archivos. Abajo,
+«cargar más» trae las anteriores.
+
+**La ficha** de una sesión se abre al pulsar su fila, y tiene cuatro partes:
+
+- **Resumen.** Qué canales reconectaron y cuántas veces, cuántos se suspendieron, cuántos
+  mensajes de chat hubo y de qué plataforma vino cada uno, y cuántas grabaciones dejó la
+  sesión con su peso total.
+- **Línea de tiempo.** Todos los eventos de la sesión en orden, con la hora a la que
+  pasaron y su nivel. El filtro de arriba deja ver solo los avisos y los errores, que es lo
+  que suele interesar cuando algo salió mal.
+- **Chat.** El chat de esa sesión, tal como se leyó en directo. Es de lectura, igual que en
+  el panel.
+- **Grabaciones.** Los segmentos de la sesión, con su descarga.
+
+No hay gráfica de bitrate a lo largo del tiempo: las métricas por segundo no se guardan, se
+ven en vivo y se olvidan. Lo que sí queda es todo lo que aparece arriba.
+
+---
+
+## 11. Crear la emisión desde el panel
 
 Con una cuenta de YouTube o Kick conectada, el diálogo del canal sustituye el campo de
 clave por un botón que trae la clave real desde la plataforma en vez de que la copies a
@@ -391,7 +419,7 @@ prefieres seguir copiándola tú.
 
 ---
 
-## 11. Título en vivo y chat
+## 12. Título en vivo y chat
 
 **Título en vivo.** Con al menos un canal con cuenta conectada aparece un campo sobre la
 lista de canales. Escribe el título (y, para Twitch, busca la categoría) y pulsa **Aplicar
@@ -419,7 +447,7 @@ funciona igual, solo falta el chat.
 
 ---
 
-## 12. Avisos
+## 13. Avisos
 
 Splitstream puede avisarte cuando un canal falla o se corta la emisión, sin que tengas que
 tener el panel abierto: en **Ajustes → Avisos**, pulsa **Nuevo aviso** y dale una URL de
@@ -472,7 +500,7 @@ por su cuenta, y solo manda su propia versión.
 
 ---
 
-## 13. Respaldo
+## 14. Respaldo
 
 En **Ajustes → Respaldo**, el botón **Descargar respaldo** te da una copia de la base de
 datos completa: canales, claves cifradas y la contraseña del panel.
@@ -487,7 +515,21 @@ respaldo es sobrevivir a que pierdas el original.
 
 ---
 
-## 14. Preguntas frecuentes
+## 15. Preguntas frecuentes
+
+**¿Cómo cambio el idioma?**
+Con el selector de la barra superior del panel, el que enseña `ES` o `EN`. El cambio es
+inmediato y se recuerda en ese navegador. La primera vez, el panel elige por el idioma de
+tu navegador. El asistente de la primera configuración también lleva el selector, para que
+puedas empezar en tu idioma.
+
+**¿Por qué el registro sigue en español?**
+Porque no es interfaz: es evidencia. El registro de eventos, los avisos que salen por
+webhook y las líneas que escribe el programa en la consola se guardan una sola vez y se
+leen después, a veces meses más tarde, a veces por alguien que no es quien los generó. Si
+cambiaran de idioma según quién mire, dos personas verían textos distintos para el mismo
+hecho y buscar un mensaje concreto dejaría de funcionar. Lo que sí sigue tu idioma es todo
+lo que el panel escribe para ti, incluidos los mensajes de error de la API.
 
 **¿Puedo cambiar la calidad por canal?**
 No. Splitstream reenvía el vídeo tal cual, sin tocarlo — por eso apenas consume CPU. Emitir

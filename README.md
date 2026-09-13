@@ -1,44 +1,51 @@
+> Also in Spanish → [README.es.md](README.es.md)
+
 # Splitstream
 
-Retransmisión RTMP self-hosted. Recibe un stream desde OBS y lo reenvía
-simultáneamente a YouTube, Twitch, Facebook, Kick, X, TikTok o cualquier endpoint
-RTMP/RTMPS genérico.
+Self-hosted RTMP restreaming. It takes one stream from OBS and forwards it
+simultaneously to YouTube, Twitch, Facebook, Kick, X, TikTok or any generic RTMP/RTMPS
+endpoint.
 
-Un solo binario: servidor RTMP de ingesta, API HTTP y panel web, todo dentro. Sin
-transcodificación — los paquetes se reenvían tal cual, así que el consumo de CPU es
-despreciable y el de subida es `bitrate × número de destinos`.
+A single binary: RTMP ingest server, HTTP API and web panel, all inside. No
+transcoding — packets are forwarded as they arrive, so CPU usage is negligible and
+upload usage is `bitrate × number of destinations`.
 
-## Estado
+> **Language.** The web panel is bilingual (English and Spanish); pick your language from
+> the selector in the top bar. The command line output, the server log and the persisted
+> event log are still in Spanish — that is why the console examples below appear in
+> Spanish, exactly as the program prints them.
 
-**Las seis fases están completas.** El motor está probado contra plataformas reales
-—YouTube, Twitch y Facebook a la vez, sin descartes ni reconexiones durante quince minutos
-seguidos— y el producto se instala descargando un archivo.
+## Status
 
-| Fase | Contenido | Estado |
+**All six phases are complete.** The engine has been tested against real platforms
+—YouTube, Twitch and Facebook at the same time, with no drops and no reconnections for
+fifteen minutes straight— and the product installs by downloading one file.
+
+| Phase | Contents | Status |
 | --- | --- | --- |
-| 1 | Config, cifrado, SQLite con migraciones, modelo de datos | ✅ |
-| 2 | Ingesta RTMP, hub y un destino de punta a punta (RTMP y RTMPS) | ✅ |
-| 3 | N destinos, cola con descarte por GOP, reconexión, métricas | ✅ |
-| 4 | API HTTP completa + WebSocket | ✅ |
-| 5 | Panel web | ✅ |
-| 6 | Docker, systemd, documentación de operación | ✅ |
+| 1 | Config, encryption, SQLite with migrations, data model | ✅ |
+| 2 | RTMP ingest, hub and one destination end to end (RTMP and RTMPS) | ✅ |
+| 3 | N destinations, queue with GOP-level dropping, reconnection, metrics | ✅ |
+| 4 | Complete HTTP API + WebSocket | ✅ |
+| 5 | Web panel | ✅ |
+| 6 | Docker, systemd, operations documentation | ✅ |
 
 ---
 
-## Instalación
+## Install
 
 ### Mac (Homebrew)
 
 ```bash
 brew tap aprendomx/tap
-brew trust aprendomx/tap      # Homebrew 6 lo exige para taps de terceros; en versiones anteriores no existe
+brew trust aprendomx/tap      # Homebrew 6 requires it for third-party taps; earlier versions don't have it
 brew install splitstream
 splitstream
 ```
 
-Homebrew quita la marca de cuarentena: no hay aviso de Gatekeeper. Para dejarlo
-funcionando siempre, `brew services start splitstream` (base y clave en
-`$(brew --prefix)/var/splitstream`, log en `$(brew --prefix)/var/log/splitstream.log`).
+Homebrew clears the quarantine flag: no Gatekeeper warning. To keep it running all the
+time, `brew services start splitstream` (database and key in
+`$(brew --prefix)/var/splitstream`, log in `$(brew --prefix)/var/log/splitstream.log`).
 
 ### Windows (winget)
 
@@ -47,41 +54,43 @@ winget install aprendomx.Splitstream
 splitstream
 ```
 
-Sin SmartScreen: winget verifica el paquete por su checksum. Se instala como binario
-portátil y queda en el `PATH`.
+No SmartScreen: winget verifies the package by its checksum. It installs as a portable
+binary and ends up on your `PATH`.
 
-### Linux, o macOS sin Homebrew (script)
+### Linux, or macOS without Homebrew (script)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/install.sh | sh
 ```
 
-El script detecta tu sistema, descarga la última release, **verifica el checksum** y copia
-el binario a `/usr/local/bin`. Si eso necesita `sudo`, te enseña el comando y te pregunta
-antes. En Linux con systemd te ofrece instalarlo como servicio. Puedes leerlo entero en
-[`deploy/install.sh`](deploy/install.sh); para instalar en tu carpeta sin `sudo`:
+The script detects your system, downloads the latest release, **verifies the checksum**
+and copies the binary to `/usr/local/bin`. If that needs `sudo`, it shows you the command
+and asks first. On Linux with systemd it offers to install it as a service. You can read
+the whole thing in [`deploy/install.sh`](deploy/install.sh); to install into your own
+folder without `sudo`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/install.sh \
   | SPLITSTREAM_INSTALL_DIR=$HOME/.local/bin sh
 ```
 
-### A mano
+### By hand
 
-Ve a [las releases](https://github.com/aprendomx/splitstream/releases) y descarga el
-archivo de tu plataforma:
+Go to [the releases](https://github.com/aprendomx/splitstream/releases) and download the
+file for your platform:
 
-| Tu equipo | Archivo |
+| Your machine | File |
 | --- | --- |
-| Mac con Apple Silicon (M1 y posteriores) | `…-macos-apple-silicon.tar.gz` |
-| Mac con Intel | `…-macos-intel.tar.gz` |
-| Linux de escritorio o servidor | `…-linux-x86_64.tar.gz` |
-| Raspberry Pi 4/5, servidores ARM | `…-linux-arm64.tar.gz` |
+| Mac with Apple Silicon (M1 and later) | `…-macos-apple-silicon.tar.gz` |
+| Mac with Intel | `…-macos-intel.tar.gz` |
+| Desktop or server Linux | `…-linux-x86_64.tar.gz` |
+| Raspberry Pi 4/5, ARM servers | `…-linux-arm64.tar.gz` |
 | Windows | `…-windows-x86_64.zip` |
 
-No hay instalador ni dependencias: es un único ejecutable con el panel dentro.
+There is no installer and there are no dependencies: it is a single executable with the
+panel inside.
 
-**macOS y Linux**
+**macOS and Linux**
 
 ```bash
 tar xzf splitstream-*.tar.gz
@@ -89,39 +98,38 @@ cd splitstream-*/
 chmod +x splitstream
 ```
 
-**En macOS verás este aviso la primera vez:**
+**On macOS you will see this warning the first time:**
 
-> «Apple no pudo verificar que "splitstream" no contenga software malicioso.»
+> "Apple could not verify "splitstream" is free of malware."
 
-Es Gatekeeper. Los binarios no están firmados con un certificado de desarrollador de
-Apple —eso cuesta una suscripción anual— así que el sistema los bloquea aunque el
-programa sea correcto. Tienes dos formas de desbloquearlo:
+That is Gatekeeper. The binaries are not signed with an Apple developer certificate —that
+costs a yearly subscription— so the system blocks them even when the program is fine. You
+have two ways to unblock it:
 
 ```bash
-# Quita la marca que el navegador puso al descargar
+# Remove the flag the browser set when downloading
 xattr -dr com.apple.quarantine splitstream-*-macos-apple-silicon
 ```
 
-O sin terminal: **Ajustes del Sistema → Privacidad y seguridad**, baja hasta el aviso
-sobre `splitstream` y pulsa **Abrir de todos modos**.
+Or without a terminal: **System Settings → Privacy & Security**, scroll down to the notice
+about `splitstream` and click **Open Anyway**.
 
-> El «clic derecho → Abrir» de toda la vida ya no siempre ofrece la opción en las
-> versiones recientes de macOS. Si el menú no te la da, usa cualquiera de las dos vías de
-> arriba.
+> The old "right click → Open" no longer always offers the option in recent versions of
+> macOS. If the menu doesn't give it to you, use either of the two routes above.
 
-**Windows**: descomprime el `.zip`. SmartScreen avisará de que el editor es desconocido;
-elige **Más información → Ejecutar de todas formas**.
+**Windows**: unzip the `.zip`. SmartScreen will warn that the publisher is unknown; choose
+**More info → Run anyway**.
 
-### Arranca
+### Run it
 
-Doble clic sobre el ejecutable, o desde la terminal:
+Double-click the executable, or from the terminal:
 
 ```bash
 ./splitstream
 ```
 
-No hace falta configurar nada. La primera vez crea su clave maestra en un archivo
-`splitstream.key` junto a la base de datos, y te lo dice:
+There is nothing to configure. The first time it creates its master key in a
+`splitstream.key` file next to the database, and tells you so:
 
 ```
   Se ha creado tu clave maestra:
@@ -132,20 +140,20 @@ No hace falta configurar nada. La primera vez crea su clave maestra en un archiv
   si la pierdes, tendrás que volver a pegar la clave de cada plataforma.
 ```
 
-> **Respalda los dos archivos juntos**, `splitstream.db` y `splitstream.key`. Copiar solo
-> la base no sirve de nada: sin la clave, lo que hay dentro es ilegible.
+> **Back up both files together**, `splitstream.db` and `splitstream.key`. Copying the
+> database alone is useless: without the key, what's inside it is unreadable.
 
-Están uno al lado del otro a propósito, para que se muevan juntos. Eso también significa
-que **quien tenga acceso a esa carpeta lo tiene todo**. En un equipo compartido o en un
-servidor, pasa la clave por el entorno y guárdala en otro sitio:
+They sit next to each other on purpose, so that they travel together. That also means
+**whoever has access to that folder has everything**. On a shared machine or on a server,
+pass the key through the environment and keep it somewhere else:
 
 ```bash
-./splitstream -genkey                       # imprime una clave nueva
-export SPLITSTREAM_MASTER_KEY="la-que-imprimió"
-./splitstream                               # la variable manda sobre el archivo
+./splitstream -genkey                       # prints a new key
+export SPLITSTREAM_MASTER_KEY="the-one-it-printed"
+./splitstream                               # the variable wins over the file
 ```
 
-Después verás algo así:
+Then you will see something like this:
 
 ```
   ┌───────────────────────────────────────────────────────────┐
@@ -157,57 +165,58 @@ Después verás algo así:
       http://localhost:8080
 ```
 
-Abre esa dirección y elige una contraseña. Ya está.
+Open that address and choose a password. That's it.
 
-### Si lo instalas en un servidor
+### On a server
 
-Cuando abres el panel **desde otro equipo**, el asistente pide un código que el propio
-programa imprime al arrancar. Existe para que nadie que llegue antes que tú se quede con
-tu servicio: quien puede leer la consola del servidor es quien puede reclamarlo.
+When you open the panel **from another machine**, the wizard asks for a code that the
+program itself prints at startup. It exists so that nobody who gets there before you can
+take over your service: whoever can read the server console is whoever can claim it.
 
-Cámbialo mentalmente por esto: en un VPS, mira el código en la misma terminal donde
-arrancaste el programa, o con `journalctl -u splitstream`.
+In practice: on a VPS, look for the code in the same terminal where you started the
+program, or with `journalctl -u splitstream`.
 
-Si el panel va a ser accesible desde internet tiene que ir por HTTPS: sin TLS, la
-contraseña viaja en claro. Tienes dos caminos: el TLS integrado (siguiente sección) o un
-proxy delante (la de después).
+If the panel is going to be reachable from the internet it has to go over HTTPS: without
+TLS, the password travels in the clear. You have two routes: the built-in TLS (next
+section) or a proxy in front (the one after that).
 
-### Ponerlo en internet
+### On the internet
 
-Con un dominio apuntando a la máquina y los puertos 80 y 443 abiertos, el binario pide y
-renueva el certificado solo, con Let's Encrypt:
+With a domain pointing at the machine and ports 80 and 443 open, the binary requests and
+renews the certificate on its own, with Let's Encrypt:
 
 ```bash
 SPLITSTREAM_TLS_DOMAIN=relay.ejemplo.com splitstream
 ```
 
-Con eso el panel escucha en `:443`, el `:80` redirige a HTTPS, la cookie de sesión sale
-`Secure` y el estado enseña la URL pública. Los certificados se guardan en `tls-cache/`
-junto a la base: respáldalo con ella y **no lo borres para «reintentar»**: Let's Encrypt
-limita a 5 certificados por semana por dominio, y un reinicio en bucle sin caché los agota.
+With that the panel listens on `:443`, `:80` redirects to HTTPS, the session cookie is
+sent `Secure` and the status view shows the public URL. Certificates are stored in
+`tls-cache/` next to the database: back it up with it, and **don't delete it to "try
+again"**: Let's Encrypt allows 5 certificates per week per domain, and a restart loop
+without a cache burns through them.
 
-- Como servicio de systemd, descomenta `AmbientCapabilities=CAP_NET_BIND_SERVICE` en la
-  unidad: es lo que permite abrir 80 y 443 sin root.
-- En Docker no hace falta nada: publica `80:80` y `443:443` (hay un ejemplo comentado en
-  `deploy/docker-compose.yml`).
-- Si el certificado no llega, el registro del panel muestra `tls_certificate_error` con
-  el motivo (casi siempre: el dominio no apunta aquí, o el 80 está cerrado).
+- As a systemd service, uncomment `AmbientCapabilities=CAP_NET_BIND_SERVICE` in the unit:
+  that is what allows binding 80 and 443 without root.
+- With Docker nothing is needed: publish `80:80` and `443:443` (there is a commented
+  example in `deploy/docker-compose.yml`).
+- If the certificate never arrives, the panel's event log shows `tls_certificate_error`
+  with the reason (almost always: the domain doesn't point here, or port 80 is closed).
 
-Con un certificado propio, en vez del dominio:
+With your own certificate, instead of the domain:
 
 ```bash
 SPLITSTREAM_TLS_CERT_FILE=/etc/ssl/relay.crt SPLITSTREAM_TLS_KEY_FILE=/etc/ssl/relay.key splitstream
 ```
 
-### Detrás de un proxy
+### Behind a proxy
 
-Si prefieres Caddy o nginx delante, ellos terminan el TLS y el binario sigue en `:8080`.
-Dos cosas:
+If you prefer Caddy or nginx in front, they terminate TLS and the binary stays on `:8080`.
+Two things:
 
-1. `SPLITSTREAM_SECURE_COOKIES=true`, para que la cookie no salga sin `Secure`.
-2. `SPLITSTREAM_TRUSTED_PROXIES` con la IP del proxy, para que el limitador del login y el
-   asistente del primer arranque vean la IP real y no la del proxy. Sin esto, un intento
-   fallido de cualquiera castiga a todos, y el asistente cree que todo es remoto.
+1. `SPLITSTREAM_SECURE_COOKIES=true`, so that the cookie is not sent without `Secure`.
+2. `SPLITSTREAM_TRUSTED_PROXIES` with the proxy's IP, so that the login rate limiter and
+   the first-run wizard see the real IP and not the proxy's. Without this, one failed
+   attempt by anyone punishes everyone, and the wizard thinks everything is remote.
 
 ```caddyfile
 relay.ejemplo.com {
@@ -229,94 +238,94 @@ location / {
 SPLITSTREAM_SECURE_COOKIES=true SPLITSTREAM_TRUSTED_PROXIES=127.0.0.1/32,::1/128 splitstream
 ```
 
-Con Docker y el proxy en el host, la red puente suele ser `172.16.0.0/12`. **Nunca pongas
-`0.0.0.0/0`**: confiar en todo el mundo anula el limitador y convierte a cualquiera en
-«local» con una cabecera.
+With Docker and the proxy on the host, the bridge network is usually `172.16.0.0/12`.
+**Never put `0.0.0.0/0`**: trusting everyone disables the rate limiter and turns anyone
+into a "local" user with one header.
 
 ---
 
-## Configuración
+## Configuration
 
-Todo se controla con variables de entorno:
+Everything is driven by environment variables:
 
-| Variable | Por defecto | Para qué |
+| Variable | Default | What for |
 | --- | --- | --- |
-| `SPLITSTREAM_MASTER_KEY` | archivo `.key` junto a la base | 32 bytes en base64. Si no la pones, se crea un archivo de clave y se usa. La variable siempre manda |
-| `SPLITSTREAM_HTTP_ADDR` | `:8080` | Dónde escucha el panel |
-| `SPLITSTREAM_RTMP_ADDR` | `:1935` | Dónde escucha la ingesta de OBS |
-| `SPLITSTREAM_DB_PATH` | `splitstream.db` | Archivo SQLite |
-| `SPLITSTREAM_LOG_LEVEL` | `info` | `debug`, `info`, `warn` o `error` |
-| `SPLITSTREAM_SECURE_COOKIES` | `false`; `true` con TLS integrado | `true` si sirves el panel por HTTPS |
-| `SPLITSTREAM_METRICS_TOKEN` | vacío | Con valor, `/metrics` acepta `Authorization: Bearer`. Vacío: solo cookie de sesión |
-| `SPLITSTREAM_RETENTION_DAYS` | `90` | Eventos y sesiones cerradas más viejos se borran. `0` desactiva |
-| `SPLITSTREAM_RETENTION_MAX_EVENTS` | `50000` | Tope de filas en `events`. `0` desactiva |
-| `SPLITSTREAM_RETENTION_MAX_CHAT` | `200000` | Tope de filas en `chat_messages`. `0` desactiva |
-| `SPLITSTREAM_TWITCH_CLIENT_ID` | vacío | Vacío: el client_id incluido en el binario; pon el tuyo si registras tu propia app en dev.twitch.tv. Es público, no un secreto. **Hasta que la app de Splitstream esté registrada, conectar cuentas de Twitch necesita esta variable** |
-| `SPLITSTREAM_YOUTUBE_CHAT_BUDGET` | `6000` | Unidades de cuota diarias tras las que el chat de YouTube se pausa solo (ver [`docs/youtube-credenciales.md`](docs/youtube-credenciales.md)) |
-| `SPLITSTREAM_YOUTUBE_QUOTA` | `10000` | Cuota diaria del proyecto de Google Cloud; el límite real lo fija Google, aquí solo se declara para que el panel la enseñe junto al gasto en la barra de cuota del chat |
-| `SPLITSTREAM_RECORDINGS_DIR` | `recordings/` junto a la base | Dónde se escriben los archivos de grabación |
-| `SPLITSTREAM_TLS_DOMAIN` | vacío | Con valor, TLS integrado con Let's Encrypt para ese dominio; el panel pasa a `:443` |
-| `SPLITSTREAM_TLS_CACHE_DIR` | `tls-cache/` junto a la base | Cuenta y certificados de Let's Encrypt |
-| `SPLITSTREAM_TLS_CERT_FILE` / `SPLITSTREAM_TLS_KEY_FILE` | vacíos | Certificado propio en PEM, en vez del dominio |
-| `SPLITSTREAM_TLS_REDIRECT_ADDR` | `:80` con TLS | Listener que redirige a HTTPS y atiende el reto de Let's Encrypt; `none` lo apaga |
-| `SPLITSTREAM_TRUSTED_PROXIES` | vacío | CIDR o IP, separadas por comas, desde las que se cree `X-Forwarded-For` |
-| `SPLITSTREAM_UPDATE_CHECK` | `true` | `false` apaga la consulta diaria de versión nueva |
+| `SPLITSTREAM_MASTER_KEY` | `.key` file next to the database | 32 bytes in base64. If you don't set it, a key file is created and used. The variable always wins |
+| `SPLITSTREAM_HTTP_ADDR` | `:8080` | Where the panel listens |
+| `SPLITSTREAM_RTMP_ADDR` | `:1935` | Where the OBS ingest listens |
+| `SPLITSTREAM_DB_PATH` | `splitstream.db` | SQLite file |
+| `SPLITSTREAM_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| `SPLITSTREAM_SECURE_COOKIES` | `false`; `true` with built-in TLS | `true` if you serve the panel over HTTPS |
+| `SPLITSTREAM_METRICS_TOKEN` | empty | With a value, `/metrics` accepts `Authorization: Bearer`. Empty: session cookie only |
+| `SPLITSTREAM_RETENTION_DAYS` | `90` | Events and closed sessions older than this are deleted. `0` disables it |
+| `SPLITSTREAM_RETENTION_MAX_EVENTS` | `50000` | Row cap in `events`. `0` disables it |
+| `SPLITSTREAM_RETENTION_MAX_CHAT` | `200000` | Row cap in `chat_messages`. `0` disables it |
+| `SPLITSTREAM_TWITCH_CLIENT_ID` | empty | Empty: the client_id built into the binary; set your own if you register your own app at dev.twitch.tv. It is public, not a secret. **Until the Splitstream app is registered, connecting Twitch accounts needs this variable** |
+| `SPLITSTREAM_YOUTUBE_CHAT_BUDGET` | `6000` | Daily quota units after which YouTube chat pauses itself (see [`docs/youtube-credenciales.md`](docs/youtube-credenciales.md)) |
+| `SPLITSTREAM_YOUTUBE_QUOTA` | `10000` | Daily quota of the Google Cloud project; the real limit is set by Google, here it is only declared so that the panel can show it next to the spend in the chat quota bar |
+| `SPLITSTREAM_RECORDINGS_DIR` | `recordings/` next to the database | Where recording files are written |
+| `SPLITSTREAM_TLS_DOMAIN` | empty | With a value, built-in TLS with Let's Encrypt for that domain; the panel moves to `:443` |
+| `SPLITSTREAM_TLS_CACHE_DIR` | `tls-cache/` next to the database | Let's Encrypt account and certificates |
+| `SPLITSTREAM_TLS_CERT_FILE` / `SPLITSTREAM_TLS_KEY_FILE` | empty | Your own certificate in PEM, instead of the domain |
+| `SPLITSTREAM_TLS_REDIRECT_ADDR` | `:80` with TLS | Listener that redirects to HTTPS and serves the Let's Encrypt challenge; `none` turns it off |
+| `SPLITSTREAM_TRUSTED_PROXIES` | empty | CIDRs or IPs, comma separated, whose `X-Forwarded-For` is believed |
+| `SPLITSTREAM_UPDATE_CHECK` | `true` | `false` turns off the daily check for a new version |
 
-Comandos:
+Commands:
 
 ```bash
-splitstream -genkey        # imprime una clave maestra nueva
-splitstream -version       # imprime la versión
-splitstream -setpassword   # cambia la contraseña del panel, leyéndola de stdin
-splitstream -backup <ruta> # copia consistente de la base de datos, y sale
-splitstream -healthcheck   # sale 0 si /healthz responde 200, si no 1
+splitstream -genkey        # prints a new master key
+splitstream -version       # prints the version
+splitstream -setpassword   # changes the panel password, reading it from stdin
+splitstream -backup <path> # consistent copy of the database, then exits
+splitstream -healthcheck   # exits 0 if /healthz answers 200, otherwise 1
 ```
 
-Para cambiar la contraseña sin que quede en el historial del shell:
+To change the password without leaving it in your shell history:
 
 ```bash
 read -rs PW && printf '%s' "$PW" | splitstream -setpassword && unset PW
 ```
 
-### Vigilarlo desde fuera
+### Watching it from outside
 
-- `GET /healthz` responde `200` si el proceso atiende y la base contesta. No necesita
-  sesión. Es lo que consulta el `HEALTHCHECK` de la imagen de Docker.
-- `GET /metrics` expone métricas en formato Prometheus: estado y bitrate de cada canal,
-  descartes, reconexiones, entregas de avisos. Pide sesión o
+- `GET /healthz` answers `200` if the process is serving and the database responds. It
+  needs no session. It is what the Docker image's `HEALTHCHECK` calls.
+- `GET /metrics` exposes metrics in Prometheus format: state and bitrate of each channel,
+  drops, reconnections, alert deliveries. It needs a session or
   `Authorization: Bearer $SPLITSTREAM_METRICS_TOKEN`.
 
 ```yaml
 # prometheus.yml
 scrape_configs:
   - job_name: splitstream
-    authorization: { credentials: TU_TOKEN }
+    authorization: { credentials: YOUR_TOKEN }
     static_configs: [{ targets: ['127.0.0.1:8080'] }]
 ```
 
 ---
 
-### Grabar las emisiones
+### Recording your streams
 
-Se activa desde **Ajustes → Grabación**. En cuanto se activa, cada sesión que llega por
-RTMP se graba en `SPLITSTREAM_RECORDINGS_DIR` (por defecto `recordings/` junto a la
-base), un directorio `sesion-<id>/` por sesión con uno o más archivos `.flv`. No hay
-transcodificación: es el mismo mux que llega de OBS, así que grabar no le cuesta CPU al
-resto de destinos.
+It is enabled from **Settings → Recording**. As soon as it is on, every session that
+arrives over RTMP is recorded into `SPLITSTREAM_RECORDINGS_DIR` (by default `recordings/`
+next to the database), one `sesion-<id>/` directory per session with one or more `.flv`
+files. There is no transcoding: it is the same mux that arrives from OBS, so recording
+costs the other destinations no CPU.
 
-- **Segmentos:** con «Minutos por segmento» en más de 0, la sesión se corta a archivos de
-  ese tamaño; un corte de luz o un `kill -9` no cuesta más que el segmento en curso, los
-  anteriores ya están cerrados y son reproducibles. Con 0 minutos, un solo archivo por
-  sesión.
-- **Tope y retención:** «Tope en GB» pone un límite duro; al llegar, el job diario
-  `grabaciones` borra las grabaciones más antiguas hasta volver a estar debajo. «Días de
-  retención» borra por fecha, pero si compiten los dos límites manda el de gigas.
-- **El disco lento nunca frena el directo:** si el disco no da abasto para escribir al
-  ritmo que entra, la grabación empieza a descartar vídeo (igual que un destino con la
-  subida corta) y el chip «Grabando» del panel se pone en ámbar; los destinos que sí
-  llegan a tiempo no se enteran.
-- **Descargar y borrar:** desde la página «Grabaciones» del panel, por segmento.
-- **Pasar a MP4** para editar o subir a otro sitio:
+- **Segments:** with "Minutes per segment" above 0, the session is cut into files of that
+  size; a power cut or a `kill -9` costs you no more than the segment in progress, the
+  previous ones are already closed and playable. With 0 minutes, one single file per
+  session.
+- **Cap and retention:** "Cap in GB" sets a hard limit; when it is reached, the daily
+  `grabaciones` job deletes the oldest recordings until it is back under it. "Retention
+  days" deletes by date, but if the two limits compete, the gigabyte one wins.
+- **A slow disk never slows the live stream:** if the disk can't keep up with the incoming
+  rate, the recording starts dropping video (just like a destination with a short upload)
+  and the panel's "Recording" chip turns amber; the destinations that do keep up never
+  notice.
+- **Download and delete:** from the panel's "Recordings" page, segment by segment.
+- **Convert to MP4** to edit or upload elsewhere:
 
   ```bash
   ffmpeg -i x.flv -c copy x.mp4
@@ -324,48 +333,49 @@ resto de destinos.
 
 ---
 
-## Con Docker
+## With Docker
 
 ```bash
 mkdir splitstream && cd splitstream
 curl -fsSLO https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/docker-compose.yml
 curl -fsSL https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/env.example -o .env
 
-# Genera la clave maestra y pégala en .env
+# Generate the master key and paste it into .env
 docker compose run --rm splitstream -genkey
 
 docker compose up -d
 ```
 
-(el `compose` ya apunta a `ghcr.io/aprendomx/splitstream:latest`; no hace falta clonar el repo).
+(the `compose` file already points at `ghcr.io/aprendomx/splitstream:latest`; there is no
+need to clone the repo).
 
-La imagen pesa unos 18 MB y no lleva ni shell: es el binario sobre `scratch`, con los
-certificados raíz —que hacen falta para los destinos `rtmps://`— y nada más. Corre como
-usuario sin privilegios y con el sistema de archivos en solo lectura salvo su base de
-datos.
+The image weighs about 18 MB and doesn't even carry a shell: it is the binary on
+`scratch`, with the root certificates —needed for `rtmps://` destinations— and nothing
+else. It runs as an unprivileged user and with a read-only filesystem except for its
+database.
 
-**Desde Docker, el asistente te pedirá el código del primer arranque.** Es normal: la
-petición llega por la red puente del contenedor y no por `localhost`, así que el servicio
-la trata como si viniera de otra máquina. Míralo con:
+**From Docker, the wizard will ask you for the first-run code.** That is expected: the
+request arrives over the container's bridge network and not over `localhost`, so the
+service treats it as coming from another machine. Find it with:
 
 ```bash
 docker compose logs | grep -A2 "te pedirá este código"
 ```
 
-o pon la IP del host de Docker en `SPLITSTREAM_TRUSTED_PROXIES` si hay un proxy delante
-que manda `X-Forwarded-For`.
+or put your Docker host's IP in `SPLITSTREAM_TRUSTED_PROXIES` if there is a proxy in front
+sending `X-Forwarded-For`.
 
-El panel se publica solo en `127.0.0.1:8080` a propósito: sin TLS, tu contraseña viaja
-en claro. Para alcanzarlo desde fuera tienes las mismas dos vías que sin Docker: el TLS
-integrado (pon `SPLITSTREAM_TLS_DOMAIN` en `.env` y descomenta `80:80` y `443:443` en el
-compose; ver «Ponerlo en internet») o un proxy con HTTPS delante (ver «Detrás de un
-proxy»).
+The panel is published only on `127.0.0.1:8080` on purpose: without TLS, your password
+travels in the clear. To reach it from outside you have the same two routes as without
+Docker: the built-in TLS (set `SPLITSTREAM_TLS_DOMAIN` in `.env` and uncomment `80:80` and
+`443:443` in the compose file; see "On the internet") or a proxy with HTTPS in front (see
+"Behind a proxy").
 
-## Actualizar
+## Update
 
-El panel avisa cuando hay una versión nueva (una consulta a GitHub al arrancar y cada
-24 h, con la versión como único dato; `SPLITSTREAM_UPDATE_CHECK=false` la apaga). Nada se
-actualiza solo:
+The panel warns you when there is a new version (one query to GitHub at startup and every
+24 h, with the version as the only data; `SPLITSTREAM_UPDATE_CHECK=false` turns it off).
+Nothing updates itself:
 
 ```bash
 brew upgrade splitstream                    # Homebrew
@@ -374,14 +384,14 @@ curl -fsSL https://raw.githubusercontent.com/aprendomx/splitstream/main/deploy/i
 docker compose pull && docker compose up -d # Docker
 ```
 
-## Dejarlo funcionando siempre
+## Keep it running
 
-### Linux con systemd
+### Linux with systemd
 
-Hay una unidad lista en [`deploy/splitstream.service`](deploy/splitstream.service), con
-las instrucciones de instalación en su cabecera. Lo esencial:
+There is a ready-made unit in [`deploy/splitstream.service`](deploy/splitstream.service),
+with the installation instructions in its header. The essentials:
 
-`install.sh` ofrece hacer todo esto por ti. A mano:
+`install.sh` offers to do all of this for you. By hand:
 
 ```bash
 sudo install -d -o splitstream -g splitstream /var/lib/splitstream
@@ -392,18 +402,19 @@ sudo chmod 600 /etc/splitstream/env
 sudo install -m 644 deploy/splitstream.service /etc/systemd/system/
 sudo systemctl enable --now splitstream
 
-# El código del primer arranque:
+# The first-run code:
 journalctl -u splitstream | grep -A2 "te pedirá este código"
 ```
 
-La unidad da 30 segundos de margen al apagado. No es adorno: al recibir `SIGTERM`, el
-servicio manda `FCUnpublish` a cada destino, espera la gracia de 3 segundos del diseño y
-cierra la sesión en la base. Matarlo antes deja sesiones abiertas para siempre.
+The unit gives shutdown 30 seconds of grace. That is not decoration: on `SIGTERM`, the
+service sends `FCUnpublish` to each destination, waits the 3-second grace period from the
+design and closes the session in the database. Killing it earlier leaves sessions open
+forever.
 
 ### macOS
 
-Guarda esto como `~/Library/LaunchAgents/mx.aprendo.splitstream.plist`, cambiando las
-rutas y la clave, y cárgalo con `launchctl load`:
+Save this as `~/Library/LaunchAgents/mx.aprendo.splitstream.plist`, changing the paths and
+the key, and load it with `launchctl load`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -412,9 +423,9 @@ rutas y la clave, y cárgalo con `launchctl load`:
   <key>ProgramArguments</key><array>
     <string>/usr/local/bin/splitstream</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/TU_USUARIO/splitstream</string>
+  <key>WorkingDirectory</key><string>/Users/YOUR_USER/splitstream</string>
   <key>EnvironmentVariables</key><dict>
-    <key>SPLITSTREAM_MASTER_KEY</key><string>TU_CLAVE_MAESTRA</string>
+    <key>SPLITSTREAM_MASTER_KEY</key><string>YOUR_MASTER_KEY</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -423,60 +434,62 @@ rutas y la clave, y cárgalo con `launchctl load`:
 
 ---
 
-## Cómo se usa
+## How to use it
 
-El [manual de usuario](docs/manual-de-usuario.md) explica cómo configurar OBS, vincular
-canales y qué hacer cuando uno falla. Incluye las particularidades de cada plataforma que
-descubrimos probando contra ellas de verdad. También cómo conectar tu cuenta de Twitch
-para cambiar el título y la categoría en vivo y leer el chat desde el panel.
+The [user manual](docs/manual-de-usuario.md) (in Spanish) explains how to set up OBS, how
+to link channels and what to do when one fails. It includes the quirks of each platform
+that we found by testing against them for real. It also covers how to connect your Twitch
+account to change the title and the category live and read chat from the panel.
 
-Con YouTube y Kick vas más lejos: conectando tu cuenta, Splitstream crea la emisión (o lee
-la clave, en Kick) y te ahorra copiarla a mano, ver
-[`docs/youtube-credenciales.md`](docs/youtube-credenciales.md) y
-[`docs/kick-credenciales.md`](docs/kick-credenciales.md) para los pasos de cada consola.
+With YouTube and Kick you go further: by connecting your account, Splitstream creates the
+broadcast (or reads the key, on Kick) and saves you from copying it by hand — see
+[`docs/youtube-credenciales.md`](docs/youtube-credenciales.md) and
+[`docs/kick-credenciales.md`](docs/kick-credenciales.md) for each console's steps.
+
+How Splitstream compares with Restream, Castr, nginx-rtmp and MediaMTX, with prices and
+sources: [`docs/comparison.md`](docs/comparison.md).
 
 ---
 
-## Desarrollo
+## Development
 
-Hace falta Go 1.25+ y Node 20+. Docker y ffmpeg solo para los tests de integración.
+You need Go 1.25+ and Node 20+. Docker and ffmpeg only for the integration tests.
 
 ```bash
-make build             # panel + binario
-make build-go          # solo el binario, con el panel ya compilado
-make test              # tests con -race
+make build             # panel + binary
+make build-go          # binary only, with the panel already built
+make test              # tests with -race
 make vet
-make sinks-up          # levanta dos mediamtx locales
-make test-integration  # punta a punta contra ellos; necesita ffmpeg y ffprobe
+make sinks-up          # brings up two local mediamtx
+make test-integration  # end to end against them; needs ffmpeg and ffprobe
 ```
 
-Para trabajar en el panel con recarga en caliente, arranca el binario y aparte:
+To work on the panel with hot reload, start the binary and separately:
 
 ```bash
 cd web && npm run dev
 ```
 
-Vite hace de proxy hacia la API en `:8099`, así que la sesión funciona igual que en
-producción.
+Vite proxies to the API on `:8099`, so the session works just like in production.
 
-El [documento de diseño](docs/superpowers/specs/2026-09-01-rtmp-relay-design.md) explica
-la arquitectura, y los [planes de implementación](docs/superpowers/plans/) el detalle de
-cada fase, incluidos los errores que cometimos y cómo se corrigieron.
+The [design document](docs/superpowers/specs/2026-09-01-rtmp-relay-design.md) explains the
+architecture, and the [implementation plans](docs/superpowers/plans/) the detail of each
+phase, including the mistakes we made and how we fixed them.
 
 ---
 
-## Alcance
+## Scope
 
-Retransmisión y grabación local. Graba en FLV, sin transcodificar: lo que entra por RTMP
-se muxea tal cual a disco, igual que se reenvía tal cual a cada destino. Sin
-transcodificación, chat de **lectura** en el panel, por plataforma y solo donde la API lo
-permite (hoy Twitch, YouTube y Kick — este último solo con el panel accesible por URL
-pública HTTPS); escribir y moderar quedan fuera. Facebook, X y TikTok se quedan en «solo
-retransmitir»: Facebook exige verificación de negocio para su API de canal, y X y TikTok
-no tienen una API viable para esto. Sin multi-tenant. Si necesitas cambiar la resolución o
-el bitrate por destino, esto no es la herramienta: hace falta transcodificar, y eso es
-otro producto.
+Restreaming and local recording. It records in FLV, without transcoding: what comes in
+over RTMP is muxed to disk as-is, the same way it is forwarded as-is to each destination.
+No transcoding, **read-only** chat in the panel, per platform and only where the API
+allows it (today Twitch, YouTube and Kick — the last one only with the panel reachable at
+a public HTTPS URL); writing and moderating are out of scope. Facebook, X and TikTok stay
+at "restream only": Facebook demands business verification for its channel API, and X and
+TikTok have no viable API for this. No multi-tenancy. If you need to change the resolution
+or the bitrate per destination, this is not the tool: that requires transcoding, and that
+is a different product.
 
-## Licencia
+## License
 
-MIT. Las dependencias y sus licencias están en el panel, en **Créditos**.
+MIT. The dependencies and their licenses are in the panel, under **Credits**.

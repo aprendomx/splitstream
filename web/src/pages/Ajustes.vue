@@ -6,6 +6,7 @@ import { api } from '@/api'
 import { bytesLegibles } from '@/diagnostico'
 import { usePanel } from '@/stores/panel'
 import { porId } from '@/plataformas'
+import { t, formatearNumero } from '@/i18n'
 import DialogoWebhook from '@/components/DialogoWebhook.vue'
 
 // Ajustes que no caben en el panel principal: avisos por webhook y respaldo. En la v0.9
@@ -37,21 +38,24 @@ function nombresDestinos(c) {
 function desconectar(c) {
   const nombres = nombresDestinos(c)
   const cuantos = nombres.length
+  const lista = cuantos ? ` (${nombres.join(', ')})` : ''
+  // Sin canales vinculados no se pregunta por «0 canales» —la forma plural de una cuenta
+  // que no arrastra nada—, se dice lo que de verdad va a pasar: solo se va la cuenta.
+  const mensaje = cuantos
+    ? t('ajustes.desconectar_mensaje', { n: cuantos, lista })
+    : t('ajustes.desconectar_sin_canales')
   $q.dialog({
-    title: 'Desconectar cuenta',
-    message:
-      `Se desvincularán ${cuantos} ${cuantos === 1 ? 'canal' : 'canales'}` +
-      (cuantos ? ` (${nombres.join(', ')})` : '') +
-      '; el chat y el título dejarán de funcionar para ' + (cuantos === 1 ? 'él' : 'ellos') + '.',
-    cancel: { flat: true, noCaps: true, label: 'Cancelar' },
-    ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Desconectar' },
+    title: t('ajustes.desconectar_titulo'),
+    message: mensaje,
+    cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
+    ok: { color: 'negative', unelevated: true, noCaps: true, label: t('ajustes.desconectar') },
     persistent: true,
   }).onOk(async () => {
     try {
       await api.borrarCuenta(c.id)
       await panel.cargarCuentas()
       await panel.cargar()
-      $q.notify({ type: 'positive', message: 'Cuenta desconectada' })
+      $q.notify({ type: 'positive', message: t('ajustes.cuenta_desconectada') })
     } catch (e) {
       $q.notify({ type: 'negative', message: e.message })
     }
@@ -68,9 +72,9 @@ async function alternar(w) {
 
 function borrar(w) {
   $q.dialog({
-    title: 'Eliminar aviso', message: `Se eliminará «${w.name}».`,
-    cancel: { flat: true, noCaps: true, label: 'Cancelar' },
-    ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Eliminar' }, persistent: true,
+    title: t('ajustes.eliminar_aviso_titulo'), message: t('ajustes.eliminar_aviso_mensaje', { nombre: w.name }),
+    cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
+    ok: { color: 'negative', unelevated: true, noCaps: true, label: t('comun.eliminar') }, persistent: true,
   }).onOk(async () => {
     try { await api.borrarWebhook(w.id); await cargar() }
     catch (e) { $q.notify({ type: 'negative', message: e.message }) }
@@ -81,7 +85,7 @@ async function probar(w) {
   probando.value = w.id
   try {
     await api.probarWebhook(w.id)
-    $q.notify({ type: 'positive', message: `Aviso entregado a ${w.name}` })
+    $q.notify({ type: 'positive', message: t('ajustes.aviso_entregado', { nombre: w.name }) })
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message, timeout: 8000 })
   } finally {
@@ -136,7 +140,7 @@ async function aplicarGrabacion(patch) {
   guardandoGrab.value = true
   try {
     grabacion.value = await api.editarAjustesGrabacion(patch)
-    $q.notify({ type: 'positive', message: 'Ajustes de grabación guardados' })
+    $q.notify({ type: 'positive', message: t('ajustes.ajustes_grabacion_guardados') })
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   } finally {
@@ -149,10 +153,10 @@ function alternarGrabacion(encender) {
   // nada.
   if (!encender && panel.haySesion && panel.grabacion?.active) {
     $q.dialog({
-      title: 'Parar la grabación',
-      message: 'Estás emitiendo. Se cerrará el segmento en curso y no se grabará el resto.',
-      cancel: { flat: true, noCaps: true, label: 'Cancelar' },
-      ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Parar' },
+      title: t('ajustes.parar_grabacion_titulo'),
+      message: t('ajustes.parar_grabacion_mensaje'),
+      cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
+      ok: { color: 'negative', unelevated: true, noCaps: true, label: t('ajustes.parar') },
       persistent: true,
     }).onOk(() => aplicarGrabacion({ enabled: false }))
     return
@@ -171,17 +175,22 @@ function guardarGrabacion() {
 const usoGrabacion = computed(() => {
   const g = grabacion.value
   if (!g) return ''
-  return `${bytesLegibles(g.used_bytes)} de ${g.max_gb} GB · ${bytesLegibles(g.free_bytes)} libres en el disco`
+  return t('ajustes.uso_grabacion', { usados: bytesLegibles(g.used_bytes), max: g.max_gb, libres: bytesLegibles(g.free_bytes) })
 })
 
 // El error manda sobre el código. Un fallo de red no obtiene respuesta y se guarda con
 // last_status en null, así que mirar el null primero pintaba «sin enviar aún» un aviso que
 // llevaba días sin llegar a su destino.
 const estadoEntrega = (w) => {
-  if (w.last_error) return { texto: `último envío falló (${w.last_status ?? 'sin respuesta'}): ${w.last_error}`, color: 'negative' }
-  if (w.last_status === null) return { texto: 'sin enviar aún', color: 'grey-6' }
-  if (w.last_status >= 200 && w.last_status < 300) return { texto: `último envío: ${w.last_status}`, color: 'positive' }
-  return { texto: `último envío falló (${w.last_status})`, color: 'negative' }
+  if (w.last_error) {
+    return {
+      texto: t('ajustes.envio_fallo_status', { status: w.last_status ?? t('ajustes.sin_respuesta'), error: w.last_error }),
+      color: 'negative',
+    }
+  }
+  if (w.last_status === null) return { texto: t('ajustes.sin_enviar_aun'), color: 'grey-6' }
+  if (w.last_status >= 200 && w.last_status < 300) return { texto: t('ajustes.ultimo_envio_ok', { status: w.last_status }), color: 'positive' }
+  return { texto: t('ajustes.envio_fallo', { status: w.last_status }), color: 'negative' }
 }
 </script>
 
@@ -189,18 +198,17 @@ const estadoEntrega = (w) => {
   <q-page class="q-pa-md q-pb-xl ajustes">
     <div class="contenido">
       <div class="row items-center q-mb-sm">
-        <div class="text-h6">Avisos</div>
+        <div class="text-h6">{{ t('ajustes.avisos_titulo') }}</div>
         <q-space />
-        <q-btn unelevated no-caps color="primary" :icon="iMas" label="Nuevo aviso" @click="abrirAlta" />
+        <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('dialogo_webhook.nuevo_aviso')" @click="abrirAlta" />
       </div>
       <p class="text-body2 text-grey-5">
-        Cuando un canal falla o se corta la emisión, Splitstream puede avisarte en Discord, Slack o
-        cualquier servidor que reciba JSON.
+        {{ t('ajustes.avisos_explicacion') }}
       </p>
 
       <q-card v-if="!webhooks.length" flat bordered class="q-pa-lg text-center">
         <q-icon :name="iWebhook" size="36px" class="text-grey-7" />
-        <div class="text-body2 text-grey-5 q-mt-sm">Todavía no hay avisos configurados.</div>
+        <div class="text-body2 text-grey-5 q-mt-sm">{{ t('ajustes.sin_avisos') }}</div>
       </q-card>
 
       <q-list v-else bordered separator class="rounded-borders">
@@ -212,24 +220,24 @@ const estadoEntrega = (w) => {
           </q-item-section>
           <q-item-section side>
             <div class="row items-center no-wrap q-gutter-xs">
-              <q-btn flat dense no-caps size="sm" :icon="iProbar" label="Probar" :loading="probando === w.id" @click="probar(w)" />
-              <q-toggle :model-value="w.enabled" dense @update:model-value="alternar(w)" :aria-label="`${w.enabled ? 'Desactivar' : 'Activar'} ${w.name}`" />
-              <q-btn flat round dense :icon="iEditar" size="sm" aria-label="Editar" @click="abrirEdicion(w)" />
-              <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" aria-label="Eliminar" @click="borrar(w)" />
+              <q-btn flat dense no-caps size="sm" :icon="iProbar" :label="t('destino.probar')" :loading="probando === w.id" @click="probar(w)" />
+              <q-toggle :model-value="w.enabled" dense @update:model-value="alternar(w)" :aria-label="`${w.enabled ? t('ajustes.desactivar') : t('ajustes.activar')} ${w.name}`" />
+              <q-btn flat round dense :icon="iEditar" size="sm" :aria-label="t('comun.editar')" @click="abrirEdicion(w)" />
+              <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" :aria-label="t('comun.eliminar')" @click="borrar(w)" />
             </div>
           </q-item-section>
         </q-item>
       </q-list>
 
-      <div class="text-h6 q-mt-xl q-mb-sm">Cuentas conectadas</div>
+      <div class="text-h6 q-mt-xl q-mb-sm">{{ t('ajustes.cuentas_titulo') }}</div>
       <p class="text-body2 text-grey-5">
-        Cuentas conectadas por código (Twitch, YouTube) o por redirect (Kick): dan título,
-        categoría y chat de solo lectura a sus destinos. Se conectan desde el diálogo de cada canal.
+        {{ t('ajustes.cuentas_explicacion') }}
       </p>
+      <p class="text-caption text-grey-6">{{ t('ajustes.idioma_nota') }}</p>
 
       <q-card v-if="!cuentas.length" flat bordered class="q-pa-lg text-center">
         <q-icon :name="iCuenta" size="36px" class="text-grey-7" />
-        <div class="text-body2 text-grey-5 q-mt-sm">Todavía no hay cuentas conectadas.</div>
+        <div class="text-body2 text-grey-5 q-mt-sm">{{ t('ajustes.sin_cuentas') }}</div>
       </q-card>
 
       <q-list v-else bordered separator class="rounded-borders">
@@ -240,70 +248,67 @@ const estadoEntrega = (w) => {
           <q-item-section>
             <q-item-label>
               {{ c.display_name }}
-              <q-badge v-if="c.status === 'reauth'" color="warning" text-color="black" label="Reconectar" class="q-ml-xs" />
-              <q-badge v-if="c.own_app" outline color="grey-6" label="app propia" class="q-ml-xs" />
+              <q-badge v-if="c.status === 'reauth'" color="warning" text-color="black" :label="t('ajustes.reconectar_badge')" class="q-ml-xs" />
+              <q-badge v-if="c.own_app" outline color="grey-6" :label="t('ajustes.app_propia_badge')" class="q-ml-xs" />
             </q-item-label>
             <q-item-label caption>
               <template v-if="c.destinations.length">
-                Vinculada a {{ nombresDestinos(c).join(', ') }}
+                {{ t('ajustes.vinculada_a', { nombres: nombresDestinos(c).join(', ') }) }}
               </template>
-              <template v-else>Sin destinos vinculados</template>
-              <template v-if="c.quota_used_today != null"> · {{ c.quota_used_today.toLocaleString('es') }} unidades hoy</template>
+              <template v-else>{{ t('ajustes.sin_destinos_vinculados') }}</template>
+              <template v-if="c.quota_used_today != null"> · {{ t('ajustes.unidades_hoy', { n: formatearNumero(c.quota_used_today) }) }}</template>
             </q-item-label>
             <q-item-label v-if="c.status === 'reauth'" caption class="text-warning">
-              La cuenta necesita reconectarse. Ábrela desde Editar → Cuenta en el destino, en el Panel.
-              <q-btn flat dense no-caps size="sm" label="Ir al panel" :to="{ name: 'panel' }" class="q-ml-xs" />
+              {{ t('ajustes.necesita_reconectar') }}
+              <q-btn flat dense no-caps size="sm" :label="t('ajustes.ir_al_panel')" :to="{ name: 'panel' }" class="q-ml-xs" />
             </q-item-label>
           </q-item-section>
           <q-item-section side>
-            <q-btn flat dense no-caps size="sm" :icon="iBorrar" label="Desconectar" class="text-negative"
+            <q-btn flat dense no-caps size="sm" :icon="iBorrar" :label="t('ajustes.desconectar')" class="text-negative"
                    @click="desconectar(c)" />
           </q-item-section>
         </q-item>
       </q-list>
 
-      <div class="text-h6 q-mt-xl q-mb-sm">Grabación</div>
+      <div class="text-h6 q-mt-xl q-mb-sm">{{ t('ajustes.grabacion_titulo') }}</div>
       <q-card flat bordered>
         <q-card-section v-if="grabacion" class="q-gutter-y-md">
           <p class="text-body2 text-grey-5 q-mb-none">
-            Guarda una copia de cada emisión en el servidor, en FLV y por segmentos, sin
-            transcodificar. Si el disco no da abasto, se degrada la grabación, nunca el directo.
+            {{ t('ajustes.grabacion_explicacion') }}
           </p>
           <q-toggle
-            :model-value="grabacion.enabled" label="Grabar las emisiones"
+            :model-value="grabacion.enabled" :label="t('ajustes.grabar_emisiones')"
             :disable="guardandoGrab" @update:model-value="alternarGrabacion"
           />
           <div class="row q-col-gutter-md">
             <q-input v-model.number="formGrab.segment_min" type="number" min="0" max="240" outlined dense
-                     label="Minutos por segmento" hint="0 = un solo archivo" class="col-12 col-sm-4" />
+                     :label="t('ajustes.minutos_por_segmento')" :hint="t('ajustes.minutos_hint')" class="col-12 col-sm-4" />
             <q-input v-model.number="formGrab.max_gb" type="number" min="0.1" step="0.5" outlined dense
-                     label="Tope en GB" hint="Al llegar, se borran las más antiguas" class="col-12 col-sm-4" />
+                     :label="t('ajustes.tope_gb')" :hint="t('ajustes.tope_gb_hint')" class="col-12 col-sm-4" />
             <q-input v-model.number="formGrab.keep_days" type="number" min="0" outlined dense
-                     label="Días de retención" hint="0 = solo manda el tope en GB" class="col-12 col-sm-4" />
+                     :label="t('ajustes.dias_retencion')" :hint="t('ajustes.dias_retencion_hint')" class="col-12 col-sm-4" />
           </div>
           <div class="row items-center q-gutter-sm">
-            <q-btn unelevated no-caps color="primary" label="Guardar" :loading="guardandoGrab" @click="guardarGrabacion" />
-            <q-btn flat no-caps :icon="iGrabaciones" label="Ver grabaciones" :to="{ name: 'grabaciones' }" />
+            <q-btn unelevated no-caps color="primary" :label="t('comun.guardar')" :loading="guardandoGrab" @click="guardarGrabacion" />
+            <q-btn flat no-caps :icon="iGrabaciones" :label="t('ajustes.ver_grabaciones')" :to="{ name: 'grabaciones' }" />
           </div>
           <div class="text-caption text-grey-5">
             <q-icon :name="iDisco" size="14px" class="q-mr-xs" />{{ usoGrabacion }}
-            <br />Carpeta: <span class="mono">{{ grabacion.dir }}</span>
+            <br />{{ t('ajustes.carpeta') }} <span class="mono">{{ grabacion.dir }}</span>
           </div>
         </q-card-section>
       </q-card>
 
-      <div class="text-h6 q-mt-xl q-mb-sm">Respaldo</div>
+      <div class="text-h6 q-mt-xl q-mb-sm">{{ t('ajustes.respaldo_titulo') }}</div>
       <q-card flat bordered>
         <q-card-section>
           <p class="text-body2 text-grey-5 q-mb-md">
-            Descarga una copia de la base de datos: canales, claves cifradas y contraseña del
-            panel. <b>Sin tu clave maestra el archivo no sirve</b>: guárdala aparte.
+            {{ t('ajustes.respaldo_p1_pre') }} <b>{{ t('ajustes.respaldo_p1_bold') }}</b>{{ t('ajustes.respaldo_p1_post') }}
           </p>
           <p class="text-body2 text-grey-5 q-mb-md">
-            Con una emisión en curso no se puede: la copia retiene la base y frenaría a tus
-            canales. Descárgalo al terminar.
+            {{ t('ajustes.respaldo_p2') }}
           </p>
-          <q-btn unelevated no-caps color="primary" :icon="iDescargar" label="Descargar respaldo"
+          <q-btn unelevated no-caps color="primary" :icon="iDescargar" :label="t('ajustes.descargar_respaldo')"
                  :loading="respaldando" @click="respaldar" />
         </q-card-section>
       </q-card>

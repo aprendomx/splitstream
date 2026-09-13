@@ -4,6 +4,7 @@ import { useQuasar } from 'quasar'
 import { iDescargar, iBorrar, iGrabaciones } from '@/iconos'
 import { api } from '@/api'
 import { bytesLegibles, duracionLegible } from '@/diagnostico'
+import { t, formatearFecha } from '@/i18n'
 
 // Lista de segmentos grabados, del más reciente al más antiguo, con descarga y borrado.
 // La descarga es un enlace: el navegador manda la cookie y el backend responde con
@@ -35,16 +36,16 @@ function cargarMas() {
 
 function borrar(g) {
   $q.dialog({
-    title: 'Eliminar grabación',
-    message: `Se borrará «${nombre(g)}» del disco. No se puede deshacer.`,
-    cancel: { flat: true, noCaps: true, label: 'Cancelar' },
-    ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Eliminar' },
+    title: t('grabaciones.eliminar_titulo'),
+    message: t('grabaciones.eliminar_mensaje', { nombre: nombre(g) }),
+    cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
+    ok: { color: 'negative', unelevated: true, noCaps: true, label: t('comun.eliminar') },
     persistent: true,
   }).onOk(async () => {
     try {
       await api.borrarGrabacion(g.id)
       lista.value = lista.value.filter((x) => x.id !== g.id)
-      $q.notify({ type: 'positive', message: 'Grabación eliminada' })
+      $q.notify({ type: 'positive', message: t('grabaciones.eliminada') })
     } catch (e) {
       $q.notify({ type: 'negative', message: e.message })
     }
@@ -52,21 +53,20 @@ function borrar(g) {
 }
 
 const nombre = (g) => g.path.split('/').at(-1)
-const fecha = (iso) => new Date(iso).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' })
 </script>
 
 <template>
   <q-page class="q-pa-md q-pb-xl">
     <div class="contenido">
       <div class="row items-center q-mb-sm">
-        <div class="text-h6">Grabaciones</div>
+        <div class="text-h6">{{ t('app.grabaciones') }}</div>
         <q-space />
-        <q-btn flat no-caps label="Ajustes" :to="{ name: 'ajustes' }" />
+        <q-btn flat no-caps :label="t('app.ajustes')" :to="{ name: 'ajustes' }" />
       </div>
 
       <q-card v-if="!lista.length && !cargando" flat bordered class="q-pa-lg text-center">
         <q-icon :name="iGrabaciones" size="36px" class="text-grey-7" />
-        <div class="text-body2 text-grey-5 q-mt-sm">Todavía no hay grabaciones. Actívalas en Ajustes.</div>
+        <div class="text-body2 text-grey-5 q-mt-sm">{{ t('grabaciones.sin_grabaciones') }}</div>
       </q-card>
 
       <q-list v-else bordered separator class="rounded-borders">
@@ -74,18 +74,18 @@ const fecha = (iso) => new Date(iso).toLocaleString('es', { dateStyle: 'medium',
           <q-item-section>
             <q-item-label>
               {{ nombre(g) }}
-              <q-badge v-if="g.in_progress" color="negative" label="en curso" class="q-ml-xs" />
+              <q-badge v-if="g.in_progress" color="negative" :label="t('grabaciones.en_curso')" class="q-ml-xs" />
             </q-item-label>
             <q-item-label caption>
-              {{ fecha(g.started_at) }} · sesión {{ g.session_id ?? '—' }} · segmento {{ g.segment }}
+              {{ formatearFecha(g.started_at) }} · {{ t('grabaciones.sesion', { id: g.session_id ?? '—' }) }} · {{ t('grabaciones.segmento', { n: g.segment }) }}
               · {{ duracionLegible(g.duration_ms / 1000) }} · {{ bytesLegibles(g.bytes) }}
             </q-item-label>
           </q-item-section>
           <q-item-section side>
             <div class="row items-center no-wrap q-gutter-xs">
-              <q-btn flat round dense :icon="iDescargar" size="sm" aria-label="Descargar" :disable="g.in_progress"
+              <q-btn flat round dense :icon="iDescargar" size="sm" :aria-label="t('grabaciones.descargar')" :disable="g.in_progress"
                      type="a" :href="api.urlDescargaGrabacion(g.id)" />
-              <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" aria-label="Eliminar"
+              <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" :aria-label="t('comun.eliminar')"
                      :disable="g.in_progress" @click="borrar(g)" />
             </div>
           </q-item-section>
@@ -93,11 +93,11 @@ const fecha = (iso) => new Date(iso).toLocaleString('es', { dateStyle: 'medium',
       </q-list>
 
       <div v-if="hayMas" class="text-center q-mt-md">
-        <q-btn flat no-caps label="Cargar más" :loading="cargando" @click="cargarMas" />
+        <q-btn flat no-caps :label="t('grabaciones.cargar_mas')" :loading="cargando" @click="cargarMas" />
       </div>
 
       <p class="text-caption text-grey-6 q-mt-lg">
-        Los archivos son FLV, que cualquier reproductor abre. Para pasar uno a MP4 sin recodificar:
+        {{ t('grabaciones.nota_flv') }}
         <code>ffmpeg -i grabacion.flv -c copy grabacion.mp4</code>
       </p>
     </div>

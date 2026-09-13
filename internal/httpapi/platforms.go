@@ -632,7 +632,9 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, codeNotFound, "flujo de autorización desconocido")
 		return
 	}
-	out := authStatusDTO{Status: status, Message: message}
+	// El mensaje del flujo es texto para personas (por qué falló la conexión, qué hacer):
+	// sigue el idioma de la petición como los errores (spec v0.13 §3.3).
+	out := authStatusDTO{Status: status, Message: traducir(idiomaDe(w), message)}
 	if account != nil {
 		dests, _ := s.db.DestinationsOfAccount(r.Context(), account.ID)
 		dto := newAccountDTO(*account, dests)

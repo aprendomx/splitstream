@@ -3,6 +3,7 @@ import { ref, onUnmounted } from 'vue'
 import { api, ApiError } from '@/api'
 import { iVincular } from '@/iconos'
 import AsistenteCredenciales from '@/components/AsistenteCredenciales.vue'
+import { t } from '@/i18n'
 
 const props = defineProps({
   plataforma: { type: String, required: true },
@@ -55,7 +56,7 @@ async function empezar(credenciales) {
     estado.value = 'pending'
     sondear()
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'No se pudo iniciar la conexión'
+    error.value = e instanceof ApiError ? e.message : t('conectar.error_iniciar')
   }
 }
 
@@ -65,11 +66,11 @@ async function sondear() {
     estado.value = s.status
     if (s.status === 'done') { emit('conectada', s.account); return }
     if (s.status === 'pending') { temporizador = setTimeout(sondear, 3000); return }
-    error.value = s.message || 'No se pudo completar la conexión'
+    error.value = s.message || t('conectar.error_completar')
   } catch (e) {
     // Un 404 aquí es que el servidor se reinició a mitad: se empieza de nuevo.
     estado.value = 'expired'
-    error.value = 'La conexión se interrumpió; vuelve a empezar'
+    error.value = t('conectar.error_interrumpida')
   }
 }
 
@@ -80,7 +81,7 @@ onUnmounted(() => clearTimeout(temporizador))
   <div class="q-gutter-y-sm">
     <q-btn v-if="!mostrarAsistente && (estado === 'idle' || estado === 'expired' || estado === 'error')"
            unelevated no-caps color="primary"
-           :icon="iVincular" :label="`Conectar cuenta de ${nombre || plataforma}`" @click="empezarClick" />
+           :icon="iVincular" :label="t('conectar.conectar_cuenta', { nombre: nombre || plataforma })" @click="empezarClick" />
 
     <template v-if="mostrarAsistente">
       <AsistenteCredenciales
@@ -92,14 +93,14 @@ onUnmounted(() => clearTimeout(temporizador))
            sigue abierto, que es lo que espera quien se arrepiente a mitad de pegar las
            credenciales y quiere volver al botón de conectar. -->
       <div>
-        <a href="#" class="text-caption enlace-cancelar" @click.prevent="cancelarAsistente">Cancelar</a>
+        <a href="#" class="text-caption enlace-cancelar" @click.prevent="cancelarAsistente">{{ t('comun.cancelar') }}</a>
       </div>
     </template>
 
     <!-- Kick: vuelve por el navegador. Un enlace de verdad, nunca un window.open a mano: el
          segundo lo bloquea cualquier bloqueador de ventanas emergentes. -->
     <div v-if="estado === 'pending' && inicio?.redirect_url" class="codigo-dispositivo q-pa-md rounded-borders">
-      <div class="text-body2 q-mb-sm">Autoriza en una pestaña nueva:</div>
+      <div class="text-body2 q-mb-sm">{{ t('conectar.autoriza_pestana') }}</div>
       <q-btn
         unelevated
         no-caps
@@ -107,15 +108,15 @@ onUnmounted(() => clearTimeout(temporizador))
         :href="inicio.redirect_url"
         target="_blank"
         rel="noopener noreferrer"
-        :label="`Abrir ${nombre || plataforma} para autorizar`"
+        :label="t('conectar.abrir_para_autorizar', { nombre: nombre || plataforma })"
       />
-      <div class="text-caption text-grey-5 q-mt-sm"><q-spinner size="14px" class="q-mr-xs" />Esperando a que autorices…</div>
+      <div class="text-caption text-grey-5 q-mt-sm"><q-spinner size="14px" class="q-mr-xs" />{{ t('conectar.esperando') }}</div>
     </div>
 
     <div v-else-if="estado === 'pending' && inicio" class="codigo-dispositivo q-pa-md rounded-borders">
-      <div class="text-body2">Abre <a :href="inicio.verification_uri" target="_blank" rel="noopener">{{ inicio.verification_uri.replace(/^https:\/\//, '') }}</a> y escribe este código:</div>
+      <div class="text-body2">{{ t('conectar.abre_pre') }} <a :href="inicio.verification_uri" target="_blank" rel="noopener">{{ inicio.verification_uri.replace(/^https:\/\//, '') }}</a> {{ t('conectar.abre_post') }}</div>
       <div class="codigo text-h4 q-my-sm">{{ inicio.user_code }}</div>
-      <div class="text-caption text-grey-5"><q-spinner size="14px" class="q-mr-xs" />Esperando a que autorices… el código vale {{ Math.round(inicio.expires_in / 60) }} min.</div>
+      <div class="text-caption text-grey-5"><q-spinner size="14px" class="q-mr-xs" />{{ t('conectar.esperando_codigo', { mins: Math.round(inicio.expires_in / 60) }) }}</div>
     </div>
     <q-banner v-if="error" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">{{ error }}</q-banner>
   </div>

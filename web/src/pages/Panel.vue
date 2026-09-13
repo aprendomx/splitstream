@@ -6,6 +6,7 @@ import draggable from 'vuedraggable'
 import { usePanel } from '@/stores/panel'
 import { api, ApiError } from '@/api'
 import { bitrateLegible, bytesLegibles, duracionLegible } from '@/diagnostico'
+import { t } from '@/i18n'
 import DialogoDestino from '@/components/DialogoDestino.vue'
 import TarjetaDestino from '@/components/TarjetaDestino.vue'
 import VistaPrevia from '@/components/VistaPrevia.vue'
@@ -59,9 +60,9 @@ const maestroMixto = computed(() => algunoEncendido.value && !todosEncendidos.va
 const alternandoTodos = ref(false)
 
 const tiempoEmitiendo = computed(() => {
-  const t = panel.sesion.started_at
-  if (!panel.haySesion || !t) return null
-  return duracionLegible((Date.now() - new Date(t).getTime()) / 1000)
+  const inicio = panel.sesion.started_at
+  if (!panel.haySesion || !inicio) return null
+  return duracionLegible((Date.now() - new Date(inicio).getTime()) / 1000)
 })
 
 // Porcentaje del tope de grabaciones que ya está ocupado; es lo que decide cuándo la
@@ -84,10 +85,10 @@ async function trasGuardar(avisoLogo) {
   await panel.cargar()
   // El destino sí se guardó; lo que pudo fallar es el logo, que va en otra petición.
   if (avisoLogo) {
-    $q.notify({ type: 'warning', message: `Destino guardado, pero el logo no: ${avisoLogo}` })
+    $q.notify({ type: 'warning', message: t('panel.guardado_sin_logo', { motivo: avisoLogo }) })
     return
   }
-  $q.notify({ type: 'positive', message: 'Destino guardado' })
+  $q.notify({ type: 'positive', message: t('panel.destino_guardado') })
 }
 
 /**
@@ -103,12 +104,10 @@ function alternarTodos(encender) {
   if (!encender && panel.haySesion && algunoEncendido.value) {
     const cuantos = lista.value.filter((d) => d.enabled).length
     $q.dialog({
-      title: 'Apagar todos los canales',
-      message:
-        `Estás emitiendo. Se cortarán ${cuantos} ` +
-        (cuantos === 1 ? 'transmisión en curso.' : 'transmisiones en curso.'),
-      cancel: { flat: true, noCaps: true, label: 'Cancelar' },
-      ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Apagar todos' },
+      title: t('panel.apagar_todos_canales'),
+      message: t('panel.cortara_transmisiones', { n: cuantos }),
+      cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
+      ok: { color: 'negative', unelevated: true, noCaps: true, label: t('panel.apagar_todos_boton') },
       persistent: true,
     }).onOk(() => aplicarTodos(false))
     return
@@ -141,7 +140,7 @@ async function reintentar(d) {
   try {
     await api.reintentarDestino(d.id)
     await panel.cargar()
-    $q.notify({ type: 'info', message: `Reintentando ${d.name}` })
+    $q.notify({ type: 'info', message: t('panel.reintentando', { nombre: d.name }) })
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   }
@@ -151,7 +150,7 @@ async function alAire(d) {
   try {
     await api.salirAlAire(d.id)
     await panel.cargar()
-    $q.notify({ type: 'positive', message: `${d.name} salió al aire` })
+    $q.notify({ type: 'positive', message: t('panel.salio_al_aire', { nombre: d.name }) })
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   }
@@ -161,17 +160,29 @@ async function terminar(d) {
   try {
     await api.terminarEmision(d.id)
     await panel.cargar()
-    $q.notify({ type: 'info', message: `${d.name} terminó la emisión` })
+    $q.notify({ type: 'info', message: t('panel.termino_emision', { nombre: d.name }) })
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   }
 }
 
+// Claves, no texto: se resuelven con t() al mostrarlas, para que la sonda hable en el
+// idioma activo aunque este objeto se construya una sola vez.
 const TITULOS_SONDA = {
-  plausible: { titulo: 'Configuración plausible', tipo: 'positive' },
-  closed_early: { titulo: 'Conecta y se corta', tipo: 'warning' },
-  rejected: { titulo: 'Rechazado', tipo: 'negative' },
-  unreachable: { titulo: 'No se llega al servidor', tipo: 'negative' },
+  plausible: { tituloKey: 'panel.sonda.plausible', tipo: 'positive' },
+  closed_early: { tituloKey: 'panel.sonda.closed_early', tipo: 'warning' },
+  rejected: { tituloKey: 'panel.sonda.rejected', tipo: 'negative' },
+  unreachable: { tituloKey: 'panel.sonda.unreachable', tipo: 'negative' },
+}
+
+// Los diálogos de esta página van con html: true porque necesitan marcas —un <code> para
+// la clave, un salto de línea en el diagnóstico—, y Quasar pinta título y mensaje tal cual.
+// Así que todo dato que entre ahí sale escapado: el nombre de un destino lo escribe quien
+// usa el panel, el diagnóstico trae trozos de la URL y la clave viene de la plataforma.
+function escaparHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c])
 }
 
 async function probar(d) {
@@ -179,24 +190,26 @@ async function probar(d) {
   if (d.platform === 'facebook') {
     const seguir = await new Promise((resolve) => {
       $q.dialog({
-        title: 'Probar en Facebook',
-        message: 'Facebook cuenta cada prueba como una emisión activa. Si tienes el cupo justo, mejor no.',
-        cancel: { flat: true, noCaps: true, label: 'Cancelar' },
-        ok: { unelevated: true, noCaps: true, color: 'primary', label: 'Probar igual' },
+        title: t('panel.probar_facebook_titulo'),
+        message: t('panel.probar_facebook_mensaje'),
+        cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
+        ok: { unelevated: true, noCaps: true, color: 'primary', label: t('panel.probar_igual') },
       }).onOk(() => resolve(true)).onCancel(() => resolve(false))
     })
     if (!seguir) return
   }
-  const aviso = $q.notify({ type: 'ongoing', message: `Probando ${d.name}…`, timeout: 0 })
+  const aviso = $q.notify({ type: 'ongoing', message: t('panel.probando', { nombre: d.name }), timeout: 0 })
   try {
     const r = await api.probarDestino(d.id)
-    const t = TITULOS_SONDA[r.outcome] ?? { titulo: r.outcome, tipo: 'info' }
+    const sonda = TITULOS_SONDA[r.outcome]
+    // r.outcome sin mapear (caso raro) se enseña tal cual: es más útil que ocultarlo.
+    const titulo = sonda ? t(sonda.tituloKey) : escaparHtml(r.outcome)
     aviso()
     $q.dialog({
-      title: t.titulo,
-      message: `${r.message}<br><br><span class="text-caption text-grey-5">${r.stage} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
+      title: titulo,
+      message: `${escaparHtml(r.message)}<br><br><span class="text-caption text-grey-5">${escaparHtml(r.stage)} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
       html: true,
-      ok: { flat: true, noCaps: true, label: 'Cerrar' },
+      ok: { flat: true, noCaps: true, label: t('comun.cerrar') },
     })
   } catch (e) {
     aviso()
@@ -207,16 +220,16 @@ async function probar(d) {
 function borrar(d) {
   // Confirmación antes de una acción irreversible, nombrando lo que se va a borrar.
   $q.dialog({
-    title: 'Eliminar destino',
-    message: `Se eliminará «${d.name}». Los eventos que ya registró se conservan.`,
-    cancel: { flat: true, noCaps: true, label: 'Cancelar' },
-    ok: { color: 'negative', unelevated: true, noCaps: true, label: 'Eliminar' },
+    title: t('panel.eliminar_destino_titulo'),
+    message: t('panel.eliminar_destino_mensaje', { nombre: d.name }),
+    cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
+    ok: { color: 'negative', unelevated: true, noCaps: true, label: t('comun.eliminar') },
     persistent: true,
   }).onOk(async () => {
     try {
       await api.borrarDestino(d.id)
       await panel.cargar()
-      $q.notify({ type: 'positive', message: 'Destino eliminado' })
+      $q.notify({ type: 'positive', message: t('panel.destino_eliminado') })
     } catch (e) {
       $q.notify({ type: 'negative', message: e.message })
     }
@@ -227,10 +240,10 @@ async function revelar(d) {
   try {
     const { key } = await api.revelarClave(d.id)
     $q.dialog({
-      title: `Clave de ${d.name}`,
-      message: `<code class="clave-revelada">${key}</code>`,
+      title: t('panel.clave_de', { nombre: escaparHtml(d.name) }),
+      message: `<code class="clave-revelada">${escaparHtml(key)}</code>`,
       html: true,
-      ok: { flat: true, noCaps: true, label: 'Cerrar' },
+      ok: { flat: true, noCaps: true, label: t('comun.cerrar') },
     })
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
@@ -265,7 +278,7 @@ async function copiar(texto, que) {
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(texto)
-      $q.notify({ type: 'positive', message: `${que} copiado` })
+      $q.notify({ type: 'positive', message: t('panel.copiado', { que }) })
       return true
     }
     const ta = document.createElement('textarea')
@@ -278,12 +291,12 @@ async function copiar(texto, que) {
     const ok = document.execCommand('copy')
     document.body.removeChild(ta)
     if (!ok) throw new Error('execCommand devolvió false')
-    $q.notify({ type: 'positive', message: `${que} copiado` })
+    $q.notify({ type: 'positive', message: t('panel.copiado', { que }) })
     return true
   } catch {
     $q.notify({
       type: 'warning',
-      message: 'Tu navegador no deja copiar aquí. Selecciona el texto y cópialo a mano.',
+      message: t('asistente_credenciales.no_se_pudo_copiar'),
       timeout: 6000,
     })
     return false
@@ -293,16 +306,15 @@ async function copiar(texto, que) {
 /** Rota la clave de ingesta, tras confirmar y avisando de lo que implica. */
 function confirmarRotacion() {
   $q.dialog({
-    title: 'Rotar la clave de ingesta',
+    title: t('panel.rotar_clave_titulo'),
     message:
-      'La clave actual dejará de servir y tendrás que pegar la nueva en OBS.' +
+      t('panel.rotar_clave_mensaje') +
       (panel.haySesion
-        ? '<br><br><b>Estás transmitiendo ahora mismo.</b> La transmisión en curso ' +
-          'continúa; la clave nueva hará falta la próxima vez que arranques OBS.'
+        ? `<br><br><b>${t('panel.transmitiendo_ahora')}</b> ${t('panel.rotar_clave_advertencia')}`
         : ''),
     html: true,
-    cancel: { flat: true, noCaps: true, label: 'Cancelar' },
-    ok: { color: 'primary', unelevated: true, noCaps: true, label: 'Rotar' },
+    cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
+    ok: { color: 'primary', unelevated: true, noCaps: true, label: t('panel.rotar') },
   }).onOk(rotarClave)
 }
 
@@ -315,18 +327,18 @@ async function rotarClave() {
     // La clave se enseña UNA sola vez: es la única ocasión de copiarla. Por eso el diálogo
     // no se puede cerrar por accidente pulsando fuera.
     $q.dialog({
-      title: 'Tu clave nueva',
+      title: t('panel.clave_nueva_titulo'),
       message:
-        '<p>Pégala en OBS ahora. <b>No volverá a mostrarse.</b></p>' +
-        `<p class="clave-nueva">${key}</p>`,
+        `<p>${t('panel.pegala_en_obs')} <b>${t('panel.no_volvera_mostrarse')}</b></p>` +
+        `<p class="clave-nueva">${escaparHtml(key)}</p>`,
       html: true,
       persistent: true,
-      ok: { flat: true, noCaps: true, label: 'Ya la copié' },
-      cancel: { unelevated: true, color: 'primary', noCaps: true, label: 'Copiar' },
+      ok: { flat: true, noCaps: true, label: t('panel.ya_la_copie') },
+      cancel: { unelevated: true, color: 'primary', noCaps: true, label: t('panel.copiar_boton') },
     }).onCancel(() => {
       // El botón "Copiar" ocupa el sitio de cancelar para que quede a la derecha, que es
       // donde va la acción principal.
-      copiar(key, 'Clave')
+      copiar(key, t('panel.clave'))
     })
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
@@ -344,16 +356,16 @@ async function rotarClave() {
         <div class="indicador" :class="panel.haySesion ? 'vivo' : 'apagado'" aria-hidden="true" />
         <div class="col">
           <div class="text-subtitle1">
-            {{ panel.haySesion ? 'Recibiendo señal' : 'Sin señal' }}
+            {{ panel.haySesion ? t('panel.recibiendo_senal') : t('panel.sin_senal') }}
           </div>
           <div class="text-caption text-grey-5">
             <template v-if="panel.haySesion">
               <span v-if="panel.resolucion">{{ panel.resolucion }}</span>
-              <span v-else>resolución pendiente</span>
+              <span v-else>{{ t('panel.resolucion_pendiente') }}</span>
               · {{ bitrateLegible(panel.sesion.bitrate_bps) }}
               <span v-if="tiempoEmitiendo"> · {{ tiempoEmitiendo }}</span>
             </template>
-            <template v-else>Arranca la transmisión en OBS para empezar</template>
+            <template v-else>{{ t('panel.arranca_obs') }}</template>
           </div>
         </div>
         <q-chip
@@ -361,33 +373,33 @@ async function rotarClave() {
           dense square :icon="iGrabar" text-color="white"
           :color="panel.grabacion.degraded ? 'warning' : 'negative'"
         >
-          Grabando · {{ bytesLegibles(panel.grabacion.bytes) }} · disco {{ porcentajeGrabacion }} %
+          {{ t('panel.grabando_detalle', { bytes: bytesLegibles(panel.grabacion.bytes), pct: porcentajeGrabacion }) }}
           <q-tooltip>
             {{ panel.grabacion.degraded
-              ? 'El disco no da abasto: la grabación descarta vídeo, el directo no.'
-              : `Segmento ${panel.grabacion.segments} · ${bytesLegibles(panel.grabacion.free_bytes)} libres` }}
+              ? t('panel.disco_no_da_abasto')
+              : t('panel.segmento_detalle', { segmento: panel.grabacion.segments, libres: bytesLegibles(panel.grabacion.free_bytes) }) }}
           </q-tooltip>
         </q-chip>
         <q-btn v-if="panel.haySesion && !verPrevia" flat dense no-caps size="sm"
-               label="Vista previa" @click="verPrevia = true" />
+               :label="t('panel.vista_previa_boton')" @click="verPrevia = true" />
         <q-btn v-if="panel.haySesion && !verChat && panel.destinos.some((d) => d.account && d.capabilities?.chat)"
-               flat dense no-caps size="sm" :icon="iChat" label="Chat" @click="verChat = true" />
+               flat dense no-caps size="sm" :icon="iChat" :label="t('panel.chat_boton')" @click="verChat = true" />
       </q-card-section>
 
       <q-separator />
 
       <q-card-section v-if="panel.ingesta" class="q-gutter-sm">
-        <div class="text-caption text-grey-5">Configura esto en OBS</div>
+        <div class="text-caption text-grey-5">{{ t('panel.configura_obs') }}</div>
         <!-- Ancho acotado: el botón de copiar pegado al texto en vez de al otro extremo
              de un monitor de 27 pulgadas. -->
         <div class="row items-center no-wrap q-gutter-sm bloque-ingesta">
           <div class="col campo-mono">{{ panel.ingesta.url }}</div>
-          <q-btn flat round dense :icon="iCopiar" aria-label="Copiar el servidor"
-                 @click="copiar(panel.ingesta.url, 'Servidor')" />
+          <q-btn flat round dense :icon="iCopiar" :aria-label="t('panel.copiar_servidor')"
+                 @click="copiar(panel.ingesta.url, t('panel.servidor'))" />
         </div>
         <div class="row items-center no-wrap q-gutter-sm bloque-ingesta">
           <div class="col campo-mono">{{ panel.ingesta.key_mask }}</div>
-          <q-btn flat dense no-caps size="sm" label="Rotar clave" :icon="iRotar"
+          <q-btn flat dense no-caps size="sm" :label="t('panel.rotar_clave')" :icon="iRotar"
                  :loading="rotando" @click="confirmarRotacion" />
         </div>
       </q-card-section>
@@ -399,7 +411,7 @@ async function rotarClave() {
     <TituloEnVivo />
 
     <div class="row items-center q-mb-sm q-gutter-sm">
-      <div class="text-h6">Canales</div>
+      <div class="text-h6">{{ t('panel.canales') }}</div>
       <q-space />
       <q-toggle
         v-if="lista.length > 1"
@@ -407,28 +419,28 @@ async function rotarClave() {
         toggle-indeterminate
         :indeterminate-value="null"
         :disable="alternandoTodos"
-        label="Todos"
+        :label="t('panel.todos')"
         dense
         class="q-mr-sm"
-        :aria-label="todosEncendidos ? 'Apagar todos los canales' : 'Encender todos los canales'"
+        :aria-label="todosEncendidos ? t('panel.apagar_todos_canales') : t('panel.encender_todos_canales')"
         @update:model-value="alternarTodos(!todosEncendidos)"
       >
         <q-tooltip>
-          {{ todosEncendidos ? 'Apagar todos los canales' : 'Pasar la transmisión a todos los canales' }}
+          {{ todosEncendidos ? t('panel.apagar_todos_canales') : t('panel.pasar_a_todos') }}
         </q-tooltip>
       </q-toggle>
-      <q-btn unelevated no-caps color="primary" :icon="iMas" label="Vincular canal"
+      <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('panel.vincular_canal')"
              @click="abrirAlta" />
     </div>
 
     <!-- Estado vacío con la acción, no solo un texto triste. -->
     <q-card v-if="!lista.length" flat bordered class="q-pa-lg text-center">
       <q-icon :name="iBroadcast" size="42px" class="text-grey-7" />
-      <div class="text-subtitle1 q-mt-sm">Todavía no hay canales vinculados</div>
+      <div class="text-subtitle1 q-mt-sm">{{ t('panel.sin_canales_titulo') }}</div>
       <div class="text-body2 text-grey-5 q-mt-xs q-mb-md">
-        Vincula YouTube, Twitch, Facebook o cualquier servidor RTMP y emitirás a todos a la vez.
+        {{ t('panel.sin_canales_detalle') }}
       </div>
-      <q-btn unelevated no-caps color="primary" :icon="iMas" label="Vincular el primero"
+      <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('panel.vincular_primero')"
              @click="abrirAlta" />
     </q-card>
 
@@ -445,7 +457,7 @@ async function rotarClave() {
         <div class="row items-center no-wrap">
           <!-- Asa explícita: sin ella, arrastrar y pulsar compiten en táctil. -->
           <q-icon :name="iArrastrar" size="22px" class="arrastre text-grey-7 q-mr-xs"
-                  :aria-label="`Reordenar ${element.name}`" />
+                  :aria-label="t('destino.reordenar', { nombre: element.name })" />
           <TarjetaDestino
             class="col"
             :destino="element"

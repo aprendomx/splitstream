@@ -9,8 +9,13 @@
 // —Twitch rechazando el handshake, Facebook con el cupo lleno, y nuestro propio bucle de
 // reintentos— producían el MISMO texto. El estado y los contadores sí los distinguen, y de
 // ahí sale el diagnóstico.
+//
+// Los textos viven en los diccionarios (diagnostico.<estado>.titulo/detalle/consejo): esta
+// función devuelve claves, no texto, para que el componente que las enseña (TarjetaDestino)
+// las resuelva con t() en el idioma activo.
 
 import { iOk, iAviso, iFallo, iNeutro, iTrabajando } from '@/iconos'
+import { formatearNumero } from '@/i18n'
 
 export const TONOS = {
   emitiendo: { color: 'positive', icono: iOk },
@@ -23,15 +28,16 @@ export const TONOS = {
 /**
  * @param destino DTO de la API
  * @param haySesion si hay alguien publicando ahora mismo
- * @returns {{tono, titulo, detalle, consejo}}
+ * @returns {{tono, tituloKey, detalleKey, consejoKey, params}}
  */
 export function diagnosticar(destino, haySesion) {
   if (!destino.enabled) {
     return {
       tono: 'neutro',
-      titulo: 'Apagado',
-      detalle: 'No recibe nada mientras esté apagado.',
-      consejo: null,
+      tituloKey: 'diagnostico.apagado.titulo',
+      detalleKey: 'diagnostico.apagado.detalle',
+      consejoKey: null,
+      params: {},
     }
   }
 
@@ -39,34 +45,43 @@ export function diagnosticar(destino, haySesion) {
   if (!haySesion || !m) {
     return {
       tono: 'neutro',
-      titulo: 'En espera',
-      detalle: 'Conectará en cuanto empieces a transmitir desde OBS.',
-      consejo: null,
+      tituloKey: 'diagnostico.espera.titulo',
+      detalleKey: 'diagnostico.espera.detalle',
+      consejoKey: null,
+      params: {},
     }
   }
 
   if (m.state === 'live' && m.degraded) {
     return {
       tono: 'atencion',
-      titulo: 'Emitiendo con pérdidas',
-      detalle: `Está descartando vídeo para no atrasarse (${m.dropped_frames.toLocaleString('es')} fotogramas).`,
+      tituloKey: 'diagnostico.perdidas.titulo',
+      detalleKey: 'diagnostico.perdidas.detalle',
       // El descarte por GOP solo salta cuando la cola se llena, y la cola solo se llena si
       // este destino no traga lo que le mandamos.
-      consejo: 'Tu subida no da abasto para todos los destinos, o esta plataforma va lenta. Baja el bitrate en OBS o apaga un destino.',
+      consejoKey: 'diagnostico.perdidas.consejo',
+      params: { n: formatearNumero(m.dropped_frames) },
     }
   }
 
   if (m.state === 'live') {
     return {
       tono: 'emitiendo',
-      titulo: 'Emitiendo',
-      detalle: null,
-      consejo: null,
+      tituloKey: 'diagnostico.emitiendo.titulo',
+      detalleKey: null,
+      consejoKey: null,
+      params: {},
     }
   }
 
   if (m.state === 'connecting') {
-    return { tono: 'trabajando', titulo: 'Conectando…', detalle: null, consejo: null }
+    return {
+      tono: 'trabajando',
+      tituloKey: 'diagnostico.conectando.titulo',
+      detalleKey: null,
+      consejoKey: null,
+      params: {},
+    }
   }
 
   if (m.state === 'reconnecting') {
@@ -75,53 +90,60 @@ export function diagnosticar(destino, haySesion) {
     if (m.reconnections >= 3 && m.bytes_sent > 0) {
       return {
         tono: 'fallo',
-        titulo: 'Conecta y se corta',
-        detalle: `${m.reconnections} reconexiones. La plataforma acepta la conexión y la cierra enseguida.`,
-        consejo: 'Suele ser que la emisión ya no está abierta en la plataforma, que la clave caducó, o que alcanzaste su límite de emisiones activas.',
+        tituloKey: 'diagnostico.corte.titulo',
+        detalleKey: 'diagnostico.corte.detalle',
+        consejoKey: 'diagnostico.corte.consejo',
+        params: { n: formatearNumero(m.reconnections) },
       }
     }
     if (m.bytes_sent === 0) {
       return {
         tono: 'fallo',
-        titulo: 'No llega a transmitir',
-        detalle: `${m.reconnections} intentos sin conseguir enviar nada.`,
-        consejo: 'Revisa la clave: es lo que falla casi siempre. Si la acabas de pegar, comprueba que la copiaste entera.',
+        tituloKey: 'diagnostico.sin_envio.titulo',
+        detalleKey: 'diagnostico.sin_envio.detalle',
+        consejoKey: 'diagnostico.sin_envio.consejo',
+        params: { n: formatearNumero(m.reconnections) },
       }
     }
     return {
       tono: 'atencion',
-      titulo: 'Reconectando…',
-      detalle: m.last_error ? 'Se cayó la conexión y está volviendo a intentarlo.' : null,
-      consejo: null,
+      tituloKey: 'diagnostico.reconectando.titulo',
+      detalleKey: m.last_error ? 'diagnostico.reconectando.detalle' : null,
+      consejoKey: null,
+      params: {},
     }
   }
 
   if (m.state === 'suspended') {
     return {
       tono: 'fallo',
-      titulo: 'Suspendido',
-      detalle: 'Dejó de reintentar en esta emisión.',
-      consejo: 'Revisa la URL y la clave y pulsa «Reintentar». Si no haces nada, volverá a intentarlo en la próxima emisión.',
+      tituloKey: 'diagnostico.suspendido.titulo',
+      detalleKey: 'diagnostico.suspendido.detalle',
+      consejoKey: 'diagnostico.suspendido.consejo',
+      params: {},
     }
   }
 
   if (m.state === 'error') {
     return {
       tono: 'fallo',
-      titulo: 'Error',
-      detalle: m.last_error ? 'No se pudo conectar con la plataforma.' : null,
-      consejo: 'Revisa la URL y la clave del destino.',
+      tituloKey: 'diagnostico.error.titulo',
+      detalleKey: m.last_error ? 'diagnostico.error.detalle' : null,
+      consejoKey: 'diagnostico.error.consejo',
+      params: {},
     }
   }
 
-  return { tono: 'neutro', titulo: 'Inactivo', detalle: null, consejo: null }
+  return { tono: 'neutro', tituloKey: 'diagnostico.inactivo.titulo', detalleKey: null, consejoKey: null, params: {} }
 }
 
 /** Formatea un bitrate para leerlo de un vistazo. */
 export function bitrateLegible(bps) {
   if (!bps) return '—'
-  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`
-  return `${Math.round(bps / 1000)} kbps`
+  if (bps >= 1_000_000) {
+    return `${formatearNumero(bps / 1_000_000, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} Mbps`
+  }
+  return `${formatearNumero(Math.round(bps / 1000))} kbps`
 }
 
 /** Formatea bytes acumulados. */
@@ -130,7 +152,8 @@ export function bytesLegibles(b) {
   const u = ['B', 'KB', 'MB', 'GB', 'TB']
   let i = 0
   while (b >= 1024 && i < u.length - 1) { b /= 1024; i++ }
-  return `${b.toFixed(i === 0 ? 0 : 1)} ${u[i]}`
+  const decimales = i === 0 ? 0 : 1
+  return `${formatearNumero(b, { minimumFractionDigits: decimales, maximumFractionDigits: decimales })} ${u[i]}`
 }
 
 /** Duración en formato h:mm:ss, para el tiempo emitiendo. */

@@ -1,9 +1,19 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useQuasar } from 'quasar'
 import { iCerrar } from '@/iconos'
 import { usePanel } from '@/stores/panel'
+import { api } from '@/api'
+import { t, formatearNumero } from '@/i18n'
+import { nombrePorId } from '@/plataformas'
 
 const panel = usePanel()
+const $q = useQuasar()
+// Con `sesionId` el chat es de lectura: enseña lo que quedó guardado de esa sesión en vez
+// de abrir el WebSocket del chat en vivo. Es el mismo render y las mismas pestañas; lo que
+// cambia es de dónde salen los mensajes y que no hay nada que cerrar ni cuota que gastar.
+const props = defineProps({ sesionId: { type: Number, default: 0 } })
+const lectura = computed(() => props.sesionId > 0)
 const emit = defineEmits(['cerrar'])
 const mensajes = ref([])
 const pestaña = ref('todos')
@@ -32,6 +42,27 @@ const fraccionCuota = computed(() => {
   if (!mostrarCuota.value) return 0
   return Math.min(1, cuentaConCuota.value.quota_used_today / presupuesto.value)
 })
+
+// Página del histórico. El endpoint devuelve los mensajes en orden ascendente a partir de
+// `after`, así que «cargar más» pide desde el último id que ya se tiene y los añade al
+// final: se lee de arriba abajo, como se vivió.
+const PAGINA_CHAT = 200
+const cargandoHistorial = ref(false)
+const hayMasHistorial = ref(false)
+
+async function cargarHistorial() {
+  cargandoHistorial.value = true
+  try {
+    const desde = mensajes.value.at(-1)?.id ?? 0
+    const nuevos = await api.chatSesion(props.sesionId, desde, PAGINA_CHAT)
+    mensajes.value = [...mensajes.value, ...nuevos]
+    hayMasHistorial.value = nuevos.length === PAGINA_CHAT
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  } finally {
+    cargandoHistorial.value = false
+  }
+}
 
 function conectar() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -66,6 +97,10 @@ const REFRESCO_CUOTA = 60_000
 let refresco = null
 
 onMounted(() => {
+  if (lectura.value) {
+    cargarHistorial()
+    return
+  }
   conectar()
   panel.cargarCuentas()
   refresco = setInterval(() => panel.cargarCuentas(), REFRESCO_CUOTA)
@@ -81,24 +116,29 @@ onUnmounted(() => {
   <q-card flat bordered class="chat column no-wrap q-mb-md">
     <div class="row items-center q-px-sm q-pt-xs">
       <q-tabs v-model="pestaña" dense no-caps class="col">
-        <q-tab name="todos" label="Todos" />
-        <q-tab v-for="p in plataformas" :key="p" :name="p" :label="p" />
+        <q-tab name="todos" :label="t('chat.todos')" />
+        <q-tab v-for="p in plataformas" :key="p" :name="p" :label="nombrePorId(p)" />
       </q-tabs>
-      <q-btn flat round dense :icon="iCerrar" aria-label="Cerrar el chat" @click="emit('cerrar')" />
+      <q-btn v-if="!lectura" flat round dense :icon="iCerrar" :aria-label="t('chat.cerrar_chat')" @click="emit('cerrar')" />
     </div>
-    <div v-if="mostrarCuota" class="q-px-sm q-pt-xs cuota">
+    <div v-if="mostrarCuota && !lectura" class="q-px-sm q-pt-xs cuota">
       <q-linear-progress :value="fraccionCuota" color="warning" track-color="grey-9" size="6px" rounded />
       <div class="text-caption text-grey-5 q-mt-xs">
-        {{ cuentaConCuota.quota_used_today.toLocaleString('es') }} / {{ presupuesto.toLocaleString('es') }} unidades hoy<template v-if="cuotaDiaria > 0"> (cuota diaria {{ cuotaDiaria.toLocaleString('es') }})</template>
-        · el chat se pausará a {{ presupuesto.toLocaleString('es') }}
+        {{ t('chat.cuota_texto', { usados: formatearNumero(cuentaConCuota.quota_used_today), presupuesto: formatearNumero(presupuesto) }) }}<template v-if="cuotaDiaria > 0"> {{ t('chat.cuota_diaria_texto', { cuota: formatearNumero(cuotaDiaria) }) }}</template>
+        · {{ t('chat.cuota_pausa', { presupuesto: formatearNumero(presupuesto) }) }}
       </div>
     </div>
-    <div ref="lista" class="col scroll mensajes q-px-sm q-pb-sm" aria-live="polite">
-      <div v-if="!visibles.length" class="text-caption text-grey-6 q-pa-md text-center">Aquí aparecerá el chat cuando llegue.</div>
+    <div ref="lista" class="col scroll mensajes q-px-sm q-pb-sm" :aria-live="lectura ? 'off' : 'polite'">
+      <div v-if="!visibles.length && !cargandoHistorial" class="text-caption text-grey-6 q-pa-md text-center">
+        {{ lectura ? t('chat.sin_guardado') : t('chat.vacio') }}
+      </div>
       <div v-for="(m, i) in visibles" :key="m.message_id || i" class="mensaje">
         <span class="autor" :style="{ color: m.color || 'inherit' }">{{ m.author }}</span>
-        <span v-if="m.badges?.some((b) => b.startsWith('moderator'))" class="insignia">mod</span>:
+        <span v-if="m.badges?.some((b) => b.startsWith('moderator'))" class="insignia">{{ t('chat.insignia_mod') }}</span>:
         <span class="texto">{{ m.text }}</span>
+      </div>
+      <div v-if="lectura && hayMasHistorial" class="text-center q-py-sm">
+        <q-btn flat dense no-caps :label="t('chat.cargar_mas')" :loading="cargandoHistorial" @click="cargarHistorial" />
       </div>
     </div>
   </q-card>
