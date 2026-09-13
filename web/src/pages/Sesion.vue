@@ -5,6 +5,7 @@ import { useQuasar } from 'quasar'
 import { iDescargar, iFiltro } from '@/iconos'
 import { api, ApiError } from '@/api'
 import { usePanel } from '@/stores/panel'
+import { nombrePorId } from '@/plataformas'
 import { bitrateLegible, bytesLegibles, duracionLegible } from '@/diagnostico'
 import Chat from '@/components/Chat.vue'
 import { t, formatearFecha, formatearNumero } from '@/i18n'
@@ -166,7 +167,7 @@ const nombreGrabacion = (g) => g.path.split('/').at(-1)
             <div v-if="ficha.chat_count">
               {{ t('sesion.chat_total', { n: ficha.chat_count, total: formatearNumero(ficha.chat_count) }) }}
               <span v-for="[plataforma, n] in resumen.chat" :key="plataforma" class="text-grey-5">
-                · {{ t('sesion.chat_plataforma', { plataforma, n: formatearNumero(n) }) }}
+                · {{ t('sesion.chat_plataforma', { plataforma: nombrePorId(plataforma), n: formatearNumero(n) }) }}
               </span>
             </div>
             <div v-else>{{ t('sesion.sin_chat') }}</div>
@@ -208,6 +209,11 @@ const nombreGrabacion = (g) => g.path.split('/').at(-1)
             </q-item>
             <q-item v-if="!eventos.length">
               <q-item-section class="text-grey-6 text-caption">{{ t('sesion.sin_eventos') }}</q-item-section>
+            </q-item>
+            <!-- El servidor corta la lista en su tope: sin este aviso, una línea de
+                 tiempo incompleta se leería como la sesión entera. -->
+            <q-item v-if="ficha.events_truncated">
+              <q-item-section class="text-grey-6 text-caption">{{ t('sesion.eventos_truncados') }}</q-item-section>
             </q-item>
           </q-list>
         </q-card>

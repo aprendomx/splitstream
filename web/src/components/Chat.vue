@@ -5,6 +5,7 @@ import { iCerrar } from '@/iconos'
 import { usePanel } from '@/stores/panel'
 import { api } from '@/api'
 import { t, formatearNumero } from '@/i18n'
+import { nombrePorId } from '@/plataformas'
 
 const panel = usePanel()
 const $q = useQuasar()
@@ -116,7 +117,7 @@ onUnmounted(() => {
     <div class="row items-center q-px-sm q-pt-xs">
       <q-tabs v-model="pestaña" dense no-caps class="col">
         <q-tab name="todos" :label="t('chat.todos')" />
-        <q-tab v-for="p in plataformas" :key="p" :name="p" :label="p" />
+        <q-tab v-for="p in plataformas" :key="p" :name="p" :label="nombrePorId(p)" />
       </q-tabs>
       <q-btn v-if="!lectura" flat round dense :icon="iCerrar" :aria-label="t('chat.cerrar_chat')" @click="emit('cerrar')" />
     </div>

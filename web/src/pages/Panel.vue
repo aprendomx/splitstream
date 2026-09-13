@@ -175,6 +175,16 @@ const TITULOS_SONDA = {
   unreachable: { tituloKey: 'panel.sonda.unreachable', tipo: 'negative' },
 }
 
+// Los diálogos de esta página van con html: true porque necesitan marcas —un <code> para
+// la clave, un salto de línea en el diagnóstico—, y Quasar pinta título y mensaje tal cual.
+// Así que todo dato que entre ahí sale escapado: el nombre de un destino lo escribe quien
+// usa el panel, el diagnóstico trae trozos de la URL y la clave viene de la plataforma.
+function escaparHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c])
+}
+
 async function probar(d) {
   // Facebook cuenta cada publicación como emisión activa, y las cuenta contra un cupo.
   if (d.platform === 'facebook') {
@@ -193,11 +203,11 @@ async function probar(d) {
     const r = await api.probarDestino(d.id)
     const sonda = TITULOS_SONDA[r.outcome]
     // r.outcome sin mapear (caso raro) se enseña tal cual: es más útil que ocultarlo.
-    const titulo = sonda ? t(sonda.tituloKey) : r.outcome
+    const titulo = sonda ? t(sonda.tituloKey) : escaparHtml(r.outcome)
     aviso()
     $q.dialog({
       title: titulo,
-      message: `${r.message}<br><br><span class="text-caption text-grey-5">${r.stage} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
+      message: `${escaparHtml(r.message)}<br><br><span class="text-caption text-grey-5">${escaparHtml(r.stage)} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
       html: true,
       ok: { flat: true, noCaps: true, label: t('comun.cerrar') },
     })
@@ -230,8 +240,8 @@ async function revelar(d) {
   try {
     const { key } = await api.revelarClave(d.id)
     $q.dialog({
-      title: t('panel.clave_de', { nombre: d.name }),
-      message: `<code class="clave-revelada">${key}</code>`,
+      title: t('panel.clave_de', { nombre: escaparHtml(d.name) }),
+      message: `<code class="clave-revelada">${escaparHtml(key)}</code>`,
       html: true,
       ok: { flat: true, noCaps: true, label: t('comun.cerrar') },
     })
@@ -320,7 +330,7 @@ async function rotarClave() {
       title: t('panel.clave_nueva_titulo'),
       message:
         `<p>${t('panel.pegala_en_obs')} <b>${t('panel.no_volvera_mostrarse')}</b></p>` +
-        `<p class="clave-nueva">${key}</p>`,
+        `<p class="clave-nueva">${escaparHtml(key)}</p>`,
       html: true,
       persistent: true,
       ok: { flat: true, noCaps: true, label: t('panel.ya_la_copie') },

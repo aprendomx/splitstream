@@ -1,7 +1,7 @@
 <script setup>
 import { iBorrar, iCerrar, iClaveApi, iError, iInfo, iOcultar, iVer } from '@/iconos'
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { PLATAFORMAS, porId, pideServidor } from '@/plataformas'
+import { PLATAFORMAS, porId, pideServidor, nombreDe } from '@/plataformas'
 import { api, ApiError } from '@/api'
 import { usePanel } from '@/stores/panel'
 import ConectarCuenta from '@/components/ConectarCuenta.vue'
@@ -225,7 +225,7 @@ const logoVisible = computed(() => {
 function elegir(p) {
   plataforma.value = p.id
   // El nombre se propone, no se impone: es lo que el usuario verá en la lista.
-  if (!nombre.value) nombre.value = p.nombre
+  if (!nombre.value) nombre.value = nombreDe(p)
   if (p.url) servidor.value = p.url
   cuentaId.value = null
   cargarCuentas()
@@ -329,7 +329,7 @@ async function guardar() {
             @click="elegir(p)"
           >
             <q-icon :name="p.icono" size="28px" :style="{ color: p.color }" />
-            <span class="nombre">{{ p.nombre }}</span>
+            <span class="nombre">{{ nombreDe(p) }}</span>
           </button>
         </div>
       </q-card-section>
@@ -338,7 +338,7 @@ async function guardar() {
       <q-card-section v-else class="col scroll q-pt-none q-gutter-y-md">
         <div v-if="plat" class="row items-center q-gutter-sm cabecera-plataforma">
           <q-icon :name="plat.icono" size="24px" :style="{ color: plat.color }" />
-          <div class="text-subtitle1">{{ plat.nombre }}</div>
+          <div class="text-subtitle1">{{ nombreDe(plat) }}</div>
           <q-space />
           <q-btn
             v-if="!editando"
@@ -404,10 +404,10 @@ async function guardar() {
           </div>
           <q-select v-if="cuentas.length" v-model="cuentaId" :options="[{label: t('dialogo_destino.sin_cuenta_opcion'), value: null}, ...cuentas.map(c => ({label: c.display_name + (c.status === 'reauth' ? t('dialogo_destino.reconectar_sufijo') : ''), value: c.id}))]"
                     emit-value map-options outlined dense :label="t('dialogo_destino.cuenta_vinculada_label')" />
-          <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="plat?.nombre"
+          <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="nombreDe(plat)"
                           :requiere-app="Boolean(capacidades?.requires_own_app)" @conectada="trasConectar" />
           <q-banner v-else dense class="bg-grey-9 text-grey-3 rounded-borders">
-            {{ t('dialogo_destino.banner_necesita_client_id_pre', { plataforma: plat?.nombre }) }} <code>SPLITSTREAM_TWITCH_CLIENT_ID</code> {{ t('dialogo_destino.banner_necesita_client_id_post') }}
+            {{ t('dialogo_destino.banner_necesita_client_id_pre', { plataforma: nombreDe(plat) }) }} <code>SPLITSTREAM_TWITCH_CLIENT_ID</code> {{ t('dialogo_destino.banner_necesita_client_id_post') }}
           </q-banner>
         </div>
 

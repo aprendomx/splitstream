@@ -56,7 +56,12 @@ async function entrar() {
         <q-toolbar-title class="text-weight-medium">Splitstream</q-toolbar-title>
         <q-btn-dropdown flat dense no-caps :label="idioma.toUpperCase()" :aria-label="t('app.idioma')">
           <q-list>
-            <q-item v-for="l in idiomas" :key="l.id" clickable v-close-popup @click="cambiarIdioma(l.id)">
+            <q-item
+              v-for="l in idiomas" :key="l.id" clickable v-close-popup
+              :active="l.id === idioma"
+              :aria-current="l.id === idioma ? 'true' : undefined"
+              @click="cambiarIdioma(l.id)"
+            >
               <q-item-section>{{ l.nombre }}</q-item-section>
             </q-item>
           </q-list>

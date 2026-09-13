@@ -8,6 +8,7 @@
 // documentación: YouTube y Twitch por RTMP, Facebook por RTMPS —retiró el RTMP plano—.
 
 import { iYoutube, iTwitch, iFacebook, iKick, iX, iTiktok, iServidor } from '@/iconos'
+import { t } from '@/i18n'
 
 export const PLATAFORMAS = [
   {
@@ -65,7 +66,9 @@ export const PLATAFORMAS = [
   },
   {
     id: 'custom',
-    nombre: 'Otro (RTMP/RTMPS)',
+    // Las seis de arriba son marcas y se escriben igual en cualquier idioma; «Otro» no es
+    // una marca sino una descripción, así que va por la tabla de traducciones.
+    nombreKey: 'plataformas.custom.nombre',
     // Sin dondeKey a propósito: no hay una plataforma real cuyo menú describir, es
     // cualquier servidor RTMP/RTMPS propio del usuario.
     url: null,
@@ -75,6 +78,19 @@ export const PLATAFORMAS = [
 ]
 
 export const porId = (id) => PLATAFORMAS.find((p) => p.id === id) ?? PLATAFORMAS.at(-1)
+
+/** El nombre que se le enseña a una persona: la marca tal cual, o la clave traducida. */
+export const nombreDe = (p) => (p?.nombreKey ? t(p.nombreKey) : (p?.nombre ?? ''))
+
+/**
+ * El nombre a partir del id que manda el servidor (el chat, los eventos de una sesión).
+ * Un id que no está en el catálogo sale tal cual: decir «Otro» de algo que tiene nombre
+ * propio sería peor que enseñar el id.
+ */
+export const nombrePorId = (id) => {
+  const p = PLATAFORMAS.find((x) => x.id === id)
+  return p ? nombreDe(p) : String(id ?? '')
+}
 
 /** Las que no traen URL fija piden servidor además de clave. */
 export const pideServidor = (id) => porId(id).url === null

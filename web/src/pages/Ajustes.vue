@@ -39,9 +39,14 @@ function desconectar(c) {
   const nombres = nombresDestinos(c)
   const cuantos = nombres.length
   const lista = cuantos ? ` (${nombres.join(', ')})` : ''
+  // Sin canales vinculados no se pregunta por «0 canales» —la forma plural de una cuenta
+  // que no arrastra nada—, se dice lo que de verdad va a pasar: solo se va la cuenta.
+  const mensaje = cuantos
+    ? t('ajustes.desconectar_mensaje', { n: cuantos, lista })
+    : t('ajustes.desconectar_sin_canales')
   $q.dialog({
     title: t('ajustes.desconectar_titulo'),
-    message: t('ajustes.desconectar_mensaje', { n: cuantos, lista }),
+    message: mensaje,
     cancel: { flat: true, noCaps: true, label: t('comun.cancelar') },
     ok: { color: 'negative', unelevated: true, noCaps: true, label: t('ajustes.desconectar') },
     persistent: true,
