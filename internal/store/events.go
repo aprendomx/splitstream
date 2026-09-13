@@ -149,6 +149,27 @@ func (d *DB) LogEvent(ctx context.Context, e Event) (int64, error) {
 	return id, nil
 }
 
+// scanEvent lee un Event de la fila actual de un cursor con las columnas
+// id, session_id, destination_id, level, kind, message, created_at (en ese orden).
+// Lo comparten RecentEvents y EventsBySession para no duplicar el escaneo.
+func scanEvent(rows *sql.Rows) (Event, error) {
+	var (
+		e         Event
+		level     string
+		createdAt string
+	)
+	if err := rows.Scan(&e.ID, &e.SessionID, &e.DestinationID, &level,
+		&e.Kind, &e.Message, &createdAt); err != nil {
+		return Event{}, err
+	}
+	e.Level = Level(level)
+	var err error
+	if e.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return Event{}, fmt.Errorf("created_at inválido: %w", err)
+	}
+	return e, nil
+}
+
 // RecentEvents devuelve los eventos del más reciente al más antiguo.
 func (d *DB) RecentEvents(ctx context.Context, limit int) ([]Event, error) {
 	if limit <= 0 {
@@ -168,18 +189,9 @@ func (d *DB) RecentEvents(ctx context.Context, limit int) ([]Event, error) {
 
 	out := []Event{}
 	for rows.Next() {
-		var (
-			e         Event
-			level     string
-			createdAt string
-		)
-		if err := rows.Scan(&e.ID, &e.SessionID, &e.DestinationID, &level,
-			&e.Kind, &e.Message, &createdAt); err != nil {
+		e, err := scanEvent(rows)
+		if err != nil {
 			return nil, fmt.Errorf("leer eventos: %w", err)
-		}
-		e.Level = Level(level)
-		if e.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
-			return nil, fmt.Errorf("created_at inválido: %w", err)
 		}
 		out = append(out, e)
 	}
