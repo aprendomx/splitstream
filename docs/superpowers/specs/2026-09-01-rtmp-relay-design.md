@@ -439,6 +439,10 @@ POST   /api/destinations/:id/broadcast/start → `transition` a `live` (YouTube)
                                                 en Kick
 POST   /api/destinations/:id/broadcast/end   → `transition` a `complete` (YouTube);   (v0.12)
                                                 409 en Kick
+
+GET    /api/sessions/:id                   → ficha de una sesión: sus eventos, sus      (v0.13)
+                                              grabaciones y los contadores de chat;
+                                              404 si no existe
 ```
 
 Errores siempre con la forma `{"error": {"code": "...", "message": "..."}}`.
@@ -448,6 +452,15 @@ Errores siempre con la forma `{"error": {"code": "...", "message": "..."}}`.
 
 **Desde la v0.10:** `statusDTO` gana `panel {tls, public_url}` y
 `update {available, latest, url}`.
+
+**Desde la v0.13:** el `message` de los errores se traduce según `Accept-Language` de la
+petición (`es` por defecto; `en` si el primer idioma reconocido de la cabecera es inglés).
+El `code` **no cambia nunca**: es el contrato de la API; el `message` es texto para
+personas. No hay variable de entorno de idioma: el idioma es de quien pide, no del proceso.
+Lo que no se traduce: los logs (`slog`), los eventos persistidos (`events.message`), los
+avisos salientes por webhook y `/metrics`. `GET /api/sessions` gana `has_recording` por
+fila, calculado con una subconsulta `EXISTS`, para que el historial no tenga que hacer N
+peticiones.
 
 **Desde la v0.12:** `capabilitiesDTO` pasa a siete campos (`title`, `category`, `chat`,
 `schedule`, `ingest_key`, `requires_own_app`, `requires_public_url`); `accountDTO` gana
@@ -477,6 +490,25 @@ SPA Quasar servida por el binario vía `go:embed`. Dark mode por defecto, respon
 Estado en Pinia alimentado por el WebSocket, con reconexión automática y backoff. El
 snapshot inicial viene de `GET /api/status` para que la UI no dependa de que el WS
 conecte primero.
+
+**Desde la v0.13, el panel es bilingüe (es/en)** sin librería de i18n: `web/src/i18n/index.js`
+exporta un `t(clave, params)` propio —búsqueda en el diccionario del idioma activo,
+interpolación de `{nombre}`, plural por sufijo `_plural` según `params.n`, y caída al
+español si falta una clave— más `idioma`, `cambiarIdioma(l)` e `idiomas`. Los textos viven
+en los **dos únicos archivos** que hay que tocar para añadir un idioma,
+`web/src/i18n/es.json` y `web/src/i18n/en.json`, con claves con punto por área
+(`panel.titulo`, `destino.probar`). Ningún componente lleva copy literal salvo nombres
+propios (plataformas, «OBS», «RTMP») y unidades. Fechas y números por `Intl` con el idioma
+activo; Quasar recibe su paquete con `Quasar.lang.set`, y `document.documentElement.lang`
+sigue al idioma. El idioma se elige por `navigator.language` la primera vez y se guarda en
+`localStorage` (`splitstream.idioma`) al cambiarlo; el selector está en la barra de
+`App.vue` y en el primer paso del asistente de configuración inicial. Un script de paridad
+de claves corre en `prebuild` y en CI.
+
+Páginas nuevas de la v0.13: `Historial.vue` (`/historial`, lista de sesiones con duración,
+resolución, bitrate, contadores de eventos por nivel e icono de grabación) y `Sesion.vue`
+(`/historial/:id`, ficha con resumen calculado en el cliente, línea de tiempo filtrable por
+nivel, chat de la sesión en lectura y grabaciones con descarga).
 
 ## 11. Pruebas
 
