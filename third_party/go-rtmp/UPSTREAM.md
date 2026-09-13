@@ -10,6 +10,7 @@
 | N.º | Archivo | Qué arregla | Test |
 | --- | --- | --- | --- |
 | 1 | `conn.go`, `stream.go` | `Stream.Write` tenía 5 s cableados (`// TODO: Fix 5s`), así que una plataforma que deja de consumir tardaba 5 s en dar error y el sink no podía reconectar antes. Ahora el plazo sale de `ConnConfig.WriteTimeout` (0 → los 5 s de siempre, comportamiento por defecto intacto) y se añade `Stream.WriteContext` para quien quiera traer su propio contexto. | `TestWriteToAStalledPeerFailsWithinThreeSeconds` (`internal/rtmpio/publisher_test.go`) |
+| 2 | `streams.go`, `streams_test.go` | `streams.At` leía el mapa `streams` sin candado mientras `Create`/`Delete` escriben con `Lock`, lo que provocaba `DATA RACE` (y a veces `fatal error: concurrent map read and map write`) bajo acceso concurrente. `m` pasa de `sync.Mutex` a `sync.RWMutex`; `At` toma `RLock`/`RUnlock`; `Create`, `CreateIfAvailable` y `Delete` siguen con `Lock` como hasta ahora. | `TestStreamsAtIsSafeAgainstConcurrentDelete` (`third_party/go-rtmp/streams_test.go`) |
 
 ## Regenerar
 

@@ -8,6 +8,7 @@
 package rtmp
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,4 +38,24 @@ func TestStreams(t *testing.T) {
 	// Becomes error because the stream is already deleted
 	err = streams.Delete(s.streamID)
 	require.NotNil(t, err)
+}
+
+// TestStreamsAtIsSafeAgainstConcurrentDelete exercises streams.At concurrently
+// with streams.Create/Delete to catch unsynchronized map access under -race.
+func TestStreamsAtIsSafeAgainstConcurrentDelete(t *testing.T) {
+	c := newConn(&rwcMock{}, &ConnConfig{ControlState: StreamControlStateConfig{MaxMessageStreams: 64}})
+	ss := c.streams
+	var wg sync.WaitGroup
+	for i := uint32(1); i < 32; i++ {
+		id := i
+		wg.Add(2)
+		go func() { defer wg.Done(); _, _ = ss.Create(id); _ = ss.Delete(id) }()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_, _ = ss.At(id)
+			}
+		}()
+	}
+	wg.Wait()
 }
