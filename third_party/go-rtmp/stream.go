@@ -133,10 +133,10 @@ func (s *Stream) ReplyConnect(
 }
 
 func (s *Stream) CreateStream(body *message.NetConnectionCreateStream, chunkSize uint32) (*message.NetConnectionCreateStreamResult, error) {
-	oldChunkSize := s.conn.streamer.selfState.chunkSize
+	oldChunkSize := s.conn.streamer.selfState.ChunkSize()
 	if chunkSize > 0 && chunkSize != oldChunkSize {
 		logrus.Infof("Changing chunkSize %d->%d", oldChunkSize, chunkSize)
-		s.conn.streamer.selfState.chunkSize = chunkSize
+		s.conn.streamer.selfState.chunkSize.Store(chunkSize)
 		err := s.WriteSetChunkSize(chunkSize)
 		if err != nil {
 			return nil, err

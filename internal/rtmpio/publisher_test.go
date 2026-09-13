@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -610,4 +612,191 @@ func TestWriteToAStalledPeerFailsWithinThreeSeconds(t *testing.T) {
 	}
 	t.Logf("%d escrituras de 64 KiB llenaron el búfer en %v; la siguiente falló tras %v: %v",
 		escritas, time.Since(arranque)-d, d, errEscritura)
+}
+
+// comandoRecibido es un comando de control que llegó a la ingesta, con el stream por el
+// que llegó.
+type comandoRecibido struct {
+	nombre   string
+	streamID uint32
+}
+
+// registroDeComandos es un IngestHandler que además anota, en orden, cada comando de
+// control. Implementa el gancho opcional OnComando de ingest.go.
+type registroDeComandos struct {
+	recorder
+
+	mu   sync.Mutex
+	cmds []comandoRecibido
+}
+
+func (r *registroDeComandos) OnComando(nombre string, streamID uint32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cmds = append(r.cmds, comandoRecibido{nombre: nombre, streamID: streamID})
+}
+
+func (r *registroDeComandos) registro() []comandoRecibido {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]comandoRecibido(nil), r.cmds...)
+}
+
+func (r *registroDeComandos) nombres() []string {
+	out := []string{}
+	for _, c := range r.registro() {
+		out = append(out, c.nombre)
+	}
+	return out
+}
+
+// esperaComandos espera a que hayan llegado al menos n comandos. Los hooks se llaman
+// desde la goroutine de la conexión, así que Connect puede volver antes de que el
+// servidor haya terminado de procesar el último.
+func (r *registroDeComandos) esperaComandos(t *testing.T, n int) {
+	t.Helper()
+	limite := time.Now().Add(5 * time.Second)
+	for time.Now().Before(limite) {
+		if len(r.registro()) >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("solo llegaron %v; quería al menos %d comandos", r.nombres(), n)
+}
+
+// TestPreCommandsGoThroughTheControlStreamBeforeCreateStream: con PreCommands, el
+// publisher manda releaseStream y FCPublish por el stream de control ANTES de
+// createStream, como FMLE/OBS (spec base §15.9, spec v1.0 §3.3); sin la opción —el valor
+// por defecto— no manda ninguno de los dos.
+//
+// Sobre el stream id: go-rtmp no le pasa al handler el stream por el que llegó
+// releaseStream o FCPublish, porque no hace falta: SOLO los despacha desde el handler del
+// stream de control (server_control_connected_handler.go), nunca desde el de un stream de
+// datos. Que el hook se dispare ya prueba que llegaron por el stream 0; para publish, en
+// cambio, el StreamContext sí trae el id y ahí la comprobación de que NO es el 0 mide algo.
+func TestPreCommandsGoThroughTheControlStreamBeforeCreateStream(t *testing.T) {
+	for _, caso := range []struct {
+		nombre string
+		pre    bool
+		want   []string
+	}{
+		{"con precomandos", true, []string{"connect", "releaseStream", "FCPublish", "createStream", "publish"}},
+		{"sin precomandos", false, []string{"connect", "createStream", "publish"}},
+	} {
+		t.Run(caso.nombre, func(t *testing.T) {
+			reg := &registroDeComandos{}
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: reg, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			go ing.Serve(ln)
+			defer ing.Close()
+
+			p, err := NewPublisher(PublisherConfig{
+				URL:         "rtmp://" + ln.Addr().String() + "/live",
+				StreamKey:   crypto.Secret("clave"),
+				ChunkSize:   DefaultChunkSize,
+				PreCommands: caso.pre,
+				Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+			})
+			if err != nil {
+				t.Fatalf("NewPublisher: %v", err)
+			}
+			defer p.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := p.Connect(ctx); err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+			// La foto se toma antes de Close a propósito: FCUnpublish llega después y no
+			// es lo que esta prueba mide.
+			reg.esperaComandos(t, len(caso.want))
+
+			if got := reg.nombres(); !reflect.DeepEqual(got, caso.want) {
+				t.Errorf("comandos = %v, quería %v", got, caso.want)
+			}
+			for _, c := range reg.registro() {
+				switch c.nombre {
+				case "releaseStream", "FCPublish":
+					if c.streamID != 0 {
+						t.Errorf("%s llegó por el stream %d, quería 0", c.nombre, c.streamID)
+					}
+				case "publish":
+					if c.streamID == 0 {
+						t.Error("publish llegó por el stream de control, quería uno de datos")
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestFCUnpublishGoesThroughTheSameStreamAsThePreCommands: con PreCommands, el cierre
+// manda FCUnpublish por el stream de control (como FMLE); sin la opción sigue yendo por
+// el stream de datos, que es el comportamiento de siempre.
+func TestFCUnpublishGoesThroughTheSameStreamAsThePreCommands(t *testing.T) {
+	for _, caso := range []struct {
+		nombre string
+		pre    bool
+		// Con PreCommands, FCUnpublish llega por el stream de control y el handler lo ve
+		// como OnFCUnpublish. Por el stream de datos, en cambio, go-rtmp no lo despacha:
+		// el handler del stream que publica no conoce ese comando.
+		wantFCUnpublish bool
+	}{
+		{"con precomandos", true, true},
+		{"sin precomandos", false, false},
+	} {
+		t.Run(caso.nombre, func(t *testing.T) {
+			reg := &registroDeComandos{}
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: reg, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			go ing.Serve(ln)
+			defer ing.Close()
+
+			p, err := NewPublisher(PublisherConfig{
+				URL:         "rtmp://" + ln.Addr().String() + "/live",
+				StreamKey:   crypto.Secret("clave"),
+				PreCommands: caso.pre,
+				Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+			})
+			if err != nil {
+				t.Fatalf("NewPublisher: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := p.Connect(ctx); err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+			if err := p.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+
+			vio := func() bool {
+				for _, c := range reg.registro() {
+					if c.nombre == "FCUnpublish" {
+						return true
+					}
+				}
+				return false
+			}
+			if caso.wantFCUnpublish {
+				limite := time.Now().Add(5 * time.Second)
+				for !vio() && time.Now().Before(limite) {
+					time.Sleep(5 * time.Millisecond)
+				}
+			} else {
+				// Un margen para que, si llegara, diera tiempo a registrarse.
+				time.Sleep(200 * time.Millisecond)
+			}
+			if got := vio(); got != caso.wantFCUnpublish {
+				t.Errorf("FCUnpublish por el stream de control = %v, quería %v (comandos: %v)", got, caso.wantFCUnpublish, reg.nombres())
+			}
+		})
+	}
 }

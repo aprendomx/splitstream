@@ -9,6 +9,7 @@ package rtmp
 
 import (
 	"math"
+	"sync/atomic"
 
 	"github.com/pkg/errors"
 	"github.com/yutopp/go-rtmp/message"
@@ -18,7 +19,10 @@ const DefaultChunkSize = 128
 const MaxChunkSize = 0xffffff // 5.4.1
 
 type StreamControlState struct {
-	chunkSize           uint32
+	// chunkSize is atomic because it is written by the goroutine that calls
+	// Stream.CreateStream while the writer scheduler goroutine reads it on every
+	// chunk it writes (ChunkStreamer.writeChunk).
+	chunkSize           atomic.Uint32
 	ackWindowSize       int32
 	bandwidthWindowSize int32
 	bandwidthLimitType  message.LimitType
@@ -99,18 +103,20 @@ func NewStreamControlState(config *StreamControlStateConfig) *StreamControlState
 		config = defaultStreamControlStateConfig
 	}
 
-	return &StreamControlState{
-		chunkSize:           config.DefaultChunkSize,
+	s := &StreamControlState{
 		ackWindowSize:       config.DefaultAckWindowSize,
 		bandwidthWindowSize: config.DefaultBandwidthWindowSize,
 		bandwidthLimitType:  config.DefaultBandwidthLimitType,
 
 		config: config,
 	}
+	s.chunkSize.Store(config.DefaultChunkSize)
+
+	return s
 }
 
 func (s *StreamControlState) ChunkSize() uint32 {
-	return s.chunkSize
+	return s.chunkSize.Load()
 }
 
 func (s *StreamControlState) SetChunkSize(chunkSize uint32) error {
@@ -122,7 +128,7 @@ func (s *StreamControlState) SetChunkSize(chunkSize uint32) error {
 		return errors.Errorf("Exceeded configured max chunk size: Limit = %d, Value = %d", s.config.MaxChunkSize, chunkSize)
 	}
 
-	s.chunkSize = chunkSize
+	s.chunkSize.Store(chunkSize)
 
 	return nil
 }

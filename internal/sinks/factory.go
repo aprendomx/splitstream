@@ -34,6 +34,8 @@ type Factory struct {
 	cipher *crypto.Cipher
 	logger *slog.Logger
 	recDir string
+	// preCommands se fija una sola vez al arrancar, como recDir.
+	preCommands bool
 }
 
 func NewFactory(db *store.DB, c *crypto.Cipher, logger *slog.Logger) *Factory {
@@ -58,9 +60,9 @@ func (f *Factory) Build(ctx context.Context, d store.Destination) (*relay.Sink, 
 		return nil, err
 	}
 
-	url, name, id := d.RTMPURL, d.Name, d.ID
+	url, name, id, pre := d.RTMPURL, d.Name, d.ID, f.preCommands
 	if _, err := rtmpio.NewPublisher(rtmpio.PublisherConfig{
-		URL: url, StreamKey: key, Logger: f.logger,
+		URL: url, StreamKey: key, Logger: f.logger, PreCommands: pre,
 	}); err != nil {
 		return nil, err
 	}
@@ -71,7 +73,7 @@ func (f *Factory) Build(ctx context.Context, d store.Destination) (*relay.Sink, 
 		// Cada reconexión necesita un publisher nuevo: uno cerrado no se reabre.
 		NewPub: func() (relay.Publisher, error) {
 			return rtmpio.NewPublisher(rtmpio.PublisherConfig{
-				URL: url, StreamKey: key, Logger: f.logger,
+				URL: url, StreamKey: key, Logger: f.logger, PreCommands: pre,
 			})
 		},
 		Logger: f.logger,
@@ -142,6 +144,14 @@ func (f *Factory) Test(ctx context.Context, d store.Destination) (probe.Result, 
 		URL: d.RTMPURL, StreamKey: key, Logger: f.logger,
 	}, probeGrace), nil
 }
+
+// SetRTMPPreCommands enciende releaseStream y FCPublish antes de createStream en los
+// publishers que construya esta fábrica (SPLITSTREAM_RTMP_PRECOMMANDS). Se fija al
+// arrancar, como el directorio de grabaciones.
+//
+// La sonda de Test NO lo hereda a propósito: es una sonda, y lo que responde tiene que
+// ser sobre la URL y la clave, no sobre una opción de compatibilidad.
+func (f *Factory) SetRTMPPreCommands(v bool) { f.preCommands = v }
 
 // SetRecordingsDir fija el directorio raíz de las grabaciones. Sin él, BuildRecorder no
 // construye nada: grabar sin saber dónde no es una opción.

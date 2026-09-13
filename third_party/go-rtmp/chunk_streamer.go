@@ -248,8 +248,8 @@ func (cs *ChunkStreamer) readChunk() (*ChunkStreamReader, error) {
 		panic("invalid state") // TODO fix
 	}
 
-	if uint32(expectLen) > cs.peerState.chunkSize {
-		expectLen = int(cs.peerState.chunkSize)
+	if peerChunkSize := cs.peerState.ChunkSize(); uint32(expectLen) > peerChunkSize {
+		expectLen = int(peerChunkSize)
 	}
 	//cs.logger.Debugf("(READ) Length = %d", expectLen)
 
@@ -278,8 +278,8 @@ func (cs *ChunkStreamer) writeChunk(writer *ChunkStreamWriter) (bool, error) {
 	//cs.logger.Debugf("(WRITE) Buffer: %+v", writer.buf.Bytes())
 
 	expectLen := writer.buf.Len()
-	if uint32(expectLen) > cs.selfState.chunkSize {
-		expectLen = int(cs.selfState.chunkSize)
+	if selfChunkSize := cs.selfState.ChunkSize(); uint32(expectLen) > selfChunkSize {
+		expectLen = int(selfChunkSize)
 	}
 
 	if err := encodeChunkBasicHeader(cs.w, &writer.basicHeader); err != nil {

@@ -1,0 +1,34 @@
+diff --git a/client_conn.go b/client_conn.go
+--- a/client_conn.go
++++ b/client_conn.go
+@@ -20,6 +20,7 @@ import (
+ // ClientConn A wrapper of a connection. It prorives client-side specific features.
+ type ClientConn struct {
+ 	conn    *Conn
++	ctrl    *Stream
+ 	lastErr error
+ 	m       sync.RWMutex
+ }
+@@ -45,12 +46,22 @@ func newClientConnWithSetup(c net.Conn, config *ConnConfig) (*ClientConn, error)
+ 
+ 	cc := &ClientConn{
+ 		conn: conn,
++		ctrl: ctrlStream,
+ 	}
+ 	go cc.startHandleMessageLoop()
+ 
+ 	return cc, nil
+ }
+ 
++// ControlStream returns the control stream (stream ID 0) of this connection.
++//
++// FMLE-style commands such as releaseStream and FCPublish must be sent on the control
++// stream and before createStream. Without this accessor the only *Stream the public API
++// ever returned was the one from CreateStream, so callers could not send them at all.
++func (cc *ClientConn) ControlStream() *Stream {
++	return cc.ctrl
++}
++
+ func (cc *ClientConn) Close() error {
+ 	return cc.conn.Close()
+ }

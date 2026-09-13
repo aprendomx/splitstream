@@ -1,0 +1,81 @@
+diff --git a/conn_state.go b/conn_state.go
+--- a/conn_state.go
++++ b/conn_state.go
+@@ -9,6 +9,7 @@ package rtmp
+ 
+ import (
+ 	"math"
++	"sync/atomic"
+ 
+ 	"github.com/pkg/errors"
+ 	"github.com/yutopp/go-rtmp/message"
+@@ -18,7 +19,10 @@ const DefaultChunkSize = 128
+ const MaxChunkSize = 0xffffff // 5.4.1
+ 
+ type StreamControlState struct {
+-	chunkSize           uint32
++	// chunkSize is atomic because it is written by the goroutine that calls
++	// Stream.CreateStream while the writer scheduler goroutine reads it on every
++	// chunk it writes (ChunkStreamer.writeChunk).
++	chunkSize           atomic.Uint32
+ 	ackWindowSize       int32
+ 	bandwidthWindowSize int32
+ 	bandwidthLimitType  message.LimitType
+@@ -99,18 +103,20 @@ func NewStreamControlState(config *StreamControlStateConfig) *StreamControlState
+ 		config = defaultStreamControlStateConfig
+ 	}
+ 
+-	return &StreamControlState{
+-		chunkSize:           config.DefaultChunkSize,
++	s := &StreamControlState{
+ 		ackWindowSize:       config.DefaultAckWindowSize,
+ 		bandwidthWindowSize: config.DefaultBandwidthWindowSize,
+ 		bandwidthLimitType:  config.DefaultBandwidthLimitType,
+ 
+ 		config: config,
+ 	}
++	s.chunkSize.Store(config.DefaultChunkSize)
++
++	return s
+ }
+ 
+ func (s *StreamControlState) ChunkSize() uint32 {
+-	return s.chunkSize
++	return s.chunkSize.Load()
+ }
+ 
+ func (s *StreamControlState) SetChunkSize(chunkSize uint32) error {
+@@ -122,7 +128,7 @@ func (s *StreamControlState) SetChunkSize(chunkSize uint32) error {
+ 		return errors.Errorf("Exceeded configured max chunk size: Limit = %d, Value = %d", s.config.MaxChunkSize, chunkSize)
+ 	}
+ 
+-	s.chunkSize = chunkSize
++	s.chunkSize.Store(chunkSize)
+ 
+ 	return nil
+ }
+diff --git a/chunk_streamer.go b/chunk_streamer.go
+--- a/chunk_streamer.go
++++ b/chunk_streamer.go
+@@ -248,8 +248,8 @@ func (cs *ChunkStreamer) readChunk() (*ChunkStreamReader, error) {
+ 		panic("invalid state") // TODO fix
+ 	}
+ 
+-	if uint32(expectLen) > cs.peerState.chunkSize {
+-		expectLen = int(cs.peerState.chunkSize)
++	if peerChunkSize := cs.peerState.ChunkSize(); uint32(expectLen) > peerChunkSize {
++		expectLen = int(peerChunkSize)
+ 	}
+ 	//cs.logger.Debugf("(READ) Length = %d", expectLen)
+ 
+@@ -278,8 +278,8 @@ func (cs *ChunkStreamer) writeChunk(writer *ChunkStreamWriter) (bool, error) {
+ 	//cs.logger.Debugf("(WRITE) Buffer: %+v", writer.buf.Bytes())
+ 
+ 	expectLen := writer.buf.Len()
+-	if uint32(expectLen) > cs.selfState.chunkSize {
+-		expectLen = int(cs.selfState.chunkSize)
++	if selfChunkSize := cs.selfState.ChunkSize(); uint32(expectLen) > selfChunkSize {
++		expectLen = int(selfChunkSize)
+ 	}
+ 
+ 	if err := encodeChunkBasicHeader(cs.w, &writer.basicHeader); err != nil {

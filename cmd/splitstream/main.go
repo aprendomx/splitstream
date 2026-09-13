@@ -377,6 +377,7 @@ func run(ctx context.Context, out io.Writer) error {
 	// vez aquí hacía que la segunda transmisión reutilizara el timebase de la primera.
 	factory := sinks.NewFactory(db, cipher, logger)
 	factory.SetRecordingsDir(cfg.RecordingsDir)
+	factory.SetRTMPPreCommands(cfg.RTMPPreCommands)
 	// Antes de que el motor pueda abrir una sesión: las filas que quedaron «en curso» de
 	// un arranque anterior (kill -9, corte de luz) se cierran con lo que diga el archivo,
 	// o se borran si el archivo no está. Si no, esas filas no se pueden descargar ni

@@ -584,6 +584,60 @@ func TestUpdateCheckCanBeTurnedOff(t *testing.T) {
 	}
 }
 
+// SPLITSTREAM_RTMP_PRECOMMANDS está APAGADA por defecto y solo la encienden true, 1 y
+// yes: un valor escrito mal no puede encender algo que se midió rompiendo Twitch.
+func TestRTMPPreCommandsIsOffUnlessAskedFor(t *testing.T) {
+	for _, caso := range []struct {
+		valor  string
+		puesta bool
+		want   bool
+	}{
+		{"", false, false}, // ausente
+		{"true", true, true},
+		{"1", true, true},
+		{"yes", true, true},
+		{"TRUE", true, true},
+		{"false", true, false},
+		{"sí", true, false}, // valor inválido: apagada, sin fallar el arranque
+		{"", true, false},   // puesta pero vacía
+	} {
+		nombre := caso.valor
+		if !caso.puesta {
+			nombre = "(ausente)"
+		} else if caso.valor == "" {
+			nombre = "(vacía)"
+		}
+		t.Run(nombre, func(t *testing.T) {
+			env := map[string]string{"SPLITSTREAM_MASTER_KEY": testKeyB64()}
+			if caso.puesta {
+				env["SPLITSTREAM_RTMP_PRECOMMANDS"] = caso.valor
+			}
+			cfg, err := config.LoadFrom(lookup(env))
+			if err != nil {
+				t.Fatalf("LoadFrom: %v", err)
+			}
+			if cfg.RTMPPreCommands != caso.want {
+				t.Errorf("RTMPPreCommands = %v, quería %v", cfg.RTMPPreCommands, caso.want)
+			}
+		})
+	}
+}
+
+// La opción se ve en el log del arranque: si alguien la enciende, que quede dicho.
+func TestConfigLogValueShowsRTMPPreCommands(t *testing.T) {
+	cfg, err := config.LoadFrom(lookup(map[string]string{
+		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_RTMP_PRECOMMANDS": "true",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("cfg", "config", cfg)
+	if !strings.Contains(buf.String(), "rtmp_precommands=true") {
+		t.Errorf("el log no trae rtmp_precommands=true: %s", buf.String())
+	}
+}
+
 func TestConfigLogValueShowsTLSButNoSecrets(t *testing.T) {
 	cfg, err := config.LoadFrom(lookup(map[string]string{
 		"SPLITSTREAM_MASTER_KEY": testKeyB64(), "SPLITSTREAM_TLS_DOMAIN": "a.ejemplo.com",
