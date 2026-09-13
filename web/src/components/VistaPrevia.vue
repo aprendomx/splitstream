@@ -1,5 +1,6 @@
 <script setup>
 import { onBeforeUnmount, ref } from 'vue'
+import { t } from '@/i18n'
 
 // La vista previa silenciada: solo vídeo, decodificado con WebCodecs y pintado en un
 // canvas. Sin librerías — VideoDecoder y canvas son APIs del navegador, y el servidor
@@ -10,7 +11,7 @@ import { onBeforeUnmount, ref } from 'vue'
 const emit = defineEmits(['cerrar'])
 
 const lienzo = ref(null)
-const aviso = ref('Conectando…')
+const aviso = ref(t('vista_previa.conectando'))
 
 let ws = null
 let decoder = null
@@ -66,19 +67,19 @@ async function configurar(avcc) {
   const config = { codec, description: avcc, optimizeForLatency: true }
 
   if (typeof VideoDecoder === 'undefined') {
-    cerrar('Tu navegador no soporta la vista previa')
+    cerrar(t('vista_previa.sin_soporte'))
     return
   }
   const soporte = await VideoDecoder.isConfigSupported(config).catch(() => null)
   if (cerrado || mia !== generacion) return
   if (!soporte?.supported) {
-    cerrar('Tu navegador no soporta la vista previa')
+    cerrar(t('vista_previa.sin_soporte'))
     return
   }
 
   decoder = new VideoDecoder({
     output: pintar,
-    error: () => cerrar('La vista previa falló al decodificar'),
+    error: () => cerrar(t('vista_previa.fallo_decodificar')),
   })
   decoder.configure(config)
   esperandoKeyframe = true
@@ -110,7 +111,9 @@ function conectar() {
   // Sin reconexión, a propósito: la vista es bajo demanda y gasta subida del servidor.
   // El servidor cierra con motivo («sin señal», «la emisión terminó») y ese texto es lo
   // que se le enseña al usuario, que decide si reabrir.
-  ws.onclose = (ev) => { ws = null; cerrar(ev.reason || 'La vista previa se cortó') }
+  // ev.reason lo manda el servidor tal cual (aún en español, spec §7): traducirlo es
+  // trabajo del backend, fuera de esta tarea. Solo el respaldo de aquí abajo pasa por t().
+  ws.onclose = (ev) => { ws = null; cerrar(ev.reason || t('vista_previa.se_corto')) }
 }
 
 conectar()
@@ -120,9 +123,9 @@ onBeforeUnmount(() => cerrar())
 <template>
   <q-card flat bordered class="q-mb-md">
     <q-card-section class="row items-center q-py-xs">
-      <div class="text-caption text-grey-5">Vista previa · sin sonido</div>
+      <div class="text-caption text-grey-5">{{ t('vista_previa.encabezado') }}</div>
       <q-space />
-      <q-btn flat dense no-caps size="sm" label="Cerrar" @click="cerrar()" />
+      <q-btn flat dense no-caps size="sm" :label="t('comun.cerrar')" @click="cerrar()" />
     </q-card-section>
     <q-separator />
     <q-card-section class="q-pa-none cuadro">

@@ -2,24 +2,27 @@
 import { computed } from 'vue'
 import { iRegistro } from '@/iconos'
 import { usePanel } from '@/stores/panel'
+import { t, formatearFecha } from '@/i18n'
 
 // El «panel de log en vivo» del spec base §10, que hasta la v0.8 nadie había pintado. Se
 // alimenta de recent_events, que viaja con el estado: no hay petición aparte.
 const panel = usePanel()
 
-const NIVEL = {
-  info: { color: 'grey-6', etiqueta: 'info' },
-  warn: { color: 'warning', etiqueta: 'aviso' },
-  error: { color: 'negative', etiqueta: 'error' },
-}
+// El color es fijo; la etiqueta se resuelve con t() dentro del computed de abajo para que
+// reaccione al cambio de idioma (un objeto de módulo con el texto ya resuelto no lo haría).
+const NIVEL_COLOR = { info: 'grey-6', warn: 'warning', error: 'negative' }
+const NIVEL_CLAVE = { info: 'registro.nivel_info', warn: 'registro.nivel_aviso', error: 'registro.nivel_error' }
 
 const nombreDestino = (id) => panel.destinos.find((d) => d.id === id)?.name ?? null
 
 const filas = computed(() => panel.eventosRecientes.map((e) => ({
   ...e,
-  nivel: NIVEL[e.level] ?? NIVEL.info,
+  nivel: {
+    color: NIVEL_COLOR[e.level] ?? NIVEL_COLOR.info,
+    etiqueta: t(NIVEL_CLAVE[e.level] ?? NIVEL_CLAVE.info),
+  },
   destino: e.destination_id ? nombreDestino(e.destination_id) : null,
-  hora: new Date(e.created_at).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+  hora: formatearFecha(e.created_at, { timeStyle: 'medium' }),
 })))
 </script>
 
@@ -27,9 +30,9 @@ const filas = computed(() => panel.eventosRecientes.map((e) => ({
   <q-card flat bordered>
     <q-card-section class="row items-center q-py-sm">
       <q-icon :name="iRegistro" size="20px" class="q-mr-sm text-grey-5" />
-      <div class="text-subtitle2">Registro</div>
+      <div class="text-subtitle2">{{ t('registro.titulo') }}</div>
       <q-space />
-      <div class="text-caption text-grey-6">últimos {{ filas.length }}</div>
+      <div class="text-caption text-grey-6">{{ t('registro.ultimos', { n: filas.length }) }}</div>
     </q-card-section>
     <q-separator />
     <q-list dense class="registro">
@@ -45,7 +48,7 @@ const filas = computed(() => panel.eventosRecientes.map((e) => ({
         </q-item-section>
       </q-item>
       <q-item v-if="!filas.length">
-        <q-item-section class="text-grey-6 text-caption">Todavía no ha pasado nada.</q-item-section>
+        <q-item-section class="text-grey-6 text-caption">{{ t('registro.vacio') }}</q-item-section>
       </q-item>
     </q-list>
   </q-card>

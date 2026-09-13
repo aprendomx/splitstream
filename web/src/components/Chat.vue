@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { iCerrar } from '@/iconos'
 import { usePanel } from '@/stores/panel'
+import { t, formatearNumero } from '@/i18n'
 
 const panel = usePanel()
 const emit = defineEmits(['cerrar'])
@@ -81,23 +82,23 @@ onUnmounted(() => {
   <q-card flat bordered class="chat column no-wrap q-mb-md">
     <div class="row items-center q-px-sm q-pt-xs">
       <q-tabs v-model="pestaña" dense no-caps class="col">
-        <q-tab name="todos" label="Todos" />
+        <q-tab name="todos" :label="t('chat.todos')" />
         <q-tab v-for="p in plataformas" :key="p" :name="p" :label="p" />
       </q-tabs>
-      <q-btn flat round dense :icon="iCerrar" aria-label="Cerrar el chat" @click="emit('cerrar')" />
+      <q-btn flat round dense :icon="iCerrar" :aria-label="t('chat.cerrar_chat')" @click="emit('cerrar')" />
     </div>
     <div v-if="mostrarCuota" class="q-px-sm q-pt-xs cuota">
       <q-linear-progress :value="fraccionCuota" color="warning" track-color="grey-9" size="6px" rounded />
       <div class="text-caption text-grey-5 q-mt-xs">
-        {{ cuentaConCuota.quota_used_today.toLocaleString('es') }} / {{ presupuesto.toLocaleString('es') }} unidades hoy<template v-if="cuotaDiaria > 0"> (cuota diaria {{ cuotaDiaria.toLocaleString('es') }})</template>
-        · el chat se pausará a {{ presupuesto.toLocaleString('es') }}
+        {{ t('chat.cuota_texto', { usados: formatearNumero(cuentaConCuota.quota_used_today), presupuesto: formatearNumero(presupuesto) }) }}<template v-if="cuotaDiaria > 0"> {{ t('chat.cuota_diaria_texto', { cuota: formatearNumero(cuotaDiaria) }) }}</template>
+        · {{ t('chat.cuota_pausa', { presupuesto: formatearNumero(presupuesto) }) }}
       </div>
     </div>
     <div ref="lista" class="col scroll mensajes q-px-sm q-pb-sm" aria-live="polite">
-      <div v-if="!visibles.length" class="text-caption text-grey-6 q-pa-md text-center">Aquí aparecerá el chat cuando llegue.</div>
+      <div v-if="!visibles.length" class="text-caption text-grey-6 q-pa-md text-center">{{ t('chat.vacio') }}</div>
       <div v-for="(m, i) in visibles" :key="m.message_id || i" class="mensaje">
         <span class="autor" :style="{ color: m.color || 'inherit' }">{{ m.author }}</span>
-        <span v-if="m.badges?.some((b) => b.startsWith('moderator'))" class="insignia">mod</span>:
+        <span v-if="m.badges?.some((b) => b.startsWith('moderator'))" class="insignia">{{ t('chat.insignia_mod') }}</span>:
         <span class="texto">{{ m.text }}</span>
       </div>
     </div>
