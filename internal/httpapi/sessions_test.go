@@ -148,6 +148,33 @@ func TestSessionDetailCarriesEventsRecordingsAndChat(t *testing.T) {
 	if got.ChatByPlatform["twitch"] != 2 || got.ChatByPlatform["kick"] != 1 {
 		t.Errorf("chat_by_platform = %+v", got.ChatByPlatform)
 	}
+	if got.EventsTruncated || got.RecordingsTruncated {
+		t.Errorf("una sesión de dos eventos y una grabación no está truncada: events_truncated=%v recordings_truncated=%v",
+			got.EventsTruncated, got.RecordingsTruncated)
+	}
+}
+
+// TestSessionDetailAvisaCuandoTrunca: traer justo el tope es la única señal de que faltan
+// filas, y la ficha tiene que decirlo. Se prueba sobre el constructor del DTO porque
+// sembrar 2000 eventos en la base solo para contarlos no aporta nada.
+func TestSessionDetailAvisaCuandoTrunca(t *testing.T) {
+	ses := store.Session{ID: 1, StartedAt: time.Now()}
+	eventos := make([]store.Event, store.EventsBySessionLimit)
+	grabaciones := make([]store.Recording, recordingsPorSesionLimit)
+
+	lleno := newSessionDetailDTO(ses, eventos, grabaciones, 0, nil)
+	if !lleno.EventsTruncated {
+		t.Errorf("con %d eventos (el tope) events_truncated debería ser true", len(eventos))
+	}
+	if !lleno.RecordingsTruncated {
+		t.Errorf("con %d grabaciones (el tope) recordings_truncated debería ser true", len(grabaciones))
+	}
+
+	corto := newSessionDetailDTO(ses, eventos[:len(eventos)-1], grabaciones[:len(grabaciones)-1], 0, nil)
+	if corto.EventsTruncated || corto.RecordingsTruncated {
+		t.Errorf("por debajo del tope no hay truncado: events=%v recordings=%v",
+			corto.EventsTruncated, corto.RecordingsTruncated)
+	}
 }
 
 // TestSessionDetailNotFound cubre las dos formas de "no vale": un id que no existe (404)

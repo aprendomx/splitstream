@@ -148,6 +148,18 @@ func TestEventsBySessionIsAscendingScopedAndCapped(t *testing.T) {
 		t.Errorf("con límite = %v", capped)
 	}
 
+	// Un límite por encima del tope no lo salta: pedir 5000 devuelve como mucho el tope.
+	porEncima, err := db.EventsBySession(ctx, s1, 5000)
+	if err != nil {
+		t.Fatalf("EventsBySession por encima del tope: %v", err)
+	}
+	if len(porEncima) > store.EventsBySessionLimit {
+		t.Errorf("con límite 5000 = %d eventos, el tope es %d", len(porEncima), store.EventsBySessionLimit)
+	}
+	if len(porEncima) != 3 {
+		t.Errorf("con límite 5000 = %d eventos, quería los 3 de la sesión", len(porEncima))
+	}
+
 	none, err := db.EventsBySession(ctx, s1+999, 0)
 	if err != nil {
 		t.Fatalf("EventsBySession sesión inexistente: %v", err)

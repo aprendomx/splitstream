@@ -20,11 +20,13 @@ const (
 	defaultSessionLimit = 50
 	maxSessionLimit     = 500
 
-	// eventsBySessionCap es el tope duro de EventsBySession: una sesión de 8 horas
-	// con reconexiones no pasa de unos cientos de eventos, así que el tope es un
-	// cinturón de seguridad, no un límite de diseño.
-	defaultEventsBySessionLimit = 2000
-	eventsBySessionCap          = 2000
+	// EventsBySessionLimit es a la vez el valor por defecto y el tope duro de
+	// EventsBySession: una sesión de 8 horas con reconexiones no pasa de unos cientos
+	// de eventos, así que es un cinturón de seguridad, no un límite de diseño. Eran dos
+	// constantes con el mismo valor y la misma razón de ser; ahora es una sola, y se
+	// exporta porque quien lee la ficha de una sesión necesita saber si el tope mordió
+	// para poder avisar.
+	EventsBySessionLimit = 2000
 )
 
 // ListSessions devuelve sesiones de la más reciente a la más antigua. before pagina por
@@ -81,14 +83,11 @@ func (d *DB) ListSessions(ctx context.Context, limit int, before int64) ([]Sessi
 }
 
 // EventsBySession devuelve los eventos de una sesión del más antiguo al más reciente,
-// para reconstruir su cronología en la vista de historial. limit <= 0 usa
-// defaultEventsBySessionLimit; el tope duro es eventsBySessionCap.
+// para reconstruir su cronología en la vista de historial. limit <= 0 y limit por encima
+// del tope son lo mismo: EventsBySessionLimit.
 func (d *DB) EventsBySession(ctx context.Context, sessionID int64, limit int) ([]Event, error) {
-	if limit <= 0 {
-		limit = defaultEventsBySessionLimit
-	}
-	if limit > eventsBySessionCap {
-		limit = eventsBySessionCap
+	if limit <= 0 || limit > EventsBySessionLimit {
+		limit = EventsBySessionLimit
 	}
 	rows, err := d.ex.QueryContext(ctx,
 		`SELECT id, session_id, destination_id, level, kind, message, created_at

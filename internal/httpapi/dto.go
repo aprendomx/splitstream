@@ -338,6 +338,11 @@ type sessionDetailDTO struct {
 	Recordings     []recordingDTO `json:"recordings"`
 	ChatCount      int            `json:"chat_count"`
 	ChatByPlatform map[string]int `json:"chat_by_platform"`
+	// EventsTruncated y RecordingsTruncated avisan de que el tope mordió: la lista que
+	// va aquí no es toda la sesión. Sin esto, una línea de tiempo cortada se lee como
+	// una sesión que no tuvo más eventos, que es justo lo contrario de lo que pasó.
+	EventsTruncated     bool `json:"events_truncated"`
+	RecordingsTruncated bool `json:"recordings_truncated"`
 }
 
 // newSessionDetailDTO arma la ficha a partir de la sesión y de lo que ya se leyó del
@@ -362,6 +367,11 @@ func newSessionDetailDTO(s store.Session, events []store.Event, recordings []sto
 	for _, r := range recordings {
 		dto.Recordings = append(dto.Recordings, newRecordingDTO(r))
 	}
+	// Venir justo con el tope es la única señal que hay de que faltan filas. Puede haber
+	// un falso positivo —una sesión con exactamente 2000 eventos—, y se prefiere así:
+	// avisar de más es molesto, callar una línea de tiempo incompleta es engañar.
+	dto.EventsTruncated = len(events) >= store.EventsBySessionLimit
+	dto.RecordingsTruncated = len(recordings) >= recordingsPorSesionLimit
 	return dto
 }
 
