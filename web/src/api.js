@@ -138,6 +138,7 @@ export const api = {
   borrarWebhook: (id) => pedir('DELETE', `/api/webhooks/${id}`),
   probarWebhook: (id) => pedir('POST', `/api/webhooks/${id}/test`),
   sesiones: (limit = 50, before = 0) => pedir('GET', `/api/sessions?limit=${limit}&before=${before}`),
+  sesion: (id) => pedir('GET', `/api/sessions/${id}`),
 
   ajustesGrabacion: () => pedir('GET', '/api/recording/settings'),
   editarAjustesGrabacion: (patch) => pedir('PATCH', '/api/recording/settings', patch),

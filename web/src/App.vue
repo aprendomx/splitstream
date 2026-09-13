@@ -1,5 +1,5 @@
 <script setup>
-import { iAjustes, iBroadcast, iGrabaciones, iInfo, iOcultar, iSalir, iVer } from '@/iconos'
+import { iAjustes, iBroadcast, iGrabaciones, iHistorial, iInfo, iOcultar, iSalir, iVer } from '@/iconos'
 import { ref, computed, onMounted } from 'vue'
 import { usePanel } from '@/stores/panel'
 import Asistente from '@/components/Asistente.vue'
@@ -61,6 +61,7 @@ async function entrar() {
             </q-item>
           </q-list>
         </q-btn-dropdown>
+        <q-btn v-if="panel.autenticado" flat round dense :icon="iHistorial" :aria-label="t('app.historial')" :to="{ name: 'historial' }" />
         <q-btn v-if="panel.autenticado" flat round dense :icon="iGrabaciones" :aria-label="t('app.grabaciones')" :to="{ name: 'grabaciones' }" />
         <q-btn v-if="panel.autenticado" flat round dense :icon="iAjustes" :aria-label="t('app.ajustes')" :to="{ name: 'ajustes' }" />
         <q-btn
