@@ -19,13 +19,13 @@ type fakeProvider struct {
 func (f *fakeProvider) ID() platforms.ID                     { return f.id }
 func (f *fakeProvider) Capabilities() platforms.Capabilities { return f.caps }
 func (f *fakeProvider) Configured() bool                     { return false }
-func (f *fakeProvider) BeginAuth(context.Context) (platforms.AuthPrompt, error) {
+func (f *fakeProvider) BeginAuth(context.Context, platforms.Credentials) (platforms.AuthPrompt, error) {
 	return platforms.AuthPrompt{}, nil
 }
-func (f *fakeProvider) PollAuth(context.Context, platforms.AuthPrompt) (store.NewAccount, error) {
+func (f *fakeProvider) PollAuth(context.Context, platforms.Credentials, platforms.AuthPrompt) (store.NewAccount, error) {
 	return store.NewAccount{}, nil
 }
-func (f *fakeProvider) Refresh(context.Context, crypto.Secret) (store.Tokens, error) {
+func (f *fakeProvider) Refresh(context.Context, store.Account, platforms.Credentials, crypto.Secret) (store.Tokens, error) {
 	return store.Tokens{}, nil
 }
 func (f *fakeProvider) Validate(context.Context, crypto.Secret) (platforms.Identity, error) {

@@ -101,13 +101,18 @@ func (s *Server) escribirListaDestinos(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, err)
 		return
 	}
+	emisiones, err := s.db.BroadcastsByDestination(r.Context())
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
 
 	// Slice no nil para que el JSON sea [] y no null: un null obligaría al frontend a
 	// comprobarlo antes de iterar.
 	out := make([]destinationDTO, 0, len(dests))
 	for _, d := range dests {
 		dto := newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID])
-		s.decorar(r.Context(), &dto, d, cuentas)
+		s.decorar(r.Context(), &dto, d, cuentas, emisiones)
 		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -127,13 +132,26 @@ func (s *Server) accountsByID(ctx context.Context) (map[int64]store.Account, err
 	return out, nil
 }
 
-// decorar rellena Account y Capabilities de un destinationDTO ya construido.
+// decorar rellena Account, Capabilities y Broadcast de un destinationDTO ya construido.
 //
-// cuentas es el mapa cargado una vez por lista (accountsByID); nil para decorar un destino
-// suelto —alta, PATCH, toggle—, que entonces consulta la cuenta directamente si hace falta.
-func (s *Server) decorar(ctx context.Context, dto *destinationDTO, d store.Destination, cuentas map[int64]store.Account) {
+// cuentas y emisiones son los mapas cargados una vez por lista (accountsByID y
+// BroadcastsByDestination); nil para decorar un destino suelto —alta, PATCH, toggle—, que
+// entonces consulta lo que haga falta directamente. El estado del panel se empuja cada
+// segundo con la lista entera: ahí una consulta por destino se notaría.
+func (s *Server) decorar(ctx context.Context, dto *destinationDTO, d store.Destination,
+	cuentas map[int64]store.Account, emisiones map[int64]store.Broadcast,
+) {
 	if s.platforms != nil {
 		dto.Capabilities = capsDTO(s.platforms.AllCapabilities()[platforms.ID(d.Platform)])
+	}
+	if emisiones != nil {
+		if b, ok := emisiones[d.ID]; ok {
+			x := newBroadcastDTO(b)
+			dto.Broadcast = &x
+		}
+	} else if b, err := s.db.BroadcastFor(ctx, d.ID); err == nil {
+		x := newBroadcastDTO(*b)
+		dto.Broadcast = &x
 	}
 	if d.AccountID == nil {
 		return
@@ -176,7 +194,7 @@ func (s *Server) handleCreateDestination(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Location", "/api/destinations/"+strconv.FormatInt(d.ID, 10))
 	dto := newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID))
-	s.decorar(r.Context(), &dto, *d, nil)
+	s.decorar(r.Context(), &dto, *d, nil, nil)
 	writeJSON(w, http.StatusCreated, dto)
 }
 
@@ -246,6 +264,17 @@ func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) 
 	// El enlace con la cuenta va aparte del resto del patch: distingue "no lo mandaron"
 	// (json.RawMessage vacío) de `null` (desvincular) de un número ya validado (vincular).
 	if len(in.AccountID) > 0 {
+		// La emisión guardada es de la cuenta que la creó. Si el destino pasa a otra
+		// cuenta —o se queda sin ninguna— lo que hay en destination_broadcasts deja de
+		// ser suyo: seguiría enseñando un broadcast_ref ajeno y «terminar emisión» lo
+		// mandaría a la cuenta equivocada. La clave del destino NO se toca: la persona
+		// pidió cambiar de cuenta, no quedarse sin poder emitir.
+		if b, err := s.db.BroadcastFor(r.Context(), id); err == nil && (vincular == nil || b.AccountID != *vincular) {
+			if err := s.db.ClearBroadcast(r.Context(), id); err != nil {
+				s.writeStoreError(w, err)
+				return
+			}
+		}
 		if vincular == nil {
 			if err := s.db.UnlinkDestination(r.Context(), id); err != nil {
 				s.writeStoreError(w, err)
@@ -267,7 +296,7 @@ func (s *Server) handlePatchDestination(w http.ResponseWriter, r *http.Request) 
 
 	s.applyHot(r, *d)
 	dto := newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID))
-	s.decorar(r.Context(), &dto, *d, nil)
+	s.decorar(r.Context(), &dto, *d, nil, nil)
 	writeJSON(w, http.StatusOK, dto)
 }
 
@@ -323,7 +352,7 @@ func (s *Server) handleToggleDestination(w http.ResponseWriter, r *http.Request)
 
 	s.applyHot(r, *d)
 	dto := newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID))
-	s.decorar(r.Context(), &dto, *d, nil)
+	s.decorar(r.Context(), &dto, *d, nil, nil)
 	writeJSON(w, http.StatusOK, dto)
 }
 
@@ -452,6 +481,6 @@ func (s *Server) handleRetryDestination(w http.ResponseWriter, r *http.Request) 
 
 	s.applyHot(r, *d)
 	dto := newDestinationDTO(*d, s.metricsFor(d.ID), s.logoETag(r.Context(), d.ID))
-	s.decorar(r.Context(), &dto, *d, nil)
+	s.decorar(r.Context(), &dto, *d, nil, nil)
 	writeJSON(w, http.StatusOK, dto)
 }

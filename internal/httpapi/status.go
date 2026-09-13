@@ -18,7 +18,7 @@ const recentEventsInStatus = 20
 func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error) {
 	var out statusDTO
 	out.Version = s.version
-	out.Panel = panelDTO{TLS: s.tls, PublicURL: s.publicURL}
+	out.Panel = panelDTO{TLS: s.tls, PublicURL: s.publicURL, YouTubeChatBudget: s.chatBudget, YouTubeQuota: s.ytQuota}
 
 	settings, err := s.db.Settings(ctx)
 	if err != nil {
@@ -68,10 +68,14 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 	if err != nil {
 		return out, err
 	}
+	emisiones, err := s.db.BroadcastsByDestination(ctx)
+	if err != nil {
+		return out, err
+	}
 	out.Destinations = make([]destinationDTO, 0, len(dests))
 	for _, d := range dests {
 		dto := newDestinationDTO(d, s.metricsFor(d.ID), etags[d.ID])
-		s.decorar(ctx, &dto, d, cuentas)
+		s.decorar(ctx, &dto, d, cuentas, emisiones)
 		out.Destinations = append(out.Destinations, dto)
 	}
 

@@ -1,0 +1,26 @@
+{
+  "message": "",
+  "data": [
+    {
+      "broadcaster_user_id": 123,
+      "slug": "canal-fixture",
+      "channel_description": "",
+      "banner_picture": "https://kick.com/img/banner.jpg",
+      "stream": {
+        "url": "rtmps://stream.kick.com/1234567890",
+        "key": "super-secret-stream-key",
+        "is_live": true,
+        "is_mature": false,
+        "language": "en",
+        "start_time": "2024-01-01T00:00:00Z",
+        "viewer_count": 0
+      },
+      "stream_title": "Jugando ranked",
+      "category": {
+        "id": 101,
+        "name": "Old School Runescape",
+        "thumbnail": "https://kick.com/img/categories/old-school-runescape.jpeg"
+      }
+    }
+  ]
+}

@@ -36,6 +36,7 @@ type Aggregator struct {
 	mu        sync.Mutex
 	sessionID int64
 	cancel    context.CancelFunc
+	in        chan platforms.ChatMessage
 	lectores  sync.WaitGroup
 
 	mensajes  map[platforms.ID]*atomic.Uint64
@@ -110,11 +111,11 @@ func (a *Aggregator) arrancar(ctx context.Context, sessionID int64) {
 		return
 	}
 	sctx, cancel := context.WithCancel(ctx)
+	in := make(chan platforms.ChatMessage, 512)
 	a.mu.Lock()
-	a.sessionID, a.cancel = sessionID, cancel
+	a.sessionID, a.cancel, a.in = sessionID, cancel, in
 	a.mu.Unlock()
 
-	in := make(chan platforms.ChatMessage, 512)
 	a.lectores.Add(1)
 	go func() {
 		defer a.lectores.Done()
@@ -150,12 +151,34 @@ func (a *Aggregator) arrancar(ctx context.Context, sessionID int64) {
 func (a *Aggregator) parar() {
 	a.mu.Lock()
 	cancel := a.cancel
-	a.cancel, a.sessionID = nil, 0
+	a.cancel, a.sessionID, a.in = nil, 0, nil
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
 		a.lectores.Wait()
 	}
+}
+
+// Ingest mete en la sesión viva mensajes que no vienen de un ReadChat (el webhook de
+// Kick). Sin sesión se descartan y se cuentan: el chat pertenece a la sesión.
+func (a *Aggregator) Ingest(msgs []platforms.ChatMessage) int {
+	a.mu.Lock()
+	in := a.in
+	a.mu.Unlock()
+	if in == nil {
+		a.dropped.Add(uint64(len(msgs)))
+		return 0
+	}
+	n := 0
+	for _, m := range msgs {
+		select {
+		case in <- m:
+			n++
+		default:
+			a.dropped.Add(1)
+		}
+	}
+	return n
 }
 
 // cuentasConChat: cuentas en `ok` cuya plataforma lee chat y con al menos un destino

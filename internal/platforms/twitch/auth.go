@@ -20,8 +20,9 @@ import (
 const grantDevice = "urn:ietf:params:oauth:grant-type:device_code"
 
 // BeginAuth pide un código de dispositivo. State es aleatorio y es lo único que la API
-// enseña para sondear; el device_code se queda en el servidor.
-func (p *Provider) BeginAuth(ctx context.Context) (platforms.AuthPrompt, error) {
+// enseña para sondear; el device_code se queda en el servidor. Twitch trae su app
+// incluida: las credenciales propias no se usan aquí, solo existen para YouTube y Kick.
+func (p *Provider) BeginAuth(ctx context.Context, _ platforms.Credentials) (platforms.AuthPrompt, error) {
 	if !p.Configured() {
 		return platforms.AuthPrompt{}, platforms.ErrNoClientID
 	}
@@ -63,7 +64,7 @@ func (p *Provider) BeginAuth(ctx context.Context) (platforms.AuthPrompt, error) 
 // `authorization_pending`; `slow_down` no está documentado y, si llega, se trata como
 // pendiente (quien llama ya espera Interval; el spec pide doblar la espera). Cualquier
 // otro 400 tras vencer el código es ErrAuthExpired.
-func (p *Provider) PollAuth(ctx context.Context, prompt platforms.AuthPrompt) (store.NewAccount, error) {
+func (p *Provider) PollAuth(ctx context.Context, _ platforms.Credentials, prompt platforms.AuthPrompt) (store.NewAccount, error) {
 	if p.now().After(prompt.ExpiresAt) {
 		return store.NewAccount{}, platforms.ErrAuthExpired
 	}
@@ -75,6 +76,10 @@ func (p *Provider) PollAuth(ctx context.Context, prompt platforms.AuthPrompt) (s
 			switch he.msg {
 			case "authorization_pending", "slow_down":
 				return store.NewAccount{}, platforms.ErrAuthPending
+			case "access_denied":
+				// Twitch no lo documenta en el flujo de dispositivo, pero si llega es
+				// definitivo y se trata igual que en YouTube: no es un código vencido.
+				return store.NewAccount{}, fmt.Errorf("%w: %s", platforms.ErrAuthDenied, he.msg)
 			}
 			return store.NewAccount{}, fmt.Errorf("%w: %s", platforms.ErrAuthExpired, he.msg)
 		}
@@ -92,8 +97,9 @@ func (p *Provider) PollAuth(ctx context.Context, prompt platforms.AuthPrompt) (s
 }
 
 // Refresh: cliente público, sin client_secret. El refresh token rota: el par nuevo se
-// devuelve entero y quien llama lo guarda antes de usarlo.
-func (p *Provider) Refresh(ctx context.Context, refresh crypto.Secret) (store.Tokens, error) {
+// devuelve entero y quien llama lo guarda antes de usarlo. acct y creds no se usan: Twitch
+// no tiene app propia.
+func (p *Provider) Refresh(ctx context.Context, _ store.Account, _ platforms.Credentials, refresh crypto.Secret) (store.Tokens, error) {
 	if !p.Configured() {
 		return store.Tokens{}, platforms.ErrNoClientID
 	}

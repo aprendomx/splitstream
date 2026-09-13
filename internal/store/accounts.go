@@ -46,6 +46,15 @@ type NewAccount struct {
 	DisplayName string
 	Scopes      []string
 	Tokens      Tokens
+	OwnApp      bool
+	Credentials Credentials
+}
+
+// Credentials son las de una app propia del usuario (YouTube, Kick). Van cifradas como
+// los tokens y solo las leen el manager de tokens y los proveedores, por AccountCredentials.
+type Credentials struct {
+	ClientID     crypto.Secret
+	ClientSecret crypto.Secret
 }
 
 // UpsertAccount crea la cuenta o, si ya existe la misma (platform, external_id), la
@@ -63,9 +72,21 @@ func (d *DB) UpsertAccount(ctx context.Context, c *crypto.Cipher, in NewAccount)
 	if in.Tokens.Access.Reveal() == "" {
 		return nil, invalidInput("la cuenta necesita un token de acceso")
 	}
+	if in.OwnApp && (in.Credentials.ClientID.Reveal() == "" || in.Credentials.ClientSecret.Reveal() == "") {
+		return nil, invalidInput("una app propia necesita client_id y client_secret")
+	}
 	access, refresh, expira, err := cifrarTokens(c, in.Tokens)
 	if err != nil {
 		return nil, err
+	}
+	var cid, csec []byte
+	if in.OwnApp {
+		if cid, err = c.Encrypt([]byte(in.Credentials.ClientID.Reveal())); err != nil {
+			return nil, fmt.Errorf("cifrar el client_id: %w", err)
+		}
+		if csec, err = c.Encrypt([]byte(in.Credentials.ClientSecret.Reveal())); err != nil {
+			return nil, fmt.Errorf("cifrar el client_secret: %w", err)
+		}
 	}
 	ahora := nowRFC3339()
 	scopes := strings.Join(in.Scopes, " ")
@@ -73,8 +94,9 @@ func (d *DB) UpsertAccount(ctx context.Context, c *crypto.Cipher, in NewAccount)
 	err = d.InTx(ctx, func(tx *DB) error {
 		if _, err := tx.ex.ExecContext(ctx,
 			`INSERT INTO platform_accounts (platform, external_id, display_name, access_token_encrypted,
-			    refresh_token_encrypted, expires_at, scopes, status, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?)
+			    refresh_token_encrypted, expires_at, scopes, status, own_app, client_id_encrypted,
+			    client_secret_encrypted, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?, ?)
 			 ON CONFLICT (platform, external_id) DO UPDATE SET
 			    display_name = excluded.display_name,
 			    access_token_encrypted = excluded.access_token_encrypted,
@@ -82,8 +104,12 @@ func (d *DB) UpsertAccount(ctx context.Context, c *crypto.Cipher, in NewAccount)
 			    expires_at = excluded.expires_at,
 			    scopes = excluded.scopes,
 			    status = 'ok',
+			    own_app = excluded.own_app,
+			    client_id_encrypted = excluded.client_id_encrypted,
+			    client_secret_encrypted = excluded.client_secret_encrypted,
 			    updated_at = excluded.updated_at`,
-			string(in.Platform), in.ExternalID, in.DisplayName, access, refresh, expira, scopes, ahora, ahora); err != nil {
+			string(in.Platform), in.ExternalID, in.DisplayName, access, refresh, expira, scopes,
+			boolToInt(in.OwnApp), cid, csec, ahora, ahora); err != nil {
 			return fmt.Errorf("guardar la cuenta: %w", err)
 		}
 		// Con ON CONFLICT DO UPDATE, LastInsertId no es fiable (ruling): se relee por la
@@ -176,6 +202,49 @@ func scanAccount(s scanner) (*Account, error) {
 		return nil, fmt.Errorf("updated_at inválido: %w", err)
 	}
 	return &a, nil
+}
+
+// AccountCredentials descifra las credenciales de la app propia; vacías si la cuenta usa
+// la app incluida. No audita, como AccountTokens.
+func (d *DB) AccountCredentials(ctx context.Context, c *crypto.Cipher, id int64) (Credentials, error) {
+	var cid, csec []byte
+	err := d.ex.QueryRowContext(ctx, `SELECT client_id_encrypted, client_secret_encrypted FROM platform_accounts WHERE id = ?`, id).Scan(&cid, &csec)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Credentials{}, notFound("cuenta no encontrada")
+	}
+	if err != nil {
+		return Credentials{}, fmt.Errorf("leer las credenciales: %w", err)
+	}
+	var out Credentials
+	if len(cid) > 0 {
+		p, err := c.Decrypt(cid)
+		if err != nil {
+			return Credentials{}, fmt.Errorf("descifrar el client_id: %w", err)
+		}
+		out.ClientID = crypto.Secret(p)
+	}
+	if len(csec) > 0 {
+		p, err := c.Decrypt(csec)
+		if err != nil {
+			return Credentials{}, fmt.Errorf("descifrar el client_secret: %w", err)
+		}
+		out.ClientSecret = crypto.Secret(p)
+	}
+	return out, nil
+}
+
+// AccountByExternalID busca una cuenta por plataforma e id externo. Lo usan el flujo de
+// OAuth —para decidir si conecta una cuenta nueva o refresca la existente sin conocer su
+// id— y la ingesta del webhook de Kick, que solo sabe de qué canal (BroadcasterID) viene
+// cada mensaje y tiene que resolver a qué cuenta nuestra pertenece.
+func (d *DB) AccountByExternalID(ctx context.Context, platform Platform, externalID string) (*Account, error) {
+	a, err := scanAccount(d.ex.QueryRowContext(ctx,
+		`SELECT `+accountCols+` FROM platform_accounts WHERE platform = ? AND external_id = ?`,
+		string(platform), externalID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, notFound("cuenta no encontrada")
+	}
+	return a, err
 }
 
 // AccountTokens descifra los tokens. NO audita: el manager los lee a cada rato para

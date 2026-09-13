@@ -207,6 +207,67 @@ func TestLinkDestinationRequiresMatchingPlatformAndCascades(t *testing.T) {
 	}
 }
 
+func TestOwnAppCredentialsAreEncryptedAndOnlyReadableThroughAccountCredentials(t *testing.T) {
+	db := openTemp(t)
+	c := cifradorDePrueba(t)
+	ctx := context.Background()
+	a, err := db.UpsertAccount(ctx, c, store.NewAccount{
+		Platform: store.PlatformYouTube, ExternalID: "UC123", DisplayName: "Mi canal",
+		Scopes: []string{"https://www.googleapis.com/auth/youtube"},
+		Tokens: store.Tokens{Access: "acc", Refresh: "ref", ExpiresAt: time.Now().Add(time.Hour)},
+		OwnApp: true, Credentials: store.Credentials{ClientID: "cid.apps.googleusercontent.com", ClientSecret: "GOCSPX-secreto"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.OwnApp {
+		t.Error("OwnApp debería ser true")
+	}
+	creds, err := db.AccountCredentials(ctx, c, a.ID)
+	if err != nil || creds.ClientID.Reveal() != "cid.apps.googleusercontent.com" || creds.ClientSecret.Reveal() != "GOCSPX-secreto" {
+		t.Fatalf("creds = %+v, %v", creds, err)
+	}
+	var blob []byte
+	db.SQL().QueryRowContext(ctx, `SELECT client_secret_encrypted FROM platform_accounts WHERE id = ?`, a.ID).Scan(&blob)
+	if strings.Contains(string(blob), "GOCSPX") {
+		t.Error("el client_secret está en claro")
+	}
+	// Reconectar con credenciales nuevas las sustituye; sin OwnApp las deja en NULL.
+	b, _ := db.UpsertAccount(ctx, c, store.NewAccount{Platform: store.PlatformYouTube, ExternalID: "UC123", DisplayName: "Mi canal",
+		Tokens: store.Tokens{Access: "acc2"}, OwnApp: true, Credentials: store.Credentials{ClientID: "otro", ClientSecret: "s2"}})
+	creds, _ = db.AccountCredentials(ctx, c, b.ID)
+	if creds.ClientID.Reveal() != "otro" {
+		t.Errorf("no se sustituyeron: %+v", creds)
+	}
+	tw := cuentaDePrueba(t, db, c, "42")
+	creds, err = db.AccountCredentials(ctx, c, tw.ID)
+	if err != nil || creds.ClientID.Reveal() != "" || creds.ClientSecret.Reveal() != "" {
+		t.Errorf("sin app propia: creds = %+v, %v", creds, err)
+	}
+	if _, err := db.UpsertAccount(ctx, c, store.NewAccount{Platform: store.PlatformKick, ExternalID: "1", DisplayName: "k",
+		Tokens: store.Tokens{Access: "a"}, OwnApp: true}); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("OwnApp sin credenciales debería ser inválido: %v", err)
+	}
+}
+
+func TestAccountByExternalIDFindsOrNotFound(t *testing.T) {
+	db := openTemp(t)
+	c := cifradorDePrueba(t)
+	ctx := context.Background()
+	a := cuentaDePrueba(t, db, c, "42")
+
+	got, err := db.AccountByExternalID(ctx, store.PlatformTwitch, "42")
+	if err != nil || got.ID != a.ID {
+		t.Errorf("AccountByExternalID = %+v, %v", got, err)
+	}
+	if _, err := db.AccountByExternalID(ctx, store.PlatformTwitch, "no-existe"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("external_id inexistente: err = %v", err)
+	}
+	if _, err := db.AccountByExternalID(ctx, store.PlatformYouTube, "42"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("plataforma distinta: err = %v", err)
+	}
+}
+
 // Cambiar la plataforma del destino tiene que soltar la cuenta: si no, un destino de
 // YouTube se quedaría con una cuenta de Twitch enlazada.
 func TestUpdateDestinationPlatformUnlinksAccount(t *testing.T) {

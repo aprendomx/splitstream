@@ -147,6 +147,26 @@ async function reintentar(d) {
   }
 }
 
+async function alAire(d) {
+  try {
+    await api.salirAlAire(d.id)
+    await panel.cargar()
+    $q.notify({ type: 'positive', message: `${d.name} salió al aire` })
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  }
+}
+
+async function terminar(d) {
+  try {
+    await api.terminarEmision(d.id)
+    await panel.cargar()
+    $q.notify({ type: 'info', message: `${d.name} terminó la emisión` })
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e.message })
+  }
+}
+
 const TITULOS_SONDA = {
   plausible: { titulo: 'Configuración plausible', tipo: 'positive' },
   closed_early: { titulo: 'Conecta y se corta', tipo: 'warning' },
@@ -436,6 +456,8 @@ async function rotarClave() {
             @revelar="revelar(element)"
             @reintentar="reintentar(element)"
             @probar="probar(element)"
+            @al-aire="alAire(element)"
+            @terminar="terminar(element)"
           />
         </div>
       </template>

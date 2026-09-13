@@ -33,8 +33,11 @@ import (
 	"github.com/aprendomx/splitstream/internal/httpapi"
 	"github.com/aprendomx/splitstream/internal/maintenance"
 	"github.com/aprendomx/splitstream/internal/platforms"
+	"github.com/aprendomx/splitstream/internal/platforms/kick"
+	"github.com/aprendomx/splitstream/internal/platforms/quota"
 	"github.com/aprendomx/splitstream/internal/platforms/tokens"
 	"github.com/aprendomx/splitstream/internal/platforms/twitch"
+	"github.com/aprendomx/splitstream/internal/platforms/youtube"
 	"github.com/aprendomx/splitstream/internal/relay"
 	"github.com/aprendomx/splitstream/internal/rtmpio"
 	"github.com/aprendomx/splitstream/internal/sinks"
@@ -274,11 +277,47 @@ func run(ctx context.Context, out io.Writer) error {
 		webhooks.Run(sinkCtx)
 	}()
 
-	// Capa de plataformas (v0.11): proveedores por capacidad, tokens y chat. Nada de
-	// esto lo conoce el motor; entra por el bus de eventos y por la API.
-	registro := platforms.NewRegistry(twitch.New(twitch.Options{
-		ClientID: twitch.ResolveClientID(cfg.TwitchClientID), Logger: logger,
-	}))
+	// El TLS integrado se construye ANTES de la Config de httpapi y del bloque de
+	// plataformas: PublicURL sale de aquí y ese paquete no sabe nada de webtls (la CI lo
+	// comprueba); el job de mantenimiento de Kick necesita publicURL más abajo.
+	tlsSetup, err := webtls.Build(cfg, func(err error) {
+		// Sin secretos: el dominio y el texto de ACME. Cadencia acotada por webtls.
+		if _, e := db.LogEvent(context.Background(), store.Event{
+			Level: store.LevelError, Kind: "tls_certificate_error",
+			Message: "no se pudo obtener el certificado de " + cfg.TLSDomain + ": " + err.Error(),
+		}); e != nil {
+			logger.Error("no se pudo registrar el fallo de certificado", "err", e)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if cfg.SecureCookiesDesactivadas {
+		logger.Warn("SPLITSTREAM_SECURE_COOKIES=false con TLS integrado: la cookie de sesión viaja sin Secure")
+	}
+	publicURL := ""
+	if tlsSetup != nil {
+		publicURL = tlsSetup.PublicURL
+	}
+
+	// Capa de plataformas (v0.11, con YouTube y Kick desde v0.12): proveedores por
+	// capacidad, tokens y chat. Nada de esto lo conoce el motor; entra por el bus de
+	// eventos y por la API.
+	cuota := quota.NewCounter(db)
+	cuota.Logger = logger
+	registro := platforms.NewRegistry(
+		twitch.New(twitch.Options{ClientID: twitch.ResolveClientID(cfg.TwitchClientID), Logger: logger}),
+		youtube.New(youtube.Options{Logger: logger, Quota: cuota.Sink,
+			ChatBudget: func(accountID int64) (int, int, bool) {
+				used, err := cuota.UsedToday(context.Background(), accountID)
+				return used, cfg.YouTubeChatBudget, err == nil
+			},
+			OnChatPaused: func(acct store.Account, used, budget int) {
+				db.LogEvent(context.Background(), store.Event{Level: store.LevelWarn, Kind: "chat_paused_quota",
+					Message: fmt.Sprintf("el chat de YouTube de %s se pausó al llegar a %d de %d unidades; se reanuda mañana o si subes SPLITSTREAM_YOUTUBE_CHAT_BUDGET", acct.DisplayName, used, budget)})
+			}}),
+		kick.New(kick.Options{Logger: logger}),
+	)
 	gestorTokens := tokens.NewManager(db, cipher, registro.Get)
 	gestorTokens.Logger = logger
 	gestorTokens.OnReauth = func(acct store.Account) {
@@ -395,6 +434,13 @@ func run(ctx context.Context, out io.Writer) error {
 				n, err := db.PruneChat(ctx, cfg.RetentionMaxChat)
 				return fmt.Sprintf("chat: %d mensajes borrados", n), err
 			}},
+			{Name: "cuota", Run: func(ctx context.Context) (string, error) {
+				n, err := db.PruneQuota(ctx, cuota.DayBefore(7))
+				return fmt.Sprintf("cuota: %d filas borradas", n), err
+			}},
+			{Name: "webhooks_kick", Run: func(ctx context.Context) (string, error) {
+				return renovarWebhooksKick(ctx, db, registro, gestorTokens, publicURL, logger)
+			}},
 		},
 		OnDone: func(resumen string, err error) {
 			level := store.LevelInfo
@@ -468,28 +514,6 @@ func run(ctx context.Context, out io.Writer) error {
 		panelFS = nil
 	}
 
-	// El TLS integrado se construye ANTES de la Config de httpapi: PublicURL sale de aquí
-	// y ese paquete no sabe nada de webtls (la CI lo comprueba).
-	tlsSetup, err := webtls.Build(cfg, func(err error) {
-		// Sin secretos: el dominio y el texto de ACME. Cadencia acotada por webtls.
-		if _, e := db.LogEvent(context.Background(), store.Event{
-			Level: store.LevelError, Kind: "tls_certificate_error",
-			Message: "no se pudo obtener el certificado de " + cfg.TLSDomain + ": " + err.Error(),
-		}); e != nil {
-			logger.Error("no se pudo registrar el fallo de certificado", "err", e)
-		}
-	})
-	if err != nil {
-		return err
-	}
-	if cfg.SecureCookiesDesactivadas {
-		logger.Warn("SPLITSTREAM_SECURE_COOKIES=false con TLS integrado: la cookie de sesión viaja sin Secure")
-	}
-	publicURL := ""
-	if tlsSetup != nil {
-		publicURL = tlsSetup.PublicURL
-	}
-
 	api, err := httpapi.New(httpapi.Config{
 		DB:             db,
 		Cipher:         cipher,
@@ -516,6 +540,10 @@ func run(ctx context.Context, out io.Writer) error {
 		Tokens:         gestorTokens,
 		Chat:           chatBus,
 		ChatStats:      agregador.Stats,
+		Quota:          cuota,
+		ChatIngest:     agregador.Ingest,
+		ChatBudget:     cfg.YouTubeChatBudget,
+		YouTubeQuota:   cfg.YouTubeQuota,
 		// El padre de los sondeos de autorización en curso: el mismo contexto de vida
 		// de los sinks, para que se corten en el apagado en vez de sobrevivir hasta que
 		// venza el código de dispositivo (30 min).
@@ -696,6 +724,86 @@ func run(ctx context.Context, out io.Writer) error {
 		logger.Warn("los avisos, el mantenimiento o los sondeos de autorización no terminaron en 10s; se sigue adelante")
 	}
 	return nil
+}
+
+// tokenGetter es lo mínimo que renovarWebhooksKick necesita del gestor de tokens: pedir
+// uno vigente por cuenta. La interfaz existe para poder testear el job con un doble, sin
+// levantar un tokens.Manager de verdad (que a su vez necesita el registro completo).
+type tokenGetter interface {
+	Token(ctx context.Context, accountID int64) (crypto.Secret, error)
+}
+
+// renovarWebhooksKick vuelve a suscribir el chat de Kick para cada cuenta conectada con un
+// destino habilitado vinculado. Kick da de baja una suscripción tras un día entero de
+// fallos de entrega, así que el mantenimiento diario la renueva sin esperar a que el
+// panel provoque una reconexión: es best-effort, un fallo con una cuenta no impide seguir
+// con las demás.
+//
+// publicURL vacía ya cubre tanto "sin TLS" como "con TLS pero con certificado propio sin
+// dominio" (webtls.Build solo rellena PublicURL con Let's Encrypt): no hace falta un
+// booleano aparte para TLS.
+func renovarWebhooksKick(ctx context.Context, db *store.DB, registro *platforms.Registry,
+	tg tokenGetter, publicURL string, logger *slog.Logger) (string, error) {
+	if publicURL == "" {
+		return "kick: sin suscripciones que renovar", nil
+	}
+	p, ok := registro.Get(platforms.Kick)
+	if !ok {
+		return "kick: sin suscripciones que renovar", nil
+	}
+	cw, ok := p.(platforms.ChatWebhook)
+	if !ok {
+		return "kick: sin suscripciones que renovar", nil
+	}
+
+	cuentas, err := db.Accounts(ctx)
+	if err != nil {
+		return "", err
+	}
+	dests, err := db.ListDestinations(ctx)
+	if err != nil {
+		return "", err
+	}
+	habilitadas := map[int64]bool{}
+	for _, d := range dests {
+		if d.Enabled && d.AccountID != nil {
+			habilitadas[*d.AccountID] = true
+		}
+	}
+
+	var candidatas []store.Account
+	for _, acct := range cuentas {
+		if acct.Platform == store.PlatformKick && acct.Status == store.AccountStatusOK && habilitadas[acct.ID] {
+			candidatas = append(candidatas, acct)
+		}
+	}
+	if len(candidatas) == 0 {
+		return "kick: sin suscripciones que renovar", nil
+	}
+
+	url := strings.TrimSuffix(publicURL, "/") + "/api/platforms/kick/webhook"
+	n := 0
+	for _, acct := range candidatas {
+		// Un timeout por cuenta, no uno solo para todo el job: una cuenta colgada no puede
+		// hacer esperar a las demás ni al mantenimiento entero. cancel() se llama al final
+		// de cada vuelta (no con defer, que las acumularía todas hasta que la función
+		// entera vuelva).
+		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		tok, err := tg.Token(cctx, acct.ID)
+		if err != nil {
+			cancel()
+			logger.Warn("kick: no se pudo obtener el token para renovar el webhook del chat", "cuenta", acct.DisplayName, "err", err)
+			continue
+		}
+		err = cw.SubscribeChat(cctx, acct, tok, url)
+		cancel()
+		if err != nil {
+			logger.Warn("kick: no se pudo renovar el webhook del chat", "cuenta", acct.DisplayName, "err", err)
+			continue
+		}
+		n++
+	}
+	return fmt.Sprintf("kick: %d suscripciones renovadas", n), nil
 }
 
 // avisoClaveCreada explica el archivo de clave que se acaba de crear.

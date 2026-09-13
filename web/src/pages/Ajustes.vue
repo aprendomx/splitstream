@@ -21,15 +21,13 @@ const respaldando = ref(false)
 async function cargar() {
   try { webhooks.value = await api.webhooks() } catch (e) { $q.notify({ type: 'negative', message: e.message }) }
 }
-onMounted(() => { cargar(); cargarGrabacion(); cargarCuentas() })
+onMounted(() => { cargar(); cargarGrabacion(); panel.cargarCuentas() })
 
-// Cuentas conectadas (Twitch y las que se sumen). Nombre y destino salen del propio
-// destino en el panel; aquí solo importa la cuenta y a qué canales sigue vinculada.
-const cuentas = ref([])
-
-async function cargarCuentas() {
-  try { cuentas.value = await api.cuentas() } catch (e) { $q.notify({ type: 'negative', message: e.message }) }
-}
+// Cuentas conectadas (Twitch, YouTube por código; Kick por redirect). Nombre y destino
+// salen del propio destino en el panel; aquí solo importa la cuenta y a qué canales sigue
+// vinculada. Viven en el store (panel.cuentas): el diálogo de destino las carga también y
+// así no hay dos copias desincronizadas.
+const cuentas = computed(() => panel.cuentas)
 
 /** El nombre de cada destino vinculado, para la confirmación y la lista. */
 function nombresDestinos(c) {
@@ -51,7 +49,7 @@ function desconectar(c) {
   }).onOk(async () => {
     try {
       await api.borrarCuenta(c.id)
-      await cargarCuentas()
+      await panel.cargarCuentas()
       await panel.cargar()
       $q.notify({ type: 'positive', message: 'Cuenta desconectada' })
     } catch (e) {
@@ -225,7 +223,7 @@ const estadoEntrega = (w) => {
 
       <div class="text-h6 q-mt-xl q-mb-sm">Cuentas conectadas</div>
       <p class="text-body2 text-grey-5">
-        Las cuentas vinculadas por código de dispositivo (Twitch, y las que se sumen) dan título,
+        Cuentas conectadas por código (Twitch, YouTube) o por redirect (Kick): dan título,
         categoría y chat de solo lectura a sus destinos. Se conectan desde el diálogo de cada canal.
       </p>
 
@@ -243,12 +241,14 @@ const estadoEntrega = (w) => {
             <q-item-label>
               {{ c.display_name }}
               <q-badge v-if="c.status === 'reauth'" color="warning" text-color="black" label="Reconectar" class="q-ml-xs" />
+              <q-badge v-if="c.own_app" outline color="grey-6" label="app propia" class="q-ml-xs" />
             </q-item-label>
             <q-item-label caption>
               <template v-if="c.destinations.length">
                 Vinculada a {{ nombresDestinos(c).join(', ') }}
               </template>
               <template v-else>Sin destinos vinculados</template>
+              <template v-if="c.quota_used_today != null"> · {{ c.quota_used_today.toLocaleString('es') }} unidades hoy</template>
             </q-item-label>
             <q-item-label v-if="c.status === 'reauth'" caption class="text-warning">
               La cuenta necesita reconectarse. Ábrela desde Editar → Cuenta en el destino, en el Panel.
