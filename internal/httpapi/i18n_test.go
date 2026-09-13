@@ -435,6 +435,12 @@ func literalesDeWriteError(t *testing.T, dir string) []literalDeError {
 				rc := reconstructor{locales: literalesLocales(d)}
 				devuelveMensaje := funcionesDeMensaje[d.Name.Name]
 				asignaMensaje := funcionesQueAsignanMensaje[d.Name.Name]
+				// La vista previa no escribe errores: cierra el WebSocket con un motivo, y
+				// ese motivo es lo que el panel enseña (VistaPrevia.vue). La regla va
+				// acotada a preview.go a propósito: `Close` es un nombre comunísimo —un
+				// fichero, un canal, una conexión— y en cualquier otro archivo un literal
+				// ahí dentro no sería un mensaje para nadie.
+				motivosDeCierre := filepath.Base(fset.Position(d.Pos()).Filename) == "preview.go"
 				ast.Inspect(d, func(n ast.Node) bool {
 					switch v := n.(type) {
 					case *ast.ReturnStmt:
@@ -465,6 +471,12 @@ func literalesDeWriteError(t *testing.T, dir string) []literalDeError {
 							}
 						}
 					case *ast.CallExpr:
+						// conn.Close(código, motivo) y CloseReason(código, motivo): el
+						// segundo argumento es el texto que lee quien mira el panel.
+						if motivosDeCierre && (esMetodo(v.Fun, "Close") || esMetodo(v.Fun, "CloseReason")) && len(v.Args) == 2 {
+							añadir(v.Args[1].Pos(), rc, v.Args[1])
+							return true
+						}
 						// terminar(f, status, acct, msg) deja el mensaje del flujo de
 						// autorización, que sale por authStatusDTO.
 						if esMetodo(v.Fun, "terminar") && len(v.Args) == 4 {

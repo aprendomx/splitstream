@@ -144,6 +144,11 @@ var traducciones = map[string]string{
 	"state inválido":                    "invalid state",
 	"flujo de autorización desconocido": "unknown authorization flow",
 
+	// ---- preview.go: el motivo con el que se cierra el WebSocket de la vista previa,
+	// que el panel enseña tal cual (VistaPrevia.vue) ----
+	"sin señal":          "no signal",
+	"la emisión terminó": "the broadcast ended",
+
 	// ---- recording.go ----
 	"la grabación no está en el directorio de grabaciones": "the recording is not in the recordings directory",
 	"el archivo de la grabación ya no está en disco":       "the recording file is no longer on disk",

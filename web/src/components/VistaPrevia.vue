@@ -113,8 +113,9 @@ function conectar() {
   // Sin reconexión, a propósito: la vista es bajo demanda y gasta subida del servidor.
   // El servidor cierra con motivo («sin señal», «la emisión terminó») y ese texto es lo
   // que se le enseña al usuario, que decide si reabrir.
-  // ev.reason lo manda el servidor tal cual (aún en español, spec §7): traducirlo es
-  // trabajo del backend, fuera de esta tarea. Solo el respaldo de aquí abajo pasa por t().
+  // ev.reason viene ya en el idioma que se pidió en el handshake (el servidor lo negocia
+  // con Accept-Language antes de aceptar el WebSocket), así que se enseña tal cual. El
+  // respaldo de aquí abajo, para un cierre sin motivo, sí pasa por t().
   ws.onclose = (ev) => { ws = null; cerrar(ev.reason || t('vista_previa.se_corto')) }
 }
 

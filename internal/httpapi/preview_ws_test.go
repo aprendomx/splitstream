@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,6 +80,63 @@ func TestPreviewClosesWithoutSignal(t *testing.T) {
 	}
 	if got := websocket.CloseStatus(err); got != previewCloseNoSignal {
 		t.Fatalf("código de cierre = %d; quería %d", got, previewCloseNoSignal)
+	}
+}
+
+// dialPreview es dialWS con Accept-Language: el motivo de cierre se negocia en el
+// handshake, que es una petición HTTP normal.
+func dialPreview(ctx context.Context, url string, cookies []*http.Cookie, lang string) (*websocket.Conn, *http.Response, error) {
+	h := http.Header{}
+	var partes []string
+	for _, c := range cookies {
+		partes = append(partes, c.Name+"="+c.Value)
+	}
+	if len(partes) > 0 {
+		h.Set("Cookie", strings.Join(partes, "; "))
+	}
+	if lang != "" {
+		h.Set("Accept-Language", lang)
+	}
+	return websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: h})
+}
+
+// TestPreviewCloseReasonHablaElIdiomaDelPanel: el motivo del cierre no es telemetría, es
+// la frase que VistaPrevia.vue le enseña a quien mira; viaja en el idioma que pidió el
+// panel en el handshake. El código de cierre, que sí es contrato, no cambia.
+func TestPreviewCloseReasonHablaElIdiomaDelPanel(t *testing.T) {
+	casos := []struct{ lang, quiere string }{
+		{"en", "no signal"},
+		{"en-GB,en;q=0.9", "no signal"},
+		{"", "sin señal"},
+		{"fr", "sin señal"},
+	}
+	for _, c := range casos {
+		t.Run("Accept-Language: "+c.lang, func(t *testing.T) {
+			_, url, cookies := previewServer(t)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			conn, _, err := dialPreview(ctx, url, cookies, c.lang)
+			if err != nil {
+				t.Fatalf("Dial: %v", err)
+			}
+			defer conn.CloseNow()
+
+			leer, cancelLeer := context.WithTimeout(ctx, 4*time.Second)
+			_, _, err = conn.Read(leer)
+			cancelLeer()
+			var cierre websocket.CloseError
+			if !errors.As(err, &cierre) {
+				t.Fatalf("se esperaba un cierre con motivo, llegó %v", err)
+			}
+			if cierre.Code != previewCloseNoSignal {
+				t.Errorf("código de cierre = %d, quería %d", cierre.Code, previewCloseNoSignal)
+			}
+			if cierre.Reason != c.quiere {
+				t.Errorf("motivo = %q, quería %q", cierre.Reason, c.quiere)
+			}
+		})
 	}
 }
 

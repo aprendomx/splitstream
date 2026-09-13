@@ -60,6 +60,10 @@ func previewFrameMsg(m *relay.Message) []byte {
 // hub y reenvía la config y cada frame de vídeo por mensajes binarios. La sesión y el
 // Origin se comprueban igual que en handleWS: el handshake es HTTP normal con cookie.
 func (s *Server) handlePreviewWS(w http.ResponseWriter, r *http.Request) {
+	// El idioma se negocia ANTES del Accept: a partir de ahí el ResponseWriter está
+	// secuestrado y ya no hay de dónde sacarlo. El motivo de cierre lo enseña el panel
+	// tal cual (VistaPrevia.vue), así que es texto para personas y se traduce.
+	lang := idiomaDe(w)
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		s.logger.Warn("no se pudo abrir el WebSocket de la vista previa", "err", err)
@@ -81,7 +85,7 @@ func (s *Server) handlePreviewWS(w http.ResponseWriter, r *http.Request) {
 	// corta — y la respuesta honesta es decirlo, no colgarse a esperar.
 	cfg := previewConfigMsg(s.engine.VideoConfig())
 	if s.engine.Session().ID == 0 || cfg == nil {
-		conn.Close(previewCloseNoSignal, "sin señal")
+		conn.Close(previewCloseNoSignal, traducir(lang, "sin señal"))
 		return
 	}
 
@@ -102,7 +106,7 @@ func (s *Server) handlePreviewWS(w http.ResponseWriter, r *http.Request) {
 		case msg, ok := <-ch:
 			if !ok {
 				// El hub cerró los taps: la emisión terminó.
-				conn.Close(previewCloseEnded, "la emisión terminó")
+				conn.Close(previewCloseEnded, traducir(lang, "la emisión terminó"))
 				return
 			}
 			var out []byte
