@@ -32,6 +32,10 @@ func TestNegociarIdioma(t *testing.T) {
 		// Entradas rotas: ni pánico ni 500, se atiende en español o con q=1.
 		"en;q=abc": idiomaEN, ",,": idiomaES, "en;q=": idiomaEN, ";;;": idiomaES,
 		"  ,  en  ;  q = 0.5  ": idiomaEN,
+		// Un q que parsea pero no es un qvalue (RFC 9110 §12.4.2: 0..1) no compite: el
+		// nan envenenaría el orden entero, y el 5 o el -1 no dicen qué se quería.
+		"en;q=nan,es": idiomaES, "en;q=inf,es": idiomaES, "en;q=5,es": idiomaES,
+		"en;q=-1,es": idiomaES, "en;q=nan": idiomaES, "es;q=nan,en": idiomaEN,
 	}
 	for in, want := range casos {
 		if got := negociarIdioma(in); got != want {
@@ -58,6 +62,65 @@ func TestTraducirLiteralPlantillaYSinEntrada(t *testing.T) {
 	}
 }
 
+// TestAplicarNoTocaLoQueYaSustituyo: si el valor de {0} —un nombre de destino, que lo
+// escribe quien usa el panel— lleva dentro un «{1}» literal, ese texto es suyo y sale tal
+// cual; encadenar ReplaceAll lo habría tomado por un comodín en la pasada siguiente.
+func TestAplicarNoTocaLoQueYaSustituyo(t *testing.T) {
+	const quiere = "the account is on {1} and the destination on Twitch"
+	if got := traducir(idiomaEN, "la cuenta es de {1} y el destino de Twitch"); got != quiere {
+		t.Errorf("aplicar = %q, quería %q", got, quiere)
+	}
+}
+
+// escritorConReadFrom es un ResponseWriter que sabe hacer ReadFrom y lleva la cuenta: así
+// se ve si el envoltorio de idioma delega o si se lo come.
+type escritorConReadFrom struct {
+	http.ResponseWriter
+	veces int
+}
+
+func (e *escritorConReadFrom) ReadFrom(src io.Reader) (int64, error) {
+	e.veces++
+	return io.Copy(e.ResponseWriter, src)
+}
+
+// TestRespuestaConIdiomaConservaReadFrom: sin esto, http.ServeContent sobre un *os.File
+// —una grabación, el respaldo— deja de usar el sendfile del sistema y copia el archivo
+// entero a mano mientras el relay emite.
+func TestRespuestaConIdiomaConservaReadFrom(t *testing.T) {
+	t.Run("delega cuando el original sabe", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		espia := &escritorConReadFrom{ResponseWriter: rec}
+		var w http.ResponseWriter = &respuestaConIdioma{ResponseWriter: espia, lang: idiomaEN}
+		rf, ok := w.(io.ReaderFrom)
+		if !ok {
+			t.Fatal("el envoltorio esconde io.ReaderFrom")
+		}
+		n, err := rf.ReadFrom(strings.NewReader("hola"))
+		if err != nil || n != 4 {
+			t.Fatalf("ReadFrom = %d, %v", n, err)
+		}
+		if espia.veces != 1 {
+			t.Errorf("el original recibió %d ReadFrom, quería 1", espia.veces)
+		}
+		if rec.Body.String() != "hola" {
+			t.Errorf("cuerpo = %q", rec.Body.String())
+		}
+	})
+	t.Run("copia cuando el original no sabe", func(t *testing.T) {
+		// httptest.ResponseRecorder no implementa io.ReaderFrom: se cae a io.Copy.
+		rec := httptest.NewRecorder()
+		w := &respuestaConIdioma{ResponseWriter: rec, lang: idiomaES}
+		n, err := w.ReadFrom(strings.NewReader("adiós"))
+		if err != nil || int(n) != len("adiós") {
+			t.Fatalf("ReadFrom = %d, %v", n, err)
+		}
+		if rec.Body.String() != "adiós" {
+			t.Errorf("cuerpo = %q", rec.Body.String())
+		}
+	})
+}
+
 // TestNingunaPlantillaEsDemasiadoGenerica protege la mesa de las plantillas de sí misma:
 // una clave que apenas tenga texto literal casaría con mensajes que no son suyos, y el
 // cliente en inglés leería una frase equivocada en vez del español.
@@ -78,10 +141,13 @@ func TestNingunaPlantillaEsDemasiadoGenerica(t *testing.T) {
 // destino de /api/live/title, el estado de un flujo de autorización, el diagnóstico de
 // «probar destino»— son texto para personas y se traducen igual (spec v0.13 §3.3).
 //
-// El recolector resuelve también las variables locales asignadas con un literal. Si un
-// argumento de writeError es una variable que NO puede resolver, el test falla en vez de
-// callarse: un mensaje que el recolector no ve es un mensaje que nadie traducirá, y el
-// fallo silencioso sería justo el agujero que este test existe para tapar. Si algún día
+// El recolector resuelve también las variables locales asignadas con un literal. Si el
+// argumento de mensaje de un writeError tiene una forma que el recolector NO entiende
+// —una variable que no puede seguir, una llamada a una función que no está en sus listas,
+// un campo de struct, un índice de mapa—, el test falla diciendo el archivo y la línea en
+// vez de callarse: un mensaje que el recolector no ve es un mensaje que nadie traducirá, y
+// el fallo silencioso sería justo el agujero que este test existe para tapar. Las formas
+// que sí se aceptan, y por qué se acepta cada una, están en formaReconocida. Si algún día
 // hace falta un mensaje compuesto de verdad, se saca a una función y se añade a
 // funcionesDeMensaje.
 func TestTodoMensajeDeErrorTieneTraduccion(t *testing.T) {
@@ -235,6 +301,51 @@ func esMetodo(fun ast.Expr, nombre string) bool {
 	return ok && sel.Sel.Name == nombre
 }
 
+// formaReconocida dice si el recolector entiende la forma de un argumento de mensaje. No
+// es lo mismo que poder reconstruir el texto: hay formas que se aceptan precisamente
+// porque el texto se recoge por otro sitio. Las aceptadas son:
+//
+//   - un literal de cadena, o una suma de literales y partes variables;
+//   - una variable local que se asignó una sola vez con un literal;
+//   - fmt.Sprintf(formato, …) con el formato literal;
+//   - los envoltoriosTransparentes (textoSeguro, traducir), que no cambian el texto;
+//   - una llamada a una función de funcionesDeMensaje, cuyos `return` ya se recogen;
+//   - cualquier método .Error(), cuyo texto entra por el recolector del store.
+//
+// Todo lo demás —una llamada a una función que no está en las listas, un campo de struct,
+// un índice de mapa— es un mensaje que nadie va a traducir, y el test falla diciendo
+// dónde. Callarse sería justo el agujero que este test existe para tapar.
+func formaReconocida(rc reconstructor, e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.ParenExpr:
+		return formaReconocida(rc, v.X)
+	case *ast.BasicLit:
+		return v.Kind == token.STRING
+	case *ast.Ident:
+		_, ok := rc.locales[v.Name]
+		return ok
+	case *ast.BinaryExpr:
+		// Una suma vale si al menos un lado aporta texto conocido: el otro será un {n}.
+		return v.Op == token.ADD && (formaReconocida(rc, v.X) || formaReconocida(rc, v.Y))
+	case *ast.CallExpr:
+		if esLlamadaA(v.Fun, "fmt", "Sprintf") {
+			return len(v.Args) > 0 && formaReconocida(rc, v.Args[0])
+		}
+		if esMetodo(v.Fun, "Error") {
+			return true
+		}
+		id, ok := v.Fun.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		if funcionesDeMensaje[id.Name] {
+			return true
+		}
+		return envoltoriosTransparentes[id.Name] && len(v.Args) > 0 && formaReconocida(rc, v.Args[len(v.Args)-1])
+	}
+	return false
+}
+
 // funcionesDeMensaje componen un texto para personas: sus `return` son mensajes aunque no
 // pasen por writeError en el mismo sitio.
 var funcionesDeMensaje = map[string]bool{
@@ -365,7 +476,7 @@ func literalesDeWriteError(t *testing.T, dir string) []literalDeError {
 							return true
 						}
 						arg := v.Args[3]
-						// Una variable que no se pudo resolver NO se calla: ver el
+						// Una forma que el recolector no entiende NO se calla: ver el
 						// comentario de TestTodoMensajeDeErrorTieneTraduccion.
 						if ident, ok := arg.(*ast.Ident); ok {
 							if _, resuelta := rc.locales[ident.Name]; !resuelta {
@@ -373,6 +484,10 @@ func literalesDeWriteError(t *testing.T, dir string) []literalDeError {
 									fset.Position(arg.Pos()), ident.Name)
 								return true
 							}
+						} else if !formaReconocida(rc, arg) {
+							t.Errorf("argumento no reconocido en %s: el recolector no sabe leer esta forma y el mensaje se quedaría sin traducir; ver formaReconocida para las formas que se aceptan",
+								fset.Position(arg.Pos()))
+							return true
 						}
 						// err.Error() y mensajePlataforma(err) sí se ignoran: sus textos
 						// entran por el store y por las funciones de mensaje.

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"net/http"
 	"regexp"
@@ -43,8 +44,18 @@ func negociarIdioma(h string) idioma {
 		// dice el RFC para un parámetro mal formado: mejor atender la petición que
 		// rechazarla por un decimal.
 		if resto = strings.ToLower(strings.TrimSpace(resto)); strings.HasPrefix(resto, "q=") {
-			if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(resto, "q=")), 64); err == nil {
+			v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(resto, "q=")), 64)
+			switch {
+			case err != nil:
+				// Parámetro mal formado («q=abc», «q=»): se ignora y vale 1.
+			case v >= 0 && v <= 1:
 				q = v
+			default:
+				// Un número que SÍ parsea pero no es un qvalue (nan, inf, 5, -1): la
+				// comparación con nan es siempre falsa, así que cae aquí. No se puede
+				// adivinar qué quería quien lo mandó, y un nan colado en la lista
+				// envenenaría el orden entero; este idioma no compite y ya está.
+				continue
 			}
 		}
 		cs = append(cs, candidato{strings.ToLower(strings.TrimSpace(tag)), q})
@@ -93,6 +104,19 @@ func (r *respuestaConIdioma) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return h.Hijack()
 	}
 	return nil, nil, http.ErrNotSupported
+}
+
+// ReadFrom reexpone io.ReaderFrom por el mismo motivo que Flush y Hijack, y aquí se nota
+// en la máquina: http.ServeContent sobre un *os.File —descargar una grabación
+// (recording.go), bajarse el respaldo (backup.go)— pregunta si el writer sabe ReadFrom
+// para dejarle el copiado al sistema operativo (sendfile). Sin esto, el archivo entero se
+// copia a mano en trozos de 32 KB mientras el relay está emitiendo. Se delega si el writer
+// original lo implementa y, si no, se cae a io.Copy, que es justo lo que haría net/http.
+func (r *respuestaConIdioma) ReadFrom(src io.Reader) (int64, error) {
+	if rf, ok := r.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(r.ResponseWriter, src)
 }
 
 // conIdioma envuelve el mux entero: negociar una vez por petición sale más barato que
@@ -213,13 +237,28 @@ func (p plantilla) casar(msg string) ([]string, bool) {
 	return m[1:], true
 }
 
+// aplicar sustituye los {n} del destino en una sola pasada. Encadenar ReplaceAll no vale:
+// si el valor de {0} es un nombre de destino que lleva dentro un «{1}» literal, la pasada
+// siguiente lo tomaría por un comodín y lo cambiaría por el valor de {1}. Aquí cada {n}
+// del destino se resuelve una vez y lo que se inserta ya no se vuelve a mirar.
 func (p plantilla) aplicar(vars []string) string {
-	out := p.destino
+	valores := make(map[int]string, len(p.indices))
 	for i, n := range p.indices {
 		if i >= len(vars) {
 			break
 		}
-		out = strings.ReplaceAll(out, "{"+strconv.Itoa(n)+"}", vars[i])
+		valores[n] = vars[i]
 	}
-	return out
+	return reComodin.ReplaceAllStringFunc(p.destino, func(m string) string {
+		n, err := strconv.Atoi(m[1 : len(m)-1])
+		if err != nil {
+			return m
+		}
+		v, ok := valores[n]
+		if !ok {
+			// Un {n} del inglés sin su variable: se deja tal cual, que se vea.
+			return m
+		}
+		return v
+	})
 }
