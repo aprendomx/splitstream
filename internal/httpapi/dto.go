@@ -295,13 +295,14 @@ type panelDTO struct {
 
 // sessionSummaryDTO es una fila del historial: la sesión y cuántos eventos dejó por nivel.
 type sessionSummaryDTO struct {
-	ID         int64      `json:"id"`
-	StartedAt  time.Time  `json:"started_at"`
-	EndedAt    *time.Time `json:"ended_at"`
-	Width      *int       `json:"width"`
-	Height     *int       `json:"height"`
-	BitrateBPS *int       `json:"bitrate_bps"`
-	Events     struct {
+	ID           int64      `json:"id"`
+	StartedAt    time.Time  `json:"started_at"`
+	EndedAt      *time.Time `json:"ended_at"`
+	Width        *int       `json:"width"`
+	Height       *int       `json:"height"`
+	BitrateBPS   *int       `json:"bitrate_bps"`
+	HasRecording bool       `json:"has_recording"`
+	Events       struct {
 		Info  int `json:"info"`
 		Warn  int `json:"warn"`
 		Error int `json:"error"`
@@ -312,12 +313,55 @@ func newSessionSummaryDTO(s store.SessionSummary) sessionSummaryDTO {
 	dto := sessionSummaryDTO{
 		ID: s.ID, StartedAt: s.StartedAt.UTC(),
 		Width: s.Width, Height: s.Height, BitrateBPS: s.BitrateBPS,
+		HasRecording: s.HasRecording,
 	}
 	if s.EndedAt != nil {
 		e := s.EndedAt.UTC()
 		dto.EndedAt = &e
 	}
 	dto.Events.Info, dto.Events.Warn, dto.Events.Error = s.Info, s.Warn, s.Error
+	return dto
+}
+
+// sessionDetailDTO es la ficha completa de una sesión: sus eventos, sus grabaciones y los
+// contadores de su chat (spec v0.13 §3.4). Se llama "Detail" y no "DTO" a secas porque
+// sessionDTO ya existe y significa otra cosa: la sesión VIVA del estado (spec base §10).
+type sessionDetailDTO struct {
+	ID             int64          `json:"id"`
+	StartedAt      time.Time      `json:"started_at"`
+	EndedAt        *time.Time     `json:"ended_at"`
+	Width          *int           `json:"width"`
+	Height         *int           `json:"height"`
+	BitrateBPS     *int           `json:"bitrate_bps"`
+	DurationS      int            `json:"duration_s"`
+	Events         []eventDTO     `json:"events"`
+	Recordings     []recordingDTO `json:"recordings"`
+	ChatCount      int            `json:"chat_count"`
+	ChatByPlatform map[string]int `json:"chat_by_platform"`
+}
+
+// newSessionDetailDTO arma la ficha a partir de la sesión y de lo que ya se leyó del
+// store. duration_s es 0 mientras la sesión sigue viva (ended_at nil): no hay fin con el
+// que restar.
+func newSessionDetailDTO(s store.Session, events []store.Event, recordings []store.Recording, chatCount int, chatByPlatform map[string]int) sessionDetailDTO {
+	dto := sessionDetailDTO{
+		ID: s.ID, StartedAt: s.StartedAt.UTC(),
+		Width: s.Width, Height: s.Height, BitrateBPS: s.BitrateBPS,
+		ChatCount: chatCount, ChatByPlatform: chatByPlatform,
+	}
+	if s.EndedAt != nil {
+		e := s.EndedAt.UTC()
+		dto.EndedAt = &e
+		dto.DurationS = int(e.Sub(dto.StartedAt).Seconds())
+	}
+	dto.Events = make([]eventDTO, 0, len(events))
+	for _, ev := range events {
+		dto.Events = append(dto.Events, newEventDTO(ev))
+	}
+	dto.Recordings = make([]recordingDTO, 0, len(recordings))
+	for _, r := range recordings {
+		dto.Recordings = append(dto.Recordings, newRecordingDTO(r))
+	}
 	return dto
 }
 

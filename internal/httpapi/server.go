@@ -355,6 +355,7 @@ func (s *Server) routes() {
 	protegida("GET /api/status", s.handleStatus)
 	protegida("GET /api/events", s.handleEvents)
 	protegida("GET /api/sessions", s.handleSessions)
+	protegida("GET /api/sessions/{id}", s.handleSessionDetail)
 	protegida("POST /api/backup", s.handleBackup)
 	protegida("GET /api/recording/settings", s.handleGetRecordingSettings)
 	protegida("PATCH /api/recording/settings", s.handlePatchRecordingSettings)
