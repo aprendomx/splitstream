@@ -68,7 +68,7 @@ var traducciones = map[string]string{
 	"formato {0} no soportado: json, discord o slack":                        "format {0} is not supported: json, discord or slack",
 	"nivel {0} no soportado: info, warn o error":                             "level {0} is not supported: info, warn or error",
 	"URL de webhook inválida: falta el servidor":                             "invalid webhook URL: the host is missing",
-	"URL de webhook inválida: usa https:// (http solo vale hacia localhost)": "invalid webhook URL: use https:// (http is only allowed towards localhost)",
+	"URL de webhook inválida: usa https:// (http solo vale hacia localhost)": "invalid webhook URL: use https:// (http is only allowed for localhost)",
 	"URL de webhook inválida: esquema {0}, usa https://":                     "invalid webhook URL: scheme {0}, use https://",
 
 	// ---- auth.go ----
@@ -176,4 +176,31 @@ var traducciones = map[string]string{
 	// ---- webhooks.go ----
 	"los webhooks no están disponibles en este arranque": "webhooks are not available in this build",
 	"no se pudo entregar: {0}":                           "could not be delivered: {0}",
+
+	// ---- live.go: el `message` de cada resultado de /api/live/title (spec §3.3) ----
+	"{0} no permite cambiar el título desde aquí": "{0} does not allow changing the title from here",
+	"{0} no tiene cuenta vinculada":               "{0} has no linked account",
+	"{0} no permite cambiar la categoría":         "{0} does not allow changing the category",
+	"sin gestor de tokens":                        "no token manager",
+	"título aplicado en {0}":                      "title applied on {0}",
+	"categoría aplicada en {0}":                   "category applied on {0}",
+	"título y categoría aplicados en {0}":         "title and category applied on {0}",
+
+	// ---- platforms.go: el `message` de un flujo de autorización (authStatusDTO) ----
+	"el código venció; vuelve a empezar":                  "the code expired; start again",
+	"no se pudo guardar la cuenta":                        "the account could not be saved",
+	"rechazaste la autorización":                          "you turned down the authorization",
+	"la plataforma no autorizó la conexión: {0}":          "the platform did not authorize the connection: {0}",
+	"la plataforma no devolvió el código de autorización": "the platform did not return the authorization code",
+
+	// ---- test_destination.go: el diagnóstico de «probar destino» (probeDTO) ----
+	"la clave vino por API: no hay clave inválida que probar":                                                                                 "the key came from the API: there is no invalid key to test",
+	"La plataforma aceptó la conexión y la mantuvo abierta. La configuración es plausible; solo emitir de verdad confirma la clave.":          "The platform accepted the connection and kept it open. The setup is plausible; only streaming for real confirms the key.",
+	"La plataforma aceptó la conexión y la cerró enseguida. Casi siempre es la clave, o una emisión que ya no está abierta en la plataforma.": "The platform accepted the connection and closed it right away. It is almost always the key, or a broadcast that is no longer open on the platform.",
+	"La URL del destino no vale: tiene que empezar por rtmp:// o rtmps:// y llevar servidor y aplicación.":                                    "The destination URL is not valid: it has to start with rtmp:// or rtmps:// and carry a host and an app.",
+	"La plataforma rechazó el handshake en «{0}». Revisa la URL.":                                                                             "The platform rejected the handshake at «{0}». Check the URL.",
+	"La prueba se canceló antes de terminar. Vuelve a intentarlo.":                                                                            "The test was cancelled before it finished. Try again.",
+	"No se resuelve el nombre del servidor. Revisa la URL.":                                                                                   "The host name does not resolve. Check the URL.",
+	"El certificado del servidor no es válido. Revisa que la URL sea la de la plataforma y no la de un intermediario.":                        "The server certificate is not valid. Check that the URL is the platform's and not a middleman's.",
+	"No se pudo conectar con el servidor. Revisa la URL, el puerto y tu red.":                                                                 "The server could not be reached. Check the URL, the port and your network.",
 }

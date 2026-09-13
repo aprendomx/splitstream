@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aprendomx/splitstream/internal/platforms"
+	"github.com/aprendomx/splitstream/internal/store"
 )
 
 func TestNegociarIdioma(t *testing.T) {
@@ -22,6 +27,11 @@ func TestNegociarIdioma(t *testing.T) {
 		"en-GB,en;q=0.9,es;q=0.8": idiomaEN, "es-MX,en;q=0.5": idiomaES,
 		"fr-FR,en;q=0.7,de;q=0.6": idiomaEN, "*": idiomaES, "EN": idiomaEN,
 		"en;q=0": idiomaES, "es;q=0.1,en;q=0.9": idiomaEN,
+		// El nombre del parámetro no distingue mayúsculas (RFC 9110 §5.6.6).
+		"es;Q=0.1,en;Q=0.9": idiomaEN, "en;Q=0": idiomaES,
+		// Entradas rotas: ni pánico ni 500, se atiende en español o con q=1.
+		"en;q=abc": idiomaEN, ",,": idiomaES, "en;q=": idiomaEN, ";;;": idiomaES,
+		"  ,  en  ;  q = 0.5  ": idiomaEN,
 	}
 	for in, want := range casos {
 		if got := negociarIdioma(in); got != want {
@@ -49,8 +59,8 @@ func TestTraducirLiteralPlantillaYSinEntrada(t *testing.T) {
 }
 
 // TestNingunaPlantillaEsDemasiadoGenerica protege la mesa de las plantillas de sí misma:
-// una clave que empiece por comodín y apenas tenga texto literal casaría con mensajes que
-// no son suyos, y el cliente en inglés leería una frase equivocada en vez del español.
+// una clave que apenas tenga texto literal casaría con mensajes que no son suyos, y el
+// cliente en inglés leería una frase equivocada en vez del español.
 func TestNingunaPlantillaEsDemasiadoGenerica(t *testing.T) {
 	for _, p := range plantillas() {
 		if p.peso < 8 {
@@ -63,6 +73,17 @@ func TestNingunaPlantillaEsDemasiadoGenerica(t *testing.T) {
 // que cada literal que puede llegar al cliente tenga entrada en `traducciones` (o case con
 // una plantilla). Quien añade un mensaje sin traducción rompe este test, no el panel de
 // alguien en inglés.
+//
+// «Llegar al cliente» no es solo writeError: los DTO con campo Message —el resultado por
+// destino de /api/live/title, el estado de un flujo de autorización, el diagnóstico de
+// «probar destino»— son texto para personas y se traducen igual (spec v0.13 §3.3).
+//
+// El recolector resuelve también las variables locales asignadas con un literal. Si un
+// argumento de writeError es una variable que NO puede resolver, el test falla en vez de
+// callarse: un mensaje que el recolector no ve es un mensaje que nadie traducirá, y el
+// fallo silencioso sería justo el agujero que este test existe para tapar. Si algún día
+// hace falta un mensaje compuesto de verdad, se saca a una función y se añade a
+// funcionesDeMensaje.
 func TestTodoMensajeDeErrorTieneTraduccion(t *testing.T) {
 	literales := append(literalesDeWriteError(t, "."), literalesDeErroresDelStore(t, "../store")...)
 	if len(literales) < 80 {
@@ -73,7 +94,7 @@ func TestTodoMensajeDeErrorTieneTraduccion(t *testing.T) {
 	for _, l := range literales {
 		if traducir(idiomaEN, l.texto) == l.texto {
 			t.Errorf("%s: sin traducción: %q", l.pos, l.texto)
-			faltan = append(faltan, strconv.Quote(l.texto)+": "+strconv.Quote(l.texto)+",")
+			faltan = append(faltan, "\t"+strconv.Quote(l.texto)+": "+strconv.Quote(l.texto)+",")
 		}
 	}
 	// El volcado es para la siguiente persona: se pega en i18n_en.go y se redacta el
@@ -120,12 +141,22 @@ func paqueteDe(t *testing.T, dir string) (*token.FileSet, []*ast.File) {
 // reComodinVerbo reconoce los verbos de fmt para cambiarlos por {n}.
 var reComodinVerbo = regexp.MustCompile(`%[-+# 0]*[0-9]*(?:\.[0-9]+)?[a-zA-Z%]`)
 
-// textoDe reconstruye el mensaje que verá el cliente: los trozos literales se conservan y
-// cada parte que solo se conoce en ejecución (un nombre, un campo, un valor) se convierte
-// en el comodín {n}. Devuelve false si no hay ni un literal del que tirar.
-func textoDe(e ast.Expr) (string, bool) {
+// envoltoriosTransparentes son las funciones que no cambian el texto que reciben: se mira
+// lo de dentro. `textoSeguro` solo lo limpia y `traducir` es, precisamente, esto.
+var envoltoriosTransparentes = map[string]bool{"textoSeguro": true, "traducir": true}
+
+// reconstructor arma el mensaje que verá el cliente a partir de una expresión. Los trozos
+// literales se conservan y cada parte que solo se conoce en ejecución (un nombre, un
+// campo, un valor) se convierte en el comodín {n}.
+type reconstructor struct {
+	// locales son las variables de la función que se está mirando cuyo valor es un
+	// literal: así `msg := "…"; writeError(…, msg)` se ve igual que el literal.
+	locales map[string]string
+}
+
+func (rc reconstructor) texto(e ast.Expr) (string, bool) {
 	n := 0
-	return reconstruir(e, &n)
+	return rc.rec(e, &n)
 }
 
 func comodin(n *int) string {
@@ -134,10 +165,13 @@ func comodin(n *int) string {
 	return s
 }
 
-func reconstruir(e ast.Expr, n *int) (string, bool) {
+func (rc reconstructor) rec(e ast.Expr, n *int) (string, bool) {
 	switch v := e.(type) {
 	case *ast.ParenExpr:
-		return reconstruir(v.X, n)
+		return rc.rec(v.X, n)
+	case *ast.Ident:
+		s, ok := rc.locales[v.Name]
+		return s, ok
 	case *ast.BasicLit:
 		if v.Kind != token.STRING {
 			return "", false
@@ -151,26 +185,26 @@ func reconstruir(e ast.Expr, n *int) (string, bool) {
 		if v.Op != token.ADD {
 			return "", false
 		}
-		izq, okI := reconstruir(v.X, n)
+		izq, okI := rc.rec(v.X, n)
 		if !okI {
 			izq = comodin(n)
 		}
-		der, okD := reconstruir(v.Y, n)
+		der, okD := rc.rec(v.Y, n)
 		if !okD {
 			der = comodin(n)
 		}
 		return izq + der, okI || okD
 	case *ast.CallExpr:
 		if esLlamadaA(v.Fun, "fmt", "Sprintf") && len(v.Args) > 0 {
-			f, ok := reconstruir(v.Args[0], n)
+			f, ok := rc.rec(v.Args[0], n)
 			if !ok {
 				return "", false
 			}
 			return sustituirVerbos(f, n), true
 		}
-		// textoSeguro(x) no cambia el texto, solo lo limpia: se mira lo de dentro.
-		if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "textoSeguro" && len(v.Args) == 1 {
-			return reconstruir(v.Args[0], n)
+		if id, ok := v.Fun.(*ast.Ident); ok && envoltoriosTransparentes[id.Name] && len(v.Args) > 0 {
+			// traducir(lang, msg): el mensaje es el último argumento.
+			return rc.rec(v.Args[len(v.Args)-1], n)
 		}
 	}
 	return "", false
@@ -195,19 +229,71 @@ func esLlamadaA(fun ast.Expr, paquete, nombre string) bool {
 	return ok && id.Name == paquete
 }
 
-// funcionesDeMensaje son las que componen un texto para el cliente a partir de un error:
-// sus `return` son mensajes aunque no pasen por writeError en el mismo sitio.
-var funcionesDeMensaje = map[string]bool{"mensajePlataforma": true, "mensajeTitulo": true}
+// esMetodo reconoce `algo.nombre(…)` sin mirar el receptor.
+func esMetodo(fun ast.Expr, nombre string) bool {
+	sel, ok := fun.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == nombre
+}
+
+// funcionesDeMensaje componen un texto para personas: sus `return` son mensajes aunque no
+// pasen por writeError en el mismo sitio.
+var funcionesDeMensaje = map[string]bool{
+	"mensajePlataforma": true, "mensajeTitulo": true, "mensajeCambios": true, "probeMessage": true,
+}
+
+// funcionesQueAsignanMensaje: dentro de ellas, cada `algo.Message = …` es texto que sale
+// por writeJSON hacia una persona.
+var funcionesQueAsignanMensaje = map[string]bool{"aplicarEnDestino": true}
+
+// dtosConMensaje son los DTO cuyo campo Message se traduce antes de salir (spec §3.3). Se
+// listan por nombre para NO recoger de paso los Message de store.Event, que son registro
+// interno y se quedan en español.
+var dtosConMensaje = map[string]bool{
+	"liveResultDTO": true, "authStatusDTO": true, "testSkippedDTO": true, "probeDTO": true,
+}
+
+// literalesLocales devuelve las variables de una función asignadas con un texto que se
+// conoce entero en tiempo de compilación. Una variable asignada dos veces con textos
+// distintos se descarta: no se sabe cuál llega al writeError.
+func literalesLocales(d *ast.FuncDecl) map[string]string {
+	locales := map[string]string{}
+	dudosas := map[string]bool{}
+	ast.Inspect(d, func(n ast.Node) bool {
+		a, ok := n.(*ast.AssignStmt)
+		if !ok || len(a.Lhs) != 1 || len(a.Rhs) != 1 {
+			return true
+		}
+		id, ok := a.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		s, ok := reconstructor{}.texto(a.Rhs[0])
+		if !ok || strings.Contains(s, "{0}") {
+			dudosas[id.Name] = true
+			return true
+		}
+		if anterior, visto := locales[id.Name]; visto && anterior != s {
+			dudosas[id.Name] = true
+		}
+		locales[id.Name] = s
+		return true
+	})
+	for n := range dudosas {
+		delete(locales, n)
+	}
+	return locales
+}
 
 // literalesDeWriteError recoge, de un paquete HTTP: el cuarto argumento de cada
-// writeError, los `return` de las funciones que componen mensajes y el texto de las
-// variables de paquete errXxx.
+// writeError y de cada terminar(), los `return` de las funciones que componen mensajes,
+// las asignaciones a .Message, el campo Message de los DTO que se traducen y el texto de
+// las variables de paquete errXxx.
 func literalesDeWriteError(t *testing.T, dir string) []literalDeError {
 	t.Helper()
 	fset, archivos := paqueteDe(t, dir)
 	var out []literalDeError
-	añadir := func(p token.Pos, e ast.Expr) {
-		if s, ok := textoDe(e); ok && strings.TrimSpace(s) != "" {
+	añadir := func(p token.Pos, rc reconstructor, e ast.Expr) {
+		if s, ok := rc.texto(e); ok && strings.TrimSpace(s) != "" {
 			out = append(out, literalDeError{pos: fset.Position(p).String(), texto: s})
 		}
 	}
@@ -231,39 +317,71 @@ func literalesDeWriteError(t *testing.T, dir string) []literalDeError {
 						if !ok || !esLlamadaA(c.Fun, "errors", "New") || len(c.Args) != 1 {
 							continue
 						}
-						añadir(nombre.Pos(), c.Args[0])
+						añadir(nombre.Pos(), reconstructor{}, c.Args[0])
 					}
 				}
 			case *ast.FuncDecl:
-				if !funcionesDeMensaje[d.Name.Name] {
-					continue
-				}
+				rc := reconstructor{locales: literalesLocales(d)}
+				devuelveMensaje := funcionesDeMensaje[d.Name.Name]
+				asignaMensaje := funcionesQueAsignanMensaje[d.Name.Name]
 				ast.Inspect(d, func(n ast.Node) bool {
-					ret, ok := n.(*ast.ReturnStmt)
-					if !ok {
-						return true
-					}
-					for _, r := range ret.Results {
-						añadir(r.Pos(), r)
+					switch v := n.(type) {
+					case *ast.ReturnStmt:
+						if devuelveMensaje {
+							for _, r := range v.Results {
+								añadir(r.Pos(), rc, r)
+							}
+						}
+					case *ast.AssignStmt:
+						if !asignaMensaje || len(v.Lhs) != 1 || len(v.Rhs) != 1 {
+							return true
+						}
+						if sel, ok := v.Lhs[0].(*ast.SelectorExpr); ok && sel.Sel.Name == "Message" {
+							añadir(v.Rhs[0].Pos(), rc, v.Rhs[0])
+						}
+					case *ast.CompositeLit:
+						id, ok := v.Type.(*ast.Ident)
+						if !ok || !dtosConMensaje[id.Name] {
+							return true
+						}
+						for _, el := range v.Elts {
+							kv, ok := el.(*ast.KeyValueExpr)
+							if !ok {
+								continue
+							}
+							if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Message" {
+								añadir(kv.Value.Pos(), rc, kv.Value)
+							}
+						}
+					case *ast.CallExpr:
+						// terminar(f, status, acct, msg) deja el mensaje del flujo de
+						// autorización, que sale por authStatusDTO.
+						if esMetodo(v.Fun, "terminar") && len(v.Args) == 4 {
+							añadir(v.Args[3].Pos(), rc, v.Args[3])
+							return true
+						}
+						id, ok := v.Fun.(*ast.Ident)
+						if !ok || id.Name != "writeError" || len(v.Args) != 4 {
+							return true
+						}
+						arg := v.Args[3]
+						// Una variable que no se pudo resolver NO se calla: ver el
+						// comentario de TestTodoMensajeDeErrorTieneTraduccion.
+						if ident, ok := arg.(*ast.Ident); ok {
+							if _, resuelta := rc.locales[ident.Name]; !resuelta {
+								t.Errorf("argumento no literal en %s: writeError recibe la variable %q y el recolector no puede seguirla; saca el mensaje a un literal o a una función de funcionesDeMensaje",
+									fset.Position(arg.Pos()), ident.Name)
+								return true
+							}
+						}
+						// err.Error() y mensajePlataforma(err) sí se ignoran: sus textos
+						// entran por el store y por las funciones de mensaje.
+						añadir(arg.Pos(), rc, arg)
 					}
 					return true
 				})
 			}
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			c, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			id, ok := c.Fun.(*ast.Ident)
-			if !ok || id.Name != "writeError" || len(c.Args) != 4 {
-				return true
-			}
-			// El cuarto argumento puede ser err.Error() o mensajePlataforma(err): esos
-			// textos se cubren por el store y por las funciones de mensaje, no aquí.
-			añadir(c.Args[3].Pos(), c.Args[3])
-			return true
-		})
 	}
 	return out
 }
@@ -312,7 +430,7 @@ func literalesDeErroresDelStore(t *testing.T, dir string) []literalDeError {
 					if !esConstructor && !esLlamadaA(c.Fun, "errors", "New") {
 						continue
 					}
-					if s, ok := textoDe(c.Args[0]); ok {
+					if s, ok := (reconstructor{}).texto(c.Args[0]); ok {
 						textoDeVar[nombre.Name] = s
 					}
 				}
@@ -333,7 +451,7 @@ func literalesDeErroresDelStore(t *testing.T, dir string) []literalDeError {
 				return true
 			}
 			if id, ok := c.Fun.(*ast.Ident); ok && constructoresDelStore[id.Name] && len(c.Args) == 1 {
-				if s, ok := textoDe(c.Args[0]); ok {
+				if s, ok := (reconstructor{}).texto(c.Args[0]); ok {
 					añadir(c.Pos(), s)
 				}
 				return true
@@ -364,6 +482,37 @@ func literalesDeErroresDelStore(t *testing.T, dir string) []literalDeError {
 	return out
 }
 
+// pedirConIdioma hace una petición por el Handler completo —el único camino por el que
+// pasa el middleware— y devuelve el cuerpo.
+func pedirConIdioma(t *testing.T, ts *httptest.Server, cookies []*http.Cookie, metodo, ruta, lang, body string) []byte {
+	t.Helper()
+	var cuerpo io.Reader
+	if body != "" {
+		cuerpo = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(metodo, ts.URL+ruta, cuerpo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	if lang != "" {
+		req.Header.Set("Accept-Language", lang)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // TestAcceptLanguageTraduceLosErrores es la prueba de que las piezas encajan de punta a
 // punta: middleware, negociación, writeStoreError y tabla.
 func TestAcceptLanguageTraduceLosErrores(t *testing.T) {
@@ -372,22 +521,10 @@ func TestAcceptLanguageTraduceLosErrores(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	pedir := func(lang string) errorBody {
-		req, _ := http.NewRequest("PATCH", ts.URL+"/api/destinations/999999", strings.NewReader(`{"name":"x"}`))
-		req.Header.Set("Content-Type", "application/json")
-		for _, c := range cookies {
-			req.AddCookie(c)
-		}
-		if lang != "" {
-			req.Header.Set("Accept-Language", lang)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
 		var body errorBody
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			t.Fatalf("respuesta ilegible: %v", err)
+		b := pedirConIdioma(t, ts, cookies, http.MethodPatch, "/api/destinations/999999", lang, `{"name":"x"}`)
+		if err := json.Unmarshal(b, &body); err != nil {
+			t.Fatalf("respuesta ilegible: %v — %s", err, b)
 		}
 		return body
 	}
@@ -400,4 +537,84 @@ func TestAcceptLanguageTraduceLosErrores(t *testing.T) {
 	if b := pedir("fr"); !strings.Contains(b.Error.Message, "no encontrado") {
 		t.Errorf("fr cae a es: %+v", b)
 	}
+}
+
+// TestAcceptLanguageTraduceLosMensajesDeLosDTO cubre los `message` que NO salen por
+// writeError: el resultado por destino de /api/live/title, el estado de un flujo de
+// autorización y el «no hay nada que probar» de probar destino (spec v0.13 §3.3).
+func TestAcceptLanguageTraduceLosMensajesDeLosDTO(t *testing.T) {
+	srv, db, cookies := servidorPlataformas(t, &fakeProvider{configured: true})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	ctx := t.Context()
+
+	t.Run("live", func(t *testing.T) {
+		sinCuenta, err := db.CreateDestination(ctx, srv.cipher, store.NewDestination{
+			Name: "Canal", Platform: store.PlatformTwitch, RTMPURL: "rtmp://x/app", Key: "k", Enabled: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cuerpo := `{"title":"Hola","destinations":[` + itoa(sinCuenta.ID) + `]}`
+		var res []liveResultDTO
+		b := pedirConIdioma(t, ts, cookies, http.MethodPost, "/api/live/title", "en", cuerpo)
+		if err := json.Unmarshal(b, &res); err != nil || len(res) != 1 {
+			t.Fatalf("respuesta = %s (%v)", b, err)
+		}
+		if res[0].Message != "Canal has no linked account" {
+			t.Errorf("en: %q", res[0].Message)
+		}
+		b = pedirConIdioma(t, ts, cookies, http.MethodPost, "/api/live/title", "", cuerpo)
+		json.Unmarshal(b, &res)
+		if res[0].Message != "Canal no tiene cuenta vinculada" {
+			t.Errorf("es: %q", res[0].Message)
+		}
+	})
+
+	t.Run("auth", func(t *testing.T) {
+		srv.auths.mu.Lock()
+		srv.auths.flows["st-en"] = &authFlow{status: "error", message: "rechazaste la autorización",
+			expira: time.Now().Add(time.Minute), platform: platforms.Twitch}
+		srv.auths.flows["st-es"] = &authFlow{status: "error", message: "rechazaste la autorización",
+			expira: time.Now().Add(time.Minute), platform: platforms.Twitch}
+		srv.auths.mu.Unlock()
+		var out authStatusDTO
+		b := pedirConIdioma(t, ts, cookies, http.MethodGet, "/api/platforms/twitch/auth/st-en", "en", "")
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatalf("respuesta = %s (%v)", b, err)
+		}
+		if out.Status != "error" || out.Message != "you turned down the authorization" {
+			t.Errorf("en: %+v", out)
+		}
+		b = pedirConIdioma(t, ts, cookies, http.MethodGet, "/api/platforms/twitch/auth/st-es", "es", "")
+		json.Unmarshal(b, &out)
+		if out.Message != "rechazaste la autorización" {
+			t.Errorf("es: %+v", out)
+		}
+	})
+
+	t.Run("probar destino con clave de la API", func(t *testing.T) {
+		acct := cuentaViaStore(t, srv, db)
+		d, err := db.CreateDestination(ctx, srv.cipher, store.NewDestination{
+			Name: "Con emisión", Platform: store.PlatformTwitch, RTMPURL: "rtmp://x/app", Key: "k", Enabled: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetBroadcast(ctx, store.Broadcast{DestinationID: d.ID, AccountID: acct.ID,
+			Platform: store.PlatformTwitch, BroadcastRef: "b1", KeyFromAPI: true}); err != nil {
+			t.Fatal(err)
+		}
+		var out testSkippedDTO
+		b := pedirConIdioma(t, ts, cookies, http.MethodPost, destPath(d.ID)+"/test", "en", "")
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatalf("respuesta = %s (%v)", b, err)
+		}
+		if !out.Skipped || out.Message != "the key came from the API: there is no invalid key to test" {
+			t.Errorf("en: %+v", out)
+		}
+		b = pedirConIdioma(t, ts, cookies, http.MethodPost, destPath(d.ID)+"/test", "", "")
+		json.Unmarshal(b, &out)
+		if out.Message != "la clave vino por API: no hay clave inválida que probar" {
+			t.Errorf("es: %+v", out)
+		}
+	})
 }

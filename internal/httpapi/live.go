@@ -66,6 +66,14 @@ func (s *Server) handleLiveTitle(w http.ResponseWriter, r *http.Request) {
 		vistos[id] = true
 		out = append(out, s.aplicarEnDestino(r.Context(), id, in))
 	}
+	// El `message` de cada resultado es texto para personas igual que el de un error, así
+	// que sigue el idioma de la petición (spec v0.13 §3.3). Se traduce aquí y no dentro de
+	// aplicarEnDestino porque esa función no ve el ResponseWriter —y porque el mismo texto
+	// se usa también en el registro de eventos, que se queda en español.
+	lang := idiomaDe(w)
+	for i := range out {
+		out[i].Message = traducir(lang, out[i].Message)
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -132,10 +140,25 @@ func (s *Server) aplicarEnDestino(ctx context.Context, id int64, in liveTitleReq
 		cambios = append(cambios, "categoría")
 	}
 	res.OK = true
-	res.Message = strings.Join(cambios, " y ") + " aplicados en " + d.Name
+	res.Message = mensajeCambios(cambios, d.Name)
 	s.db.LogEvent(context.WithoutCancel(ctx), store.Event{DestinationID: &id, Level: store.LevelInfo, Kind: "channel_updated",
 		Message: "canal actualizado (" + strings.Join(cambios, ", ") + ") en " + d.Name})
 	return res
+}
+
+// mensajeCambios devuelve una de tres frases COMPLETAS en vez de pegar las palabras
+// sueltas («título» + « y » + «categoría» + « aplicados en »).
+//
+// Es lo que hace traducible el resultado: en inglés cambian el orden, el artículo y la
+// concordancia del participio, y una tabla de mensajes traduce frases, no conjuga.
+func mensajeCambios(cambios []string, destino string) string {
+	if len(cambios) == 1 && cambios[0] == "título" {
+		return "título aplicado en " + destino
+	}
+	if len(cambios) == 1 {
+		return "categoría aplicada en " + destino
+	}
+	return "título y categoría aplicados en " + destino
 }
 
 // errSinTitulo: ni la plataforma sabe poner título ni hay emisión donde ponerlo.

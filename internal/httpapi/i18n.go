@@ -38,7 +38,11 @@ func negociarIdioma(h string) idioma {
 		}
 		tag, resto, _ := strings.Cut(parte, ";")
 		q := 1.0
-		if resto = strings.TrimSpace(resto); strings.HasPrefix(resto, "q=") {
+		// El nombre del parámetro NO distingue mayúsculas (RFC 9110 §5.6.6): hay clientes
+		// que mandan «Q=0.9». Un q= que no es un número se ignora y vale 1, que es lo que
+		// dice el RFC para un parámetro mal formado: mejor atender la petición que
+		// rechazarla por un decimal.
+		if resto = strings.ToLower(strings.TrimSpace(resto)); strings.HasPrefix(resto, "q=") {
 			if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(resto, "q=")), 64); err == nil {
 				q = v
 			}

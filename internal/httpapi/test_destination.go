@@ -85,7 +85,7 @@ func (s *Server) handleTestDestination(w http.ResponseWriter, r *http.Request) {
 	// gastar cuota. Se contesta ANTES de cualquier sonda.
 	if d.KeyFromAPI {
 		writeJSON(w, http.StatusOK, testSkippedDTO{Skipped: true,
-			Message: "la clave vino por API: no hay clave inválida que probar"})
+			Message: traducir(idiomaDe(w), "la clave vino por API: no hay clave inválida que probar")})
 		return
 	}
 	if s.tester == nil {
@@ -124,5 +124,9 @@ func (s *Server) handleTestDestination(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		s.logger.Error("no se pudo registrar la prueba del destino", "err", err)
 	}
+	// Se traduce DESPUÉS de registrar el evento: el diagnóstico que lee quien pide la
+	// prueba va en su idioma, y el que queda en la base se queda en español, que es el
+	// idioma del registro (spec v0.13 §3.3).
+	dto.Message = traducir(idiomaDe(w), dto.Message)
 	writeJSON(w, http.StatusOK, dto)
 }
