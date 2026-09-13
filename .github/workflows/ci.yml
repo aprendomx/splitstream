@@ -116,6 +116,9 @@ jobs:
       - name: instalar dependencias
         run: cd web && npm ci
 
+      - name: paridad de idiomas
+        run: cd web && node scripts/i18n-check.mjs
+
       - name: compilar
         run: cd web && npm run build
 

@@ -19,5 +19,8 @@ app.use(Quasar, {
     notify: { position: 'top', timeout: 4000 },
   },
 })
+// El watch inmediato de i18n aplica el paquete de idioma de Quasar y el lang del documento
+// al arrancar: no hace falta pasar `lang` en la config de arriba.
+import '@/i18n'
 Dark.set(true)
 app.mount('#app')

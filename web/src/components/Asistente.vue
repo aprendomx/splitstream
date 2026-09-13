@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { iVer, iOcultar, iBroadcast, iError, iInfo, iAviso } from '@/iconos'
 import { api, ApiError } from '@/api'
+import { t, idioma, cambiarIdioma, idiomas } from '@/i18n'
 
 const props = defineProps({
   // Del GET /api/setup: si la petición no vino de la propia máquina, hace falta el código.
@@ -36,7 +37,7 @@ async function configurar() {
     await api.configurar(password.value, codigo.value)
     emit('listo')
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'No se pudo configurar'
+    error.value = e instanceof ApiError ? e.message : t('errores.no_se_pudo_configurar')
   } finally {
     guardando.value = false
   }
@@ -44,97 +45,110 @@ async function configurar() {
 </script>
 
 <template>
-  <q-card flat bordered class="asistente">
-    <q-card-section class="text-center q-pb-none">
-      <q-icon :name="iBroadcast" size="40px" class="text-primary" />
-      <div class="text-h6 q-mt-sm">Bienvenido a Splitstream</div>
-      <div class="text-body2 text-grey-5 q-mt-xs">
-        Elige una contraseña para el panel. Es lo único que hace falta para empezar.
-      </div>
-    </q-card-section>
+  <div class="asistente-envoltorio column items-center q-gutter-sm">
+    <!-- Primera pantalla que ve una persona nueva: el selector va aquí, antes de la
+         tarjeta de bienvenida, para que se pueda elegir el idioma antes de leer nada. -->
+    <q-btn-toggle
+      :model-value="idioma"
+      @update:model-value="cambiarIdioma"
+      no-caps
+      dense
+      unelevated
+      :options="idiomas.map((l) => ({ label: l.nombre, value: l.id }))"
+      :aria-label="t('app.idioma')"
+    />
 
-    <q-card-section class="q-gutter-md">
-      <!-- El código solo aparece cuando de verdad hace falta: al abrir el panel desde otra
-           máquina. En el PC de casa esta parte ni existe. -->
-      <template v-if="pideCodigo">
-        <q-banner dense class="bg-blue-10 text-blue-2 rounded-borders">
-          <template #avatar><q-icon :name="iInfo" color="info" /></template>
-          Estás abriendo el panel desde otro equipo, así que hace falta el código que
-          Splitstream imprimió en su consola al arrancar.
-        </q-banner>
-        <q-input
-          v-model="codigo"
-          label="Código de la consola"
-          placeholder="XXXX-XXXX-XXXX"
-          outlined
-          dense
-          autocapitalize="characters"
-          autocorrect="off"
-          spellcheck="false"
-          class="codigo"
-        />
-      </template>
+    <q-card flat bordered class="asistente">
+      <q-card-section class="text-center q-pb-none">
+        <q-icon :name="iBroadcast" size="40px" class="text-primary" />
+        <div class="text-h6 q-mt-sm">{{ t('asistente.bienvenida') }}</div>
+        <div class="text-body2 text-grey-5 q-mt-xs">
+          {{ t('asistente.subtitulo') }}
+        </div>
+      </q-card-section>
 
-      <q-input
-        v-model="password"
-        label="Contraseña"
-        :type="verPassword ? 'text' : 'password'"
-        hint="Mínimo 8 caracteres"
-        outlined
-        dense
-        autofocus
-        autocomplete="new-password"
-      >
-        <template #append>
-          <q-btn
-            flat round dense
-            :icon="verPassword ? iOcultar : iVer"
-            :aria-label="verPassword ? 'Ocultar la contraseña' : 'Mostrar la contraseña'"
-            @click="verPassword = !verPassword"
+      <q-card-section class="q-gutter-md">
+        <!-- El código solo aparece cuando de verdad hace falta: al abrir el panel desde otra
+             máquina. En el PC de casa esta parte ni existe. -->
+        <template v-if="pideCodigo">
+          <q-banner dense class="bg-blue-10 text-blue-2 rounded-borders">
+            <template #avatar><q-icon :name="iInfo" color="info" /></template>
+            {{ t('asistente.aviso_codigo') }}
+          </q-banner>
+          <q-input
+            v-model="codigo"
+            :label="t('asistente.codigo_label')"
+            placeholder="XXXX-XXXX-XXXX"
+            outlined
+            dense
+            autocapitalize="characters"
+            autocorrect="off"
+            spellcheck="false"
+            class="codigo"
           />
         </template>
-      </q-input>
 
-      <q-input
-        v-model="repetida"
-        label="Repite la contraseña"
-        :type="verPassword ? 'text' : 'password'"
-        :error="noCoinciden"
-        error-message="No coinciden"
-        outlined
-        dense
-        autocomplete="new-password"
-        @keyup.enter="puedeSeguir && configurar()"
-      />
+        <q-input
+          v-model="password"
+          :label="t('comun.contrasena')"
+          :type="verPassword ? 'text' : 'password'"
+          :hint="t('asistente.hint_contrasena')"
+          outlined
+          dense
+          autofocus
+          autocomplete="new-password"
+        >
+          <template #append>
+            <q-btn
+              flat round dense
+              :icon="verPassword ? iOcultar : iVer"
+              :aria-label="verPassword ? t('asistente.ocultar_contrasena') : t('asistente.mostrar_contrasena')"
+              @click="verPassword = !verPassword"
+            />
+          </template>
+        </q-input>
 
-      <!-- El aviso que pediste: si el panel es alcanzable desde fuera, esta contraseña es
-           lo único que separa a cualquiera de tus claves de retransmisión. -->
-      <q-banner v-if="!local" dense class="bg-orange-10 text-orange-2 rounded-borders">
-        <template #avatar><q-icon :name="iAviso" color="warning" /></template>
-        Este panel es accesible desde la red. Esta contraseña es lo único que protege tus
-        claves de retransmisión: elige una larga y cámbiala si sospechas que se ha filtrado.
-      </q-banner>
+        <q-input
+          v-model="repetida"
+          :label="t('asistente.repetir_contrasena')"
+          :type="verPassword ? 'text' : 'password'"
+          :error="noCoinciden"
+          :error-message="t('asistente.no_coinciden')"
+          outlined
+          dense
+          autocomplete="new-password"
+          @keyup.enter="puedeSeguir && configurar()"
+        />
 
-      <q-banner v-if="error" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">
-        <template #avatar><q-icon :name="iError" color="negative" /></template>
-        {{ error }}
-      </q-banner>
-    </q-card-section>
+        <!-- El aviso que pediste: si el panel es alcanzable desde fuera, esta contraseña es
+             lo único que separa a cualquiera de tus claves de retransmisión. -->
+        <q-banner v-if="!local" dense class="bg-orange-10 text-orange-2 rounded-borders">
+          <template #avatar><q-icon :name="iAviso" color="warning" /></template>
+          {{ t('asistente.aviso_red') }}
+        </q-banner>
 
-    <q-card-actions class="q-px-md q-pb-md">
-      <q-btn
-        unelevated no-caps color="primary" class="full-width"
-        :loading="guardando"
-        :disable="!puedeSeguir"
-        label="Empezar"
-        @click="configurar"
-      />
-    </q-card-actions>
-  </q-card>
+        <q-banner v-if="error" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">
+          <template #avatar><q-icon :name="iError" color="negative" /></template>
+          {{ error }}
+        </q-banner>
+      </q-card-section>
+
+      <q-card-actions class="q-px-md q-pb-md">
+        <q-btn
+          unelevated no-caps color="primary" class="full-width"
+          :loading="guardando"
+          :disable="!puedeSeguir"
+          :label="t('asistente.empezar')"
+          @click="configurar"
+        />
+      </q-card-actions>
+    </q-card>
+  </div>
 </template>
 
 <style scoped>
-.asistente { width: 400px; max-width: 100%; }
+.asistente-envoltorio { width: 400px; max-width: 100%; }
+.asistente { width: 100%; }
 .codigo :deep(input) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0.12em;

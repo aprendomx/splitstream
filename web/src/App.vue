@@ -4,6 +4,7 @@ import { ref, computed, onMounted } from 'vue'
 import { usePanel } from '@/stores/panel'
 import Asistente from '@/components/Asistente.vue'
 import { ApiError } from '@/api'
+import { t, idioma, cambiarIdioma, idiomas } from '@/i18n'
 
 const panel = usePanel()
 const password = ref('')
@@ -40,7 +41,7 @@ async function entrar() {
     await panel.entrar(password.value)
     password.value = ''
   } catch (e) {
-    errorLogin.value = e instanceof ApiError ? e.message : 'No se pudo entrar'
+    errorLogin.value = e instanceof ApiError ? e.message : t('errores.no_se_pudo_entrar')
   } finally {
     entrando.value = false
   }
@@ -53,25 +54,32 @@ async function entrar() {
       <q-toolbar>
         <q-icon :name="iBroadcast" size="24px" class="q-mr-sm text-primary" />
         <q-toolbar-title class="text-weight-medium">Splitstream</q-toolbar-title>
-        <q-btn v-if="panel.autenticado" flat round dense :icon="iGrabaciones" aria-label="Grabaciones" :to="{ name: 'grabaciones' }" />
-        <q-btn v-if="panel.autenticado" flat round dense :icon="iAjustes" aria-label="Ajustes" :to="{ name: 'ajustes' }" />
+        <q-btn-dropdown flat dense no-caps :label="idioma.toUpperCase()" :aria-label="t('app.idioma')">
+          <q-list>
+            <q-item v-for="l in idiomas" :key="l.id" clickable v-close-popup @click="cambiarIdioma(l.id)">
+              <q-item-section>{{ l.nombre }}</q-item-section>
+            </q-item>
+          </q-list>
+        </q-btn-dropdown>
+        <q-btn v-if="panel.autenticado" flat round dense :icon="iGrabaciones" :aria-label="t('app.grabaciones')" :to="{ name: 'grabaciones' }" />
+        <q-btn v-if="panel.autenticado" flat round dense :icon="iAjustes" :aria-label="t('app.ajustes')" :to="{ name: 'ajustes' }" />
         <q-btn
           v-if="panel.autenticado"
           flat round dense :icon="iInfo"
-          aria-label="Créditos y licencias"
+          :aria-label="t('app.creditos')"
           :to="{ name: 'creditos' }"
         />
         <q-btn v-if="panel.autenticado" flat round dense :icon="iSalir"
-               aria-label="Cerrar sesión" @click="panel.salir()" />
+               :aria-label="t('app.cerrar_sesion')" @click="panel.salir()" />
       </q-toolbar>
     </q-header>
 
     <q-page-container>
       <q-banner v-if="avisoVersion" dense class="bg-primary text-white" role="status">
-        Hay una versión nueva de Splitstream ({{ avisoVersion.latest }}).
+        {{ t('app.aviso_version', { version: avisoVersion.latest }) }}
         <template #action>
-          <q-btn v-if="avisoVersion.url" flat no-caps label="Ver" :href="avisoVersion.url" target="_blank" rel="noopener" />
-          <q-btn flat no-caps label="Cerrar" @click="cerrarAviso" />
+          <q-btn v-if="avisoVersion.url" flat no-caps :label="t('app.ver')" :href="avisoVersion.url" target="_blank" rel="noopener" />
+          <q-btn flat no-caps :label="t('comun.cerrar')" @click="cerrarAviso" />
         </template>
       </q-banner>
 
@@ -93,11 +101,11 @@ async function entrar() {
       <q-page v-else-if="!panel.autenticado" class="flex flex-center q-pa-md">
         <q-card flat bordered style="width: 340px; max-width: 100%">
           <q-card-section class="q-gutter-md">
-            <div class="text-h6">Entrar</div>
+            <div class="text-h6">{{ t('app.entrar') }}</div>
             <q-form @submit.prevent="entrar" class="q-gutter-md">
               <q-input
                 v-model="password"
-                label="Contraseña"
+                :label="t('comun.contrasena')"
                 :type="verPassword ? 'text' : 'password'"
                 outlined
                 dense
@@ -106,7 +114,7 @@ async function entrar() {
               >
                 <template #append>
                   <q-btn flat round dense :icon="verPassword ? iOcultar : iVer"
-                         :aria-label="verPassword ? 'Ocultar' : 'Mostrar'"
+                         :aria-label="verPassword ? t('app.ocultar_contrasena') : t('app.mostrar_contrasena')"
                          @click="verPassword = !verPassword" />
                 </template>
               </q-input>
@@ -115,7 +123,7 @@ async function entrar() {
                 {{ errorLogin }}
               </q-banner>
               <q-btn type="submit" unelevated no-caps color="primary" class="full-width"
-                     :loading="entrando" label="Entrar" />
+                     :loading="entrando" :label="t('app.entrar')" />
             </q-form>
           </q-card-section>
         </q-card>
