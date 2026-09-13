@@ -42,6 +42,17 @@ const (
 // timeout en vez de confiar en el ajeno.
 const connectTimeout = 15 * time.Second
 
+// writeTimeout acota CADA escritura hacia el destino. go-rtmp v0.0.7 traía 5 s cableados
+// en Stream.Write; el parche 1 de third_party/go-rtmp lo hace configurable y aquí se baja
+// a 3 s (spec v1.0 §3.1).
+//
+// Por qué 3 y no 5: mientras una escritura está bloqueada, el sink de ese destino no puede
+// hacer nada más —ni vaciar su cola, ni darse por caído, ni reconectar—, así que el plazo
+// es el tiempo que tarda en detectarse una plataforma que dejó de consumir. Tres segundos
+// siguen siendo holgadísimos para un enlace sano (un GOP entero cabe de sobra) y recortan
+// casi a la mitad el hueco antes de reconectar.
+const writeTimeout = 3 * time.Second
+
 // stageError dice en qué paso falló Connect. Lo usa Probe para explicar al usuario si el
 // problema fue la red, el TLS o el handshake. El texto del error no cambia: Error()
 // delega en el error envuelto.
@@ -249,11 +260,11 @@ func (p *Publisher) Connect(ctx context.Context) error {
 					ServerName: hostOf(p.tgt.addr),
 					MinVersion: tls.VersionTLS12,
 				},
-			}, "rtmps", p.tgt.addr, &rtmp.ConnConfig{})
+			}, "rtmps", p.tgt.addr, &rtmp.ConnConfig{WriteTimeout: writeTimeout})
 		default:
 			conn, err = rtmp.DialWithDialer(
 				&net.Dialer{Deadline: deadline},
-				"rtmp", p.tgt.addr, &rtmp.ConnConfig{})
+				"rtmp", p.tgt.addr, &rtmp.ConnConfig{WriteTimeout: writeTimeout})
 		}
 		results <- dialResult{conn: conn, err: err}
 	}()

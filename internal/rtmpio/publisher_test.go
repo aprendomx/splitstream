@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/aprendomx/splitstream/internal/crypto"
+	"github.com/aprendomx/splitstream/internal/relay"
 )
 
 func TestParseTargetRTMP(t *testing.T) {
@@ -513,4 +515,99 @@ func TestPublisherOmitsLogAppForFlatPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ingestaQueNoDrena es un IngestHandler que acepta al publisher y luego se queda clavado
+// en el primer mensaje de media.
+//
+// go-rtmp llama al handler DESDE la goroutine que lee el socket de la conexión, así que
+// bloquearse en OnMessage es exactamente «dejar de leer»: los búferes TCP se llenan y el
+// Write del cliente acaba bloqueándose, que es el caso real de una plataforma que deja de
+// consumir sin cerrar la conexión.
+type ingestaQueNoDrena struct {
+	bloqueo chan struct{} // se cierra al terminar el test para soltar la goroutine
+}
+
+func (h *ingestaQueNoDrena) OnPublishStart(app, streamKey string) error { return nil }
+func (h *ingestaQueNoDrena) OnMessage(msg *relay.Message)               { <-h.bloqueo }
+func (h *ingestaQueNoDrena) OnPublishEnd()                              {}
+
+// servidorRTMPQueNoDrena levanta una ingesta que completa handshake, connect,
+// createStream y publish y después deja de leer del socket. Devuelve su dirección y una
+// función que vuelve a ponerla a drenar (idempotente).
+func servidorRTMPQueNoDrena(t *testing.T) (addr string, liberar func()) {
+	t.Helper()
+	h := &ingestaQueNoDrena{bloqueo: make(chan struct{})}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: h})
+	go ing.Serve(ln)
+	liberar = sync.OnceFunc(func() { close(h.bloqueo) })
+	// El orden importa: primero se suelta al handler y luego se cierra la ingesta. Al
+	// revés, la goroutine de la conexión seguiría clavada en OnMessage.
+	t.Cleanup(func() {
+		liberar()
+		ing.Close()
+	})
+	time.Sleep(200 * time.Millisecond)
+	return ln.Addr().String(), liberar
+}
+
+// TestWriteToAStalledPeerFailsWithinThreeSeconds: escribir hacia un destino que aceptó la
+// conexión y dejó de leer tiene que fallar en ≈3 s, no en los 5 s que go-rtmp v0.0.7 trae
+// cableados en Stream.Write. El parche 1 hace ese plazo configurable y el Publisher lo
+// fija en writeTimeout (spec v1.0 §3.1): cuanto antes falle la escritura, antes puede el
+// sink tirar la conexión y reconectar.
+//
+// El plazo se mide sobre la llamada que falla, no desde el principio del bucle: llenar
+// los búferes del socket lleva su tiempo y no es parte de lo que se está midiendo.
+func TestWriteToAStalledPeerFailsWithinThreeSeconds(t *testing.T) {
+	addr, liberar := servidorRTMPQueNoDrena(t)
+
+	p, err := NewPublisher(PublisherConfig{
+		URL:       "rtmp://" + addr + "/live",
+		StreamKey: crypto.Secret("clave"),
+		ChunkSize: DefaultChunkSize,
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	defer p.Close()
+	// Se ejecuta ANTES que p.Close() (los defer son LIFO): con el peer drenando otra vez,
+	// el cierre ordenado no tiene que esperar a que expire ningún plazo.
+	defer liberar()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Un tag de video válido (H.264, keyframe): si no lo fuera, la ingesta lo rechazaría
+	// y cerraría la conexión, y el error vendría del cierre y no del plazo.
+	frame := make([]byte, 64<<10)
+	copy(frame, []byte{0x17, 0x01, 0x00, 0x00, 0x00})
+
+	var (
+		errEscritura error
+		inicio       time.Time
+		escritas     int
+	)
+	arranque := time.Now()
+	for i := 0; i < 100000 && errEscritura == nil; i++ {
+		inicio = time.Now()
+		errEscritura = p.WriteVideo(uint32(i), frame)
+		escritas = i
+	}
+	if errEscritura == nil {
+		t.Fatal("el peer que no drena nunca produjo error")
+	}
+	d := time.Since(inicio)
+	if d < writeTimeout-time.Second || d > writeTimeout+time.Second {
+		t.Errorf("la escritura tardó %v en rendirse; quería ≈%v (5 s sería el valor cableado de upstream)", d, writeTimeout)
+	}
+	t.Logf("%d escrituras de 64 KiB llenaron el búfer en %v; la siguiente falló tras %v: %v",
+		escritas, time.Since(arranque)-d, d, errEscritura)
 }

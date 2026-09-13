@@ -10,7 +10,6 @@ package rtmp
 import (
 	"bytes"
 	"context"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -318,12 +317,16 @@ func (s *Stream) WriteSetChunkSize(chunkSize uint32) error {
 	return s.Write(chunkStreamID, timeStamp, msg)
 }
 
-func (s *Stream) Write(chunkStreamID int, timestamp uint32, msg message.Message) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // TODO: Fix 5s
-	defer cancel()
-
+func (s *Stream) WriteContext(ctx context.Context, chunkStreamID int, timestamp uint32, msg message.Message) error {
 	s.cmsg.Message = msg
 	return s.streamer().Write(ctx, chunkStreamID, timestamp, &s.cmsg)
+}
+
+func (s *Stream) Write(chunkStreamID int, timestamp uint32, msg message.Message) error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.conn.config.WriteTimeout)
+	defer cancel()
+
+	return s.WriteContext(ctx, chunkStreamID, timestamp, msg)
 }
 
 func (s *Stream) handle(chunkStreamID int, timestamp uint32, msg message.Message) error {

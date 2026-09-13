@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/ioutil"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
@@ -48,6 +49,9 @@ type ConnConfig struct {
 	ReaderBufferSize int
 	WriterBufferSize int
 
+	// WriteTimeout bounds each Stream.Write; zero keeps the historical 5s.
+	WriteTimeout time.Duration
+
 	ControlState StreamControlStateConfig
 
 	Logger  logrus.FieldLogger
@@ -67,6 +71,10 @@ func (cb *ConnConfig) normalize() *ConnConfig {
 
 	if c.WriterBufferSize == 0 {
 		c.WriterBufferSize = 4 * 1024 // 4KB (Default)
+	}
+
+	if c.WriteTimeout <= 0 {
+		c.WriteTimeout = 5 * time.Second // (Default)
 	}
 
 	c.ControlState = *c.ControlState.normalize()

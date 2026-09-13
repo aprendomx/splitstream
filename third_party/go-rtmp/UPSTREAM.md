@@ -9,7 +9,7 @@
 
 | N.º | Archivo | Qué arregla | Test |
 | --- | --- | --- | --- |
-| (vacío hasta la Task 2) | | | |
+| 1 | `conn.go`, `stream.go` | `Stream.Write` tenía 5 s cableados (`// TODO: Fix 5s`), así que una plataforma que deja de consumir tardaba 5 s en dar error y el sink no podía reconectar antes. Ahora el plazo sale de `ConnConfig.WriteTimeout` (0 → los 5 s de siempre, comportamiento por defecto intacto) y se añade `Stream.WriteContext` para quien quiera traer su propio contexto. | `TestWriteToAStalledPeerFailsWithinThreeSeconds` (`internal/rtmpio/publisher_test.go`) |
 
 ## Regenerar
 
