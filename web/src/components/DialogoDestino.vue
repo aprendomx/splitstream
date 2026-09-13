@@ -58,6 +58,9 @@ const error = ref(null)
 
 const plat = computed(() => (plataforma.value ? porId(plataforma.value) : null))
 const necesitaServidor = computed(() => plataforma.value && pideServidor(plataforma.value))
+// «Otro (RTMP/RTMPS)» no tiene un menú real que describir, así que no lleva dondeKey: el
+// hint se calla en vez de enseñar «Lo encuentras en: undefined».
+const hintDonde = computed(() => (plat.value?.dondeKey ? t('dialogo_destino.hint_donde', { donde: t(plat.value.dondeKey) }) : ''))
 
 // Cuenta vinculada. Solo tiene sentido para plataformas con proveedor propio (Twitch, y
 // las que se sumen): custom, TikTok, X y Facebook no llevan bloque de cuenta.
@@ -439,7 +442,7 @@ async function guardar() {
             v-model="servidor"
             :label="t('dialogo_destino.servidor_label')"
             placeholder="rtmp://…"
-            :hint="plat ? t('dialogo_destino.hint_donde', { donde: plat.donde }) : ''"
+            :hint="hintDonde"
             outlined
             dense
             inputmode="url"
@@ -459,9 +462,7 @@ async function guardar() {
             :hint="
               editando
                 ? t('dialogo_destino.hint_clave_actual', { mascara: destino.key_mask })
-                : plat
-                  ? t('dialogo_destino.hint_donde', { donde: plat.donde })
-                  : ''
+                : hintDonde
             "
             outlined
             dense

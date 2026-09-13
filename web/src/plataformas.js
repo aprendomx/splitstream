@@ -14,7 +14,7 @@ export const PLATAFORMAS = [
     id: 'youtube',
     nombre: 'YouTube',
     url: 'rtmp://a.rtmp.youtube.com/live2',
-    donde: 'YouTube Studio → Crear → Emitir en directo',
+    dondeKey: 'plataformas.youtube.donde',
     icono: iYoutube,
     color: '#ff0033',
   },
@@ -22,7 +22,7 @@ export const PLATAFORMAS = [
     id: 'twitch',
     nombre: 'Twitch',
     url: 'rtmp://live.twitch.tv/app',
-    donde: 'Creator Dashboard → Configuración → Transmisión',
+    dondeKey: 'plataformas.twitch.donde',
     icono: iTwitch,
     color: '#9146ff',
     // Twitch corta lo que pase de 6 Mbps.
@@ -32,7 +32,7 @@ export const PLATAFORMAS = [
     id: 'facebook',
     nombre: 'Facebook',
     url: 'rtmps://live-api-s.facebook.com:443/rtmp/',
-    donde: 'Live Producer → Usar clave de transmisión',
+    dondeKey: 'plataformas.facebook.donde',
     icono: iFacebook,
     color: '#0866ff',
   },
@@ -40,7 +40,7 @@ export const PLATAFORMAS = [
     id: 'kick',
     nombre: 'Kick',
     url: 'rtmps://fa723fc1b171.global-contribute.live-video.net/app',
-    donde: 'Creator Dashboard → Configuración de stream',
+    dondeKey: 'plataformas.kick.donde',
     icono: iKick,
     color: '#53fc18',
   },
@@ -48,7 +48,7 @@ export const PLATAFORMAS = [
     id: 'x',
     nombre: 'X',
     url: 'rtmps://va.pscp.tv:443/x',
-    donde: 'Media Studio → Producer',
+    dondeKey: 'plataformas.x.donde',
     icono: iX,
     color: '#e7e9ea',
   },
@@ -58,7 +58,7 @@ export const PLATAFORMAS = [
     // TikTok es la excepción: emite servidor Y clave por emisión, así que no hay URL que
     // precargar. La interfaz pide las dos cosas en lugar de fingir que es como las demás.
     url: null,
-    donde: 'TikTok Live Studio, o Live Center → Transmitir con software',
+    dondeKey: 'plataformas.tiktok.donde',
     icono: iTiktok,
     color: '#25f4ee',
     notaKey: 'plataformas.tiktok.nota',
@@ -66,8 +66,9 @@ export const PLATAFORMAS = [
   {
     id: 'custom',
     nombre: 'Otro (RTMP/RTMPS)',
+    // Sin dondeKey a propósito: no hay una plataforma real cuyo menú describir, es
+    // cualquier servidor RTMP/RTMPS propio del usuario.
     url: null,
-    donde: 'Cualquier servidor RTMP o RTMPS',
     icono: iServidor,
     color: '#94a3b8',
   },
