@@ -8,9 +8,10 @@
 frecuencia: los de aquí son los que estaban publicados a esa fecha y hay que comprobarlos
 en la página de precios de cada producto antes de tomar una decisión con ellos.
 
-Este documento lo escriben los autores de Splitstream. Por eso no lleva adjetivos ni
-comparativos de valor: no dice cuál es mejor, más fácil ni más potente. Dice qué hace cada
-uno, qué cuesta y por dónde pasa tu vídeo, y deja la comparación a quien lee.
+Este documento lo escriben los autores de Splitstream. Por eso no emite juicios de valor
+propios: no dice cuál es mejor, más fácil ni más potente. Dice qué hace cada uno, qué
+cuesta y por dónde pasa tu vídeo, y deja la comparación a quien lee. Cuando reproduce un
+juicio ajeno —la columna «Costo de entrada» del §5 es del roadmap— se dice de quién es.
 
 **Cuando un dato no se puede verificar en la documentación pública del producto, la celda
 dice «no documentado».** No se rellena por aproximación ni de memoria. Una celda «no
@@ -80,16 +81,18 @@ intermediario lo eliges y lo administras tú.
 
 ## 5. Capacidades por plataforma
 
-Esta matriz está copiada tal cual del roadmap
+Esta matriz viene del roadmap
 [`superpowers/specs/2026-09-09-roadmap-mejoras.md`](superpowers/specs/2026-09-09-roadmap-mejoras.md)
 §2 y describe lo que **cada plataforma** permite hacer por API, no lo que hace un producto
-concreto. Su columna «Costo de entrada» es el juicio del roadmap sobre el trabajo de
-integración, no una valoración de las plataformas.
+concreto. Se reproduce tal cual salvo una celda: donde el roadmap valoraba la programación
+de YouTube («es la mejor de todas») aquí se dice qué ofrece su API. Su columna «Costo de
+entrada» es el juicio del roadmap sobre el trabajo de integración, no una valoración de
+las plataformas.
 
 | Plataforma | Título en vivo | Programar | Chat | Costo de entrada |
 | --- | --- | --- | --- | --- |
 | **Twitch** | Sí, sencillo | No aplica (no hay "evento") | EventSub por WebSocket, push | Bajo. Registrar app y listo |
-| **YouTube** | Sí | Sí, es la mejor de todas | Polling, caro en cuota | **Alto.** Verificación OAuth + problema de cuota (§3) |
+| **YouTube** | Sí | Sí, con API de eventos programados | Polling, caro en cuota | **Alto.** Verificación OAuth + problema de cuota (§3) |
 | **Kick** | Sí, API pública oficial | Parcial | Solo por webhook entrante | Medio. Requiere URL pública (§4) |
 | **Facebook** | Sí | Sí | Sí | **Muy alto.** Requiere App Review y solo está disponible con verificación de negocio, y puede exigir firmar contratos adicionales |
 | **X** | Improbable | — | — | Sin vía viable a costo razonable |

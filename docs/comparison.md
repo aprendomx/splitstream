@@ -8,10 +8,11 @@
 are what was published on that date, and they have to be checked on each product's pricing
 page before any decision is made on them.
 
-This document is written by the authors of Splitstream. That is why it carries no
-adjectives and no value comparisons: it does not say which one is better, easier or more
-powerful. It says what each one does, what it costs and where your video goes, and leaves
-the comparison to the reader.
+This document is written by the authors of Splitstream. That is why it makes no value
+judgements of our own: it does not say which one is better, easier or more powerful. It
+says what each one does, what it costs and where your video goes, and leaves the
+comparison to the reader. Where it repeats someone else's judgement (the "Cost of entry"
+column in §5 is the roadmap's), it says whose it is.
 
 **When a fact cannot be verified in the product's public documentation, the cell says "not
 documented".** It is not filled in by approximation or from memory. A "not documented" cell
@@ -81,16 +82,18 @@ that you pick the middleman and you administer it.
 
 ## 5. Capabilities per platform
 
-This matrix is copied verbatim from the roadmap
+This matrix comes from the roadmap
 [`superpowers/specs/2026-09-09-roadmap-mejoras.md`](superpowers/specs/2026-09-09-roadmap-mejoras.md)
 §2 (in Spanish) and describes what **each platform** allows through its API, not what any
-one product does. Its "Cost of entry" column is the roadmap's judgement about the
-integration work, not an assessment of the platforms.
+one product does. It is reproduced as it stands except for one cell: where the roadmap
+rated YouTube's scheduling ("the best of all of them"), this says what its API offers. Its
+"Cost of entry" column is the roadmap's judgement about the integration work, not an
+assessment of the platforms.
 
 | Platform | Live title | Scheduling | Chat | Cost of entry |
 | --- | --- | --- | --- | --- |
 | **Twitch** | Yes, straightforward | Not applicable (there is no "event") | EventSub over WebSocket, push | Low. Register an app and that's it |
-| **YouTube** | Yes | Yes, the best of all of them | Polling, expensive in quota | **High.** OAuth verification + the quota problem (§3) |
+| **YouTube** | Yes | Yes, with a scheduled-event API | Polling, expensive in quota | **High.** OAuth verification + the quota problem (§3) |
 | **Kick** | Yes, official public API | Partial | Only through an inbound webhook | Medium. Requires a public URL (§4) |
 | **Facebook** | Yes | Yes | Yes | **Very high.** Requires App Review and is only available with business verification, and may require signing additional contracts |
 | **X** | Unlikely | — | — | No viable route at a reasonable cost |
