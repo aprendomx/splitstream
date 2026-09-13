@@ -2,24 +2,26 @@
 import { computed } from 'vue'
 import { iBroadcast } from '@/iconos'
 import { usePanel } from '@/stores/panel'
+import { t } from '@/i18n'
 
 const panel = usePanel()
 const version = computed(() => panel.estado?.version || 'dev')
 
 const REPOSITORIO = 'https://github.com/aprendomx/splitstream'
 
-// Licencias leídas de los propios paquetes, no supuestas.
+// Licencias leídas de los propios paquetes, no supuestas. La explicación de cada una (qKey)
+// es nuestra y se traduce; el nombre y la licencia son datos y no se tocan.
 const MOTOR = [
   { n: 'go-rtmp', l: 'Boost Software License 1.0', u: 'https://github.com/yutopp/go-rtmp',
-    q: 'Cliente y servidor RTMP. Es lo que habla con OBS y con las plataformas.' },
+    qKey: 'creditos.motor.go_rtmp' },
   { n: 'modernc.org/sqlite', l: 'BSD-3-Clause', u: 'https://gitlab.com/cznic/sqlite',
-    q: 'SQLite reescrito en Go puro. Es lo que permite que un solo binario funcione en cinco plataformas sin compilador de C.' },
+    qKey: 'creditos.motor.sqlite' },
   { n: 'coder/websocket', l: 'ISC', u: 'https://github.com/coder/websocket',
-    q: 'El WebSocket que empuja el estado al panel cada segundo.' },
+    qKey: 'creditos.motor.websocket' },
   { n: 'golang.org/x/crypto', l: 'BSD-3-Clause', u: 'https://pkg.go.dev/golang.org/x/crypto',
-    q: 'argon2id para la contraseña del panel.' },
+    qKey: 'creditos.motor.crypto' },
   { n: 'golang.org/x/time', l: 'BSD-3-Clause', u: 'https://pkg.go.dev/golang.org/x/time',
-    q: 'El limitador de intentos de acceso.' },
+    qKey: 'creditos.motor.time' },
 ]
 
 const PANEL = [
@@ -34,9 +36,9 @@ const PANEL = [
 
 const HERRAMIENTAS = [
   { n: 'mediamtx', l: 'MIT', u: 'https://github.com/bluenviron/mediamtx',
-    q: 'Los servidores RTMP falsos contra los que corren los tests de integración.' },
+    qKey: 'creditos.herramientas.mediamtx' },
   { n: 'FFmpeg', l: 'LGPL-2.1 / GPL-2.0', u: 'https://ffmpeg.org',
-    q: 'Publica el patrón de prueba en los tests, y sirve para aislar si un fallo es nuestro o de la plataforma.' },
+    qKey: 'creditos.herramientas.ffmpeg' },
 ]
 </script>
 
@@ -46,46 +48,42 @@ const HERRAMIENTAS = [
       <div class="text-center q-mb-lg">
         <q-icon :name="iBroadcast" size="40px" class="text-primary" />
         <div class="text-h5 q-mt-sm">Splitstream</div>
-        <div class="text-caption text-grey-5">versión {{ version }}</div>
+        <div class="text-caption text-grey-5">{{ t('creditos.version', { version }) }}</div>
         <div class="text-body2 text-grey-4 q-mt-sm">
-          Retransmisión RTMP self-hosted. Recibe un stream desde OBS y lo reenvía
-          simultáneamente a varias plataformas, sin transcodificar.
+          {{ t('creditos.subtitulo') }}
         </div>
         <q-btn
           flat no-caps color="primary" class="q-mt-sm"
-          label="Ver el proyecto en GitHub"
+          :label="t('creditos.ver_en_github')"
           type="a" :href="REPOSITORIO" target="_blank" rel="noopener noreferrer"
         />
       </div>
 
       <q-card flat bordered class="q-mb-md">
         <q-card-section>
-          <div class="text-subtitle1">Licencia</div>
+          <div class="text-subtitle1">{{ t('creditos.licencia_titulo') }}</div>
           <p class="text-body2 text-grey-4 q-mt-sm q-mb-none">
-            Splitstream se publica bajo la licencia <strong>MIT</strong>: puedes usarlo,
-            modificarlo y distribuirlo, también con fines comerciales, conservando el aviso
-            de copyright. Se ofrece sin garantía de ningún tipo.
+            {{ t('creditos.licencia_pre') }} <strong>MIT</strong>{{ t('creditos.licencia_post') }}
           </p>
         </q-card-section>
       </q-card>
 
       <q-card flat bordered class="q-mb-md">
         <q-card-section>
-          <div class="text-subtitle1">Gracias</div>
+          <div class="text-subtitle1">{{ t('creditos.gracias_titulo') }}</div>
           <p class="text-body2 text-grey-4 q-mt-sm q-mb-none">
-            Esto existe gracias al trabajo de otras personas, publicado libremente. Lo que
-            sigue no es un requisito legal: es de dónde viene lo que estás usando.
+            {{ t('creditos.gracias_texto') }}
           </p>
         </q-card-section>
       </q-card>
 
-      <div class="text-subtitle2 text-grey-5 q-mb-sm">El motor</div>
+      <div class="text-subtitle2 text-grey-5 q-mb-sm">{{ t('creditos.el_motor') }}</div>
       <q-list bordered separator class="rounded-borders q-mb-md">
         <q-item v-for="d in MOTOR" :key="d.n" clickable tag="a" :href="d.u"
                 target="_blank" rel="noopener noreferrer">
           <q-item-section>
             <q-item-label>{{ d.n }}</q-item-label>
-            <q-item-label caption class="porque">{{ d.q }}</q-item-label>
+            <q-item-label caption class="porque">{{ t(d.qKey) }}</q-item-label>
           </q-item-section>
           <q-item-section side>
             <q-badge outline color="grey-6" :label="d.l" />
@@ -93,7 +91,7 @@ const HERRAMIENTAS = [
         </q-item>
       </q-list>
 
-      <div class="text-subtitle2 text-grey-5 q-mb-sm">El panel</div>
+      <div class="text-subtitle2 text-grey-5 q-mb-sm">{{ t('creditos.el_panel') }}</div>
       <q-list bordered separator class="rounded-borders q-mb-md">
         <q-item v-for="d in PANEL" :key="d.n" clickable tag="a" :href="d.u"
                 target="_blank" rel="noopener noreferrer">
@@ -104,13 +102,13 @@ const HERRAMIENTAS = [
         </q-item>
       </q-list>
 
-      <div class="text-subtitle2 text-grey-5 q-mb-sm">Para construirlo y probarlo</div>
+      <div class="text-subtitle2 text-grey-5 q-mb-sm">{{ t('creditos.construir_probar') }}</div>
       <q-list bordered separator class="rounded-borders q-mb-md">
         <q-item v-for="d in HERRAMIENTAS" :key="d.n" clickable tag="a" :href="d.u"
                 target="_blank" rel="noopener noreferrer">
           <q-item-section>
             <q-item-label>{{ d.n }}</q-item-label>
-            <q-item-label caption class="porque">{{ d.q }}</q-item-label>
+            <q-item-label caption class="porque">{{ t(d.qKey) }}</q-item-label>
           </q-item-section>
           <q-item-section side>
             <q-badge outline color="grey-6" :label="d.l" />
@@ -119,8 +117,7 @@ const HERRAMIENTAS = [
       </q-list>
 
       <p class="text-caption text-grey-6 text-center q-mt-lg">
-        Las marcas de YouTube, Twitch, Facebook, Kick, X y TikTok pertenecen a sus
-        respectivos dueños. Splitstream no está afiliado a ninguna de ellas.
+        {{ t('creditos.marcas') }}
       </p>
     </div>
   </q-page>

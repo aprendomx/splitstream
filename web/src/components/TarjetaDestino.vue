@@ -81,7 +81,7 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
     <div class="row items-center q-gutter-xs q-px-md">
       <q-chip dense square :color="tono.color" text-color="white" :icon="tono.icono" size="sm"
               class="q-ml-none">
-        {{ diag.titulo }}
+        {{ t(diag.tituloKey) }}
       </q-chip>
       <span v-if="conCifras" class="bitrate">{{ bitrateLegible(m.bitrate_bps) }}</span>
     </div>
@@ -95,11 +95,11 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
       <q-chip v-else-if="conProveedor" dense square size="sm" color="grey-9" text-color="grey-5">{{ t('destino.sin_cuenta') }}</q-chip>
     </div>
 
-    <div v-if="diag.detalle" class="detalle q-px-md q-pt-xs" :class="`text-${tono.color}`">
-      {{ diag.detalle }}
+    <div v-if="diag.detalleKey" class="detalle q-px-md q-pt-xs" :class="`text-${tono.color}`">
+      {{ t(diag.detalleKey, diag.params) }}
     </div>
-    <div v-if="diag.consejo" class="consejo q-px-md q-pt-xs">
-      <q-icon :name="iConsejo" size="14px" class="q-mr-xs" />{{ diag.consejo }}
+    <div v-if="diag.consejoKey" class="consejo q-px-md q-pt-xs">
+      <q-icon :name="iConsejo" size="14px" class="q-mr-xs" />{{ t(diag.consejoKey, diag.params) }}
     </div>
     <div v-if="suspendido" class="q-px-md q-pt-sm">
       <q-btn dense no-caps unelevated color="primary" size="sm" :icon="iRotar"

@@ -61,7 +61,7 @@ export const PLATAFORMAS = [
     donde: 'TikTok Live Studio, o Live Center → Transmitir con software',
     icono: iTiktok,
     color: '#25f4ee',
-    nota: 'TikTok da un servidor distinto en cada emisión, así que hay que pegar los dos campos.',
+    notaKey: 'plataformas.tiktok.nota',
   },
   {
     id: 'custom',

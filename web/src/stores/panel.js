@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { Notify } from 'quasar'
 import { api, ApiError } from '@/api'
+import { t } from '@/i18n'
 
 // El estado del panel se alimenta del WebSocket, que empuja el mismo statusDTO que
 // devuelve GET /api/status (spec §10). El snapshot inicial viene del GET para que la
@@ -125,7 +126,7 @@ export const usePanel = defineStore('panel', {
       if (!nuevos.length) return
       this.ultimoEventoAvisado = nuevos[0].id
       for (const e of nuevos.filter((e) => e.level === 'error').reverse()) {
-        Notify.create({ type: 'negative', message: e.message, timeout: 8000, actions: [{ label: 'Cerrar', color: 'white' }] })
+        Notify.create({ type: 'negative', message: e.message, timeout: 8000, actions: [{ label: t('comun.cerrar'), color: 'white' }] })
       }
     },
 

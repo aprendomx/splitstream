@@ -11,7 +11,9 @@ import { t } from '@/i18n'
 const emit = defineEmits(['cerrar'])
 
 const lienzo = ref(null)
-const aviso = ref(t('vista_previa.conectando'))
+// Se guarda la CLAVE, no el texto ya traducido: así, si el idioma cambia mientras se
+// enseña, la plantilla lo resuelve de nuevo con t() en vez de quedarse con el texto viejo.
+const avisoKey = ref('vista_previa.conectando')
 
 let ws = null
 let decoder = null
@@ -43,7 +45,7 @@ function pintar(frame) {
   canvas.getContext('2d').drawImage(frame, 0, 0)
   // Obligatorio: cada VideoFrame retiene memoria de GPU hasta que se cierra.
   frame.close()
-  aviso.value = null
+  avisoKey.value = null
 }
 
 async function configurar(avcc) {
@@ -130,7 +132,7 @@ onBeforeUnmount(() => cerrar())
     <q-separator />
     <q-card-section class="q-pa-none cuadro">
       <canvas ref="lienzo" class="lienzo" />
-      <div v-if="aviso" class="text-caption text-grey-5 q-pa-md">{{ aviso }}</div>
+      <div v-if="avisoKey" class="text-caption text-grey-5 q-pa-md">{{ t(avisoKey) }}</div>
     </q-card-section>
   </q-card>
 </template>

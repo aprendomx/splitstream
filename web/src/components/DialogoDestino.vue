@@ -348,9 +348,9 @@ async function guardar() {
           />
         </div>
 
-        <q-banner v-if="plat?.nota" dense class="bg-grey-9 text-grey-3 rounded-borders">
+        <q-banner v-if="plat?.notaKey" dense class="bg-grey-9 text-grey-3 rounded-borders">
           <template #avatar><q-icon :name="iInfo" color="info" /></template>
-          {{ plat.nota }}
+          {{ t(plat.notaKey) }}
         </q-banner>
 
         <q-input
