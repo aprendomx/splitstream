@@ -65,7 +65,9 @@ func conLetsEncrypt(cfg *config.Config, onError func(error)) (*Setup, error) {
 	}
 	nombre := sonda.Name()
 	if err := sonda.Close(); err != nil {
-		os.Remove(nombre)
+		// Borrar la sonda es una cortesía: ya vamos a fallar el arranque por el Close, y
+		// si tampoco se puede borrar, lo que queda es un .sonda-* que DirCache ignora.
+		_ = os.Remove(nombre)
 		return nil, fmt.Errorf("SPLITSTREAM_TLS_CACHE_DIR %s no es escribible: %w", cfg.TLSCacheDir, err)
 	}
 	if err := os.Remove(nombre); err != nil {

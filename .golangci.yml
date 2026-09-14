@@ -43,6 +43,14 @@ linters:
         - (io/fs.File).Close
         - (net/http.Flusher).Flush
         # Cierres por tipo concreto.
+        #
+        # OJO con (*os.File).Close: esta exclusión vale para los archivos abiertos para
+        # LEER —servir una grabación, servir el respaldo, comprobar que un asset existe—,
+        # donde el error del cierre no dice nada que no supieras ya. Los archivos abiertos
+        # para ESCRIBIR comprueban su Close a mano, porque ahí el error sí es la diferencia
+        # entre "guardado" y "guardado a medias": ver escribirClave en internal/config
+        # (la clave maestra) y FLVWriter.closeSegment en internal/record (los segmentos).
+        # Si abres un archivo para escribir, no te apoyes en esta línea.
         - (*os.File).Close
         - (*net.TCPConn).Close
         - (*database/sql.DB).Close
@@ -70,14 +78,36 @@ linters:
         - os.RemoveAll
     gosec:
       excludes:
-        - G104 # duplica errcheck, que aquí ya está configurado con sus excepciones una a una
-        - G115 # ver la nota de abajo: son truncamientos deliberados de campos de formato
+        - G104 # 25 hallazgos; duplica errcheck, ver la nota de abajo
+        - G115 # 18 hallazgos; truncamientos deliberados, uno a uno en la nota de abajo
         - G304 # rutas de archivo que vienen de la configuración del operador, no de la red
         - G404 # math/rand solo para jitter de backoff, nunca para secretos (crypto/rand)
-      # G115 (conversión entera que podría desbordar) sale 12 veces, todas en el empaquetado
-      # de bytes de FLV/AVC y en las métricas: el valor viene acotado por el propio formato
-      # (un tipo de tag cabe en un byte, un componente RGB en un uint8) y truncarlo es lo
-      # que se quiere. No hay ninguna donde el dato venga sin acotar de la red.
+      #
+      # G104 (error sin comprobar) sale 25 veces y no aporta nada sobre errcheck: son las
+      # mismas llamadas —LogEvent y los cierres de mejor esfuerzo— pero gosec NO lee la
+      # configuración de errcheck, así que mantener los dos obligaría a escribir cada
+      # excepción dos veces y en dos formatos distintos.
+      #
+      # G115 (conversión entera que podría desbordar) sale 18 veces. Se revisaron una a una
+      # y ninguna recibe un dato sin acotar que venga de la red:
+      #
+      #  - FLV/AVC, 6 (internal/record/flv.go, internal/record/writer.go): el empaquetado
+      #    del encabezado de tag. `n` se compara con maxTagSize (24 bits) en la línea de
+      #    arriba, y el timestamp se parte en el 24+8 que define el propio formato FLV.
+      #    El uint32(SegmentMinutes) de writer.go va acotado a 0..240 por el store
+      #    (maxSegmentMinutes en recording_settings.go).
+      #  - imagen, 4 (internal/imagen/imagen.go): la media del filtro de caja. `sr/n` es
+      #    como mucho 0xFFFF —componentes de 16 bits— y el >>8 lo deja en 0..255 antes del
+      #    uint8. Acotado por construcción.
+      #  - vista previa, 3 (internal/httpapi/preview.go): byte(ts>>24), byte(ts>>16)… Es
+      #    la extracción big-endian de un uint32 a mano; truncar ES la operación.
+      #  - statfs, 2 (internal/record/disk_unix.go): uint64 -> int64 de Bavail y Blocks.
+      #    Un sistema de archivos con 2^63 bloques no existe.
+      #  - hash, 1 (internal/crypto/password.go): uint32(len(want)), el largo del hash que
+      #    ya estaba en nuestra propia base, no algo que llegue de fuera.
+      #  - motor, 2 (internal/relay/metrics.go, internal/relay/sink.go): uint64(n) sobre
+      #    los bytes de una escritura que ya salió bien (nunca negativa) y el uint32 -> uint8
+      #    del enum State, que es un conjunto cerrado de cuatro valores.
     staticcheck:
       # Se conserva el resto de ST1xxx; solo se quitan estos, con motivo:
       #  - ST1005: los mensajes de error son en español, van a la cara del usuario y se
@@ -124,8 +154,17 @@ linters:
       enabled-tags: [diagnostic]
   exclusions:
     paths:
-      - third_party
-      - web
+      # ANCLADO a propósito. Estos patrones son expresiones regulares contra la ruta del
+      # archivo, no prefijos de directorio: un `web` suelto también casa con
+      # `internal/webtls/`, y durante un rato dejó ese paquete entero sin revisar —tapó un
+      # os.Remove sin comprobar y dos avisos más—. Si añades una ruta aquí, ánclala.
+      #
+      # third_party/go-rtmp es un módulo aparte (replace en go.mod), así que el linter del
+      # módulo principal no entra ahí de todas formas; se escribe por claridad.
+      #
+      # `web/` NO se excluye: no es solo el frontend, tiene un archivo de Go de verdad
+      # (web/embed.go, el go:embed del panel) y queremos revisarlo.
+      - ^third_party/
     rules:
       # Los tests pueden ignorar errores de limpieza y usar valores fijos.
       - path: _test\.go
@@ -173,6 +212,25 @@ linters:
       - path: internal/httpapi/logos\.go
         linters: [gosec]
         text: G705
+
+      # El doc del paquete EXPLICA go:embed y al hacerlo escribe "// go:embed:" dentro de
+      # una frase; staticcheck lo lee como una directiva mal escrita. La directiva de
+      # verdad, //go:embed all:dist/spa, está bien puesta unas líneas más abajo.
+      - path: web/embed\.go
+        linters: [staticcheck]
+        text: SA9009
+
+      # G710 (open redirect) en el handler que manda de HTTP a HTTPS. Es el MISMO patrón
+      # que el HTTPHandler de autocert —x/crypto v0.55.0, autocert.go:423, "https://" +
+      # stripPort(r.Host) + r.URL.RequestURI()—, y no es explotable aquí: el esquema es
+      # fijo ("https://"), y net/http rechaza con 400 "malformed Host header", antes de
+      # que el handler exista, cualquier Host que lleve "/" o "\" (comprobado), así que el
+      # atacante no puede hacer que el destino apunte a otro origen. Lo único que puede
+      # conseguir es que le redirijan a su propio dominio. Usar el dominio configurado en
+      # vez de r.Host rompería el camino de certificado propio, donde no hay dominio.
+      - path: internal/webtls/webtls\.go
+        linters: [gosec]
+        text: G710
 
       # misspell solo tiene sentido donde hay inglés: las traducciones del panel. En el
       # resto del repo los comentarios y los identificadores son en español (ver la nota de

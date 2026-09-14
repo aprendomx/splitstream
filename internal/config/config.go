@@ -199,11 +199,40 @@ func claveDelArchivo(ruta string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("crear el archivo de clave %s: %w", ruta, err)
 	}
-	defer f.Close()
-	if _, err := f.WriteString(clave + "\n"); err != nil {
+	// Aquí NO vale el `defer f.Close()` de siempre. Este archivo es lo que hace legibles
+	// las claves de TODOS los destinos: si se queda a medias no hay de dónde recuperarlo.
+	// Y Close puede fallar mucho después del WriteString —con el disco lleno, o con un
+	// error de escritura que el núcleo difiere hasta el cierre—, así que tirar su error
+	// era devolver como guardada una clave que no llegó entera al disco.
+	//
+	// Si algo falla se borra el archivo a medio escribir: el arranque siguiente genera
+	// otro en vez de leer basura y dar por buena una clave que no es.
+	if err := escribirClave(f, clave); err != nil {
+		if rerr := os.Remove(ruta); rerr != nil {
+			// No se pudo ni borrar el archivo a medias. Hay que decirlo en el mismo error:
+			// si queda ahí, el arranque siguiente lo lee y da por buena una clave que no
+			// lo es, y para entonces ya no hay nada que enseñe qué pasó.
+			return "", false, fmt.Errorf("escribir el archivo de clave %s: %w "+
+				"(y quedó a medias: bórralo a mano, no se pudo borrar aquí: %v)", ruta, err, rerr)
+		}
 		return "", false, fmt.Errorf("escribir el archivo de clave %s: %w", ruta, err)
 	}
 	return clave, true, nil
+}
+
+// escribirClave escribe la clave y cierra el archivo, y devuelve el PRIMER error de los
+// tres pasos. Sync antes de Close porque un Close limpio no promete que los bytes estén
+// en el disco, solo que el descriptor se soltó sin quejas. Es el mismo patrón que
+// FLVWriter.closeSegment.
+func escribirClave(f *os.File, clave string) error {
+	_, err := f.WriteString(clave + "\n")
+	if serr := f.Sync(); err == nil {
+		err = serr
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // LoadFrom lee la configuración de una función de consulta arbitraria, para poder
