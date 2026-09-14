@@ -1,0 +1,135 @@
+name: Nocturna
+
+# Lo que no cabe en cada push: lo lento (la integración entera contra mediamtx), lo que
+# depende de una release publicada (la migración desde la anterior) y lo que necesita
+# secretos y plataformas de verdad (el humo). Aquí puede tardar y puede fallar sin
+# bloquear a nadie; lo que rompa se arregla por la mañana.
+on:
+  schedule:
+    # 04:00 UTC: de madrugada en Europa y de noche en América, que es cuando menos
+    # estorba que una emisión de pruebas aparezca en un canal real.
+    - cron: '0 4 * * *'
+  # Y a mano, que es como se prueba este propio workflow sin esperar a mañana.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  integracion:
+    name: integración completa contra mediamtx
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: instalar ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: levantar los sinks
+        run: make sinks-up
+
+      - name: integración
+        run: make test-integration
+
+      # Siempre: si los tests fallan, los contenedores no pueden quedarse vivos.
+      - name: bajar los sinks
+        if: always()
+        run: make sinks-down
+
+  migracion:
+    name: migración desde la última release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: compilar
+        run: make build
+
+      # Instala la última release publicada, la arranca para que cree su base con el
+      # esquema de ENTONCES, y encima pone el binario de hoy: es la única prueba de que
+      # actualizar no le rompe la base a quien ya lo tiene instalado.
+      - name: migrar desde la última release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: deploy/migrate-test.sh "$(gh release list --limit 1 --json tagName --jq '.[0].tagName')" ./splitstream
+
+  plataformas:
+    name: humo contra plataformas reales
+    runs-on: ubuntu-latest
+    # Tres humos de cinco minutos, más compilar. De sobra, y acotado por si una plataforma
+    # deja la conexión colgada en vez de cerrarla.
+    timeout-minutes: 45
+    # Los secretos se miran AQUÍ y no en el `if` de cada paso: el contexto `secrets` no
+    # está disponible en `jobs.<id>.steps.if`, solo en el `env` del job. De paso, lo que
+    # queda en el paso es un booleano, no el secreto.
+    env:
+      HAY_TWITCH: ${{ secrets.TWITCH_TEST_KEY != '' }}
+      HAY_YOUTUBE: ${{ secrets.YOUTUBE_TEST_KEY != '' }}
+      HAY_KICK: ${{ secrets.KICK_TEST_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: compilar
+        run: make build
+
+      - name: instalar ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # La clave va por el entorno y nunca como argumento: en la línea de órdenes la vería
+      # cualquier proceso de la máquina con un `ps`.
+      - name: twitch
+        if: env.HAY_TWITCH == 'true'
+        env:
+          STREAM_KEY: ${{ secrets.TWITCH_TEST_KEY }}
+        run: deploy/nightly-smoke.sh twitch ./splitstream
+
+      - name: youtube
+        if: env.HAY_YOUTUBE == 'true'
+        env:
+          STREAM_KEY: ${{ secrets.YOUTUBE_TEST_KEY }}
+        run: deploy/nightly-smoke.sh youtube ./splitstream
+
+      - name: kick
+        if: env.HAY_KICK == 'true'
+        env:
+          STREAM_KEY: ${{ secrets.KICK_TEST_KEY }}
+        run: deploy/nightly-smoke.sh kick ./splitstream
+
+      # Sin secretos el job se pone verde sin haber probado nada, y eso no se puede
+      # confundir con que las plataformas funcionen: queda dicho en el resumen.
+      - name: sin claves
+        if: env.HAY_TWITCH != 'true' && env.HAY_YOUTUBE != 'true' && env.HAY_KICK != 'true'
+        run: echo "::warning::sin TWITCH_TEST_KEY/YOUTUBE_TEST_KEY/KICK_TEST_KEY; el humo contra plataformas se salta"

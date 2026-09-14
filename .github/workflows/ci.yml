@@ -120,6 +120,25 @@ jobs:
         with:
           version: v2.13.2
 
+  # Vulnerabilidades conocidas, de las dependencias y de la propia biblioteca estándar.
+  # govulncheck solo reporta lo ALCANZABLE desde este código: un CVE en una función que
+  # nadie llama no aparece. Por eso este job puede ser bloqueante sin volverse ruido.
+  #
+  # La versión es la MISMA que fija el Makefile (GOVULN): si se cambia una, hay que
+  # cambiar la otra, como con el linter.
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # `go run` con la versión pegada al módulo: no toca go.mod ni go.sum.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
   # El panel se compila aparte del binario. Sin este job, un fallo del frontend no se
   # notaría hasta que alguien ejecutara `make build` a mano: el job de Go compila igual,
   # porque go:embed se conforma con el .gitkeep de un clon limpio.
@@ -219,6 +238,11 @@ jobs:
         run: sh deploy/render_test.sh
       - name: install.sh en ubuntu y alpine contra una release local
         run: sh deploy/install_test.sh
+      # Del humo nocturno, aquí solo se puede comprobar lo que no necesita plataformas ni
+      # secretos: que el script es válido y que se niega a arrancar sin la clave. Corre en
+      # cada push a propósito: una rotura del humo no debe aparecer de madrugada.
+      - name: nightly-smoke.sh
+        run: sh deploy/nightly_smoke_test.sh
 
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:

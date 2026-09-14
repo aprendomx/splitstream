@@ -1,4 +1,4 @@
-.PHONY: build build-web build-go test test-integration sinks-up sinks-down vet lint tidy run clean
+.PHONY: build build-web build-go test test-integration sinks-up sinks-down vet lint vuln tidy run clean
 
 # La versión sale del tag más cercano. Sin tags (o sin git) queda en "dev", que es
 # exactamente lo que vale un binario que no viene de una release.
@@ -8,6 +8,10 @@ VERSION ?= $(shell git describe --tags --dirty 2>/dev/null || echo dev)
 # dos sitios, o lo que pasa en local deja de valer para la CI. Va por `go run` con la
 # versión pegada al módulo, que no toca go.mod ni go.sum.
 GOLANGCI := v2.13.2
+
+# Lo mismo para govulncheck: la versión se fija aquí y en el job `vuln` de la CI. Va por
+# `go run` con la versión pegada al módulo para no meter x/vuln en go.mod ni en go.sum.
+GOVULN := v1.8.0
 
 # El panel se compila ANTES que el binario: go:embed mete dist/spa dentro del ejecutable,
 # así que un binario construido sin esto llevaría el panel de la vez anterior.
@@ -33,6 +37,13 @@ vet:
 # Las excepciones del linter están justificadas una a una en .golangci.yml.
 lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI) run ./...
+
+# Vulnerabilidades conocidas de las dependencias Y de la propia biblioteca estándar.
+# govulncheck solo reporta lo ALCANZABLE desde este código: un CVE en una función que
+# nadie llama no aparece, que es justo lo que evita el ruido que hace que estos informes
+# se dejen de leer.
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULN) ./...
 
 tidy:
 	go mod tidy
