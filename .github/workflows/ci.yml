@@ -120,7 +120,7 @@ jobs:
           # Como en `vuln` y en el resto de jobs: sin la caché, cada corrida del linter se
           # vuelve a bajar y a compilar los módulos desde cero.
           cache: true
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
 
