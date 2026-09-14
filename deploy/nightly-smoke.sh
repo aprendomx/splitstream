@@ -89,8 +89,12 @@ trap limpiar EXIT
 # esa URL sale de la plataforma. Nada que venga de ahí se imprime sin pasar por aquí: se
 # tiran ENTERAS las líneas que contengan la clave, que es más simple y más seguro que
 # intentar sustituirla con sed y acertar con el escapado.
+#
+# awk y no `grep -vF "$STREAM_KEY"`: el patrón de grep sería un argumento, y los argumentos
+# de cualquier proceso se leen desde fuera (`ps`, /proc/PID/cmdline). awk lee la clave del
+# entorno, que solo ve el propio proceso.
 sin_clave() {
-  grep -vF "$STREAM_KEY" || true
+  awk 'index($0, ENVIRON["STREAM_KEY"]) == 0' || true
 }
 
 # Un puerto libre de verdad: se comprueba que nadie esté escuchando, en vez de confiar en
@@ -160,17 +164,23 @@ CODIGO=$(grep -oE '[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}' "$LOG" | head -n 1 || tr
 # Una contraseña de usar y tirar. /dev/urandom y no `openssl`: una dependencia menos.
 PASSWORD=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
 
-(umask 077 && jq -n --arg p "$PASSWORD" --arg c "$CODIGO" '{password: $p, codigo: $c}' >"$TMP/setup.json")
+# Los JSON con algo secreto dentro —la contraseña, el código del primer arranque, la clave
+# de la plataforma— se construyen leyendo el ENTORNO (`env.X`), nunca con `--arg`: un
+# `--arg k "$STREAM_KEY"` metería la clave en los argumentos de jq, que cualquiera lee con
+# `ps`. Las variables se pasan como prefijo de la orden, que es entorno y no argumentos.
+# `umask 077` porque el archivo lleva el secreto hasta que curl lo manda.
+(umask 077 && PASSWORD="$PASSWORD" CODIGO="$CODIGO" \
+  jq -n '{password: env.PASSWORD, codigo: env.CODIGO}' >"$TMP/setup.json")
 api POST /api/setup "$TMP/setup.json" >/dev/null \
   || fallo "no se pudo completar la configuración inicial"
 
-(umask 077 && jq -n --arg p "$PASSWORD" '{password: $p}' >"$TMP/login.json")
+(umask 077 && PASSWORD="$PASSWORD" jq -n '{password: env.PASSWORD}' >"$TMP/login.json")
 api POST /api/auth/login "$TMP/login.json" >/dev/null \
   || fallo "no se pudo iniciar sesión"
 
+# STREAM_KEY ya está en el entorno (llega de fuera), así que aquí no hay ni que pasarla.
 (umask 077 && jq -n --arg n "humo-$PLATAFORMA" --arg pl "$PLATAFORMA" --arg u "$RTMP_URL" \
-  --arg k "$STREAM_KEY" \
-  '{name: $n, platform: $pl, rtmp_url: $u, key: $k, enabled: true}' >"$TMP/destino.json")
+  '{name: $n, platform: $pl, rtmp_url: $u, key: env.STREAM_KEY, enabled: true}' >"$TMP/destino.json")
 DEST_ID=$(api POST /api/destinations "$TMP/destino.json" | jq -r '.id') \
   || fallo "no se pudo crear el destino"
 [ -n "$DEST_ID" ] && [ "$DEST_ID" != "null" ] || fallo "el destino creado no trajo id"
@@ -183,8 +193,10 @@ INGEST_KEY=$(api POST /api/ingest/rotate-key "$TMP/rotar.json" | jq -r '.key') \
   || fallo "no se pudo rotar la clave de ingesta"
 [ -n "$INGEST_KEY" ] && [ "$INGEST_KEY" != "null" ] || fallo "la rotación no devolvió clave"
 
-# Esta clave sí viaja en la línea de órdenes de ffmpeg: es la de la ingesta LOCAL, vive lo
-# que dure este directorio temporal y no da acceso a nada de la plataforma.
+# La única excepción a "ningún secreto en la línea de órdenes", y es inevitable: ffmpeg solo
+# acepta la URL de salida como argumento. Se puede vivir con ella porque es la clave de la
+# ingesta LOCAL —no la de la plataforma—, escucha en 127.0.0.1, se acaba de rotar y muere
+# con este directorio temporal.
 ffmpeg -hide_banner -loglevel error -nostdin \
   -re -f lavfi -i "testsrc=size=1280x720:rate=30" -f lavfi -i sine \
   -c:v libx264 -preset veryfast -b:v 2500k -g 60 -c:a aac \

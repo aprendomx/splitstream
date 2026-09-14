@@ -8,9 +8,21 @@ updates:
       interval: weekly
     # Las indirectas van todas en un PR: por separado son una docena de PR al mes que
     # nadie lee, y leerlos es justo lo único que los hace útiles.
+    #
+    # Se agrupan por patrón y no con `dependency-type: indirect`, que en `groups` NO es
+    # válido: ahí solo se aceptan `development` y `production`, y para gomod Dependabot
+    # considera producción todo lo que está en go.mod. Así que el grupo es «todo menos las
+    # cinco directas», que son las que sí merecen un PR con su nombre encima.
     groups:
       indirectas:
-        dependency-type: indirect
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/coder/websocket"
+          - "github.com/yutopp/go-rtmp"
+          - "golang.org/x/crypto"
+          - "golang.org/x/time"
+          - "modernc.org/sqlite"
 
   - package-ecosystem: npm
     directory: /web

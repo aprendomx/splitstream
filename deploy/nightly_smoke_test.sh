@@ -28,6 +28,33 @@ grep -q '^set +x$' "$HUMO" || {
   exit 1
 }
 
+# Los argumentos de cualquier proceso los lee todo el mundo (`ps`, /proc/PID/cmdline), así
+# que ningún secreto puede viajar por ahí: ni en `--arg` de jq, ni en `-d`/`-H "Cookie:"`/
+# `-u` de curl. Esto se comprueba leyendo el script y no ejecutándolo: el momento en que se
+# rompe es cuando alguien añade una llamada nueva, y entonces no hay ninguna corrida con
+# claves de verdad delante que lo enseñe.
+echo "== ningún secreto en la línea de órdenes"
+SECRETOS='STREAM_KEY|PASSWORD|CODIGO|INGEST_KEY|MASTER_KEY'
+CODIGO_SOLO=$(mktemp)
+# Los comentarios se vacían conservando la numeración: el script EXPLICA en sus comentarios
+# justo los patrones que esta prueba persigue, y sin esto se delataría a sí mismo.
+sed 's/^[[:space:]]*#.*//' "$HUMO" >"$CODIGO_SOLO"
+malo=0
+# Un secreto como argumento de jq o de grep.
+if grep -nE -- "(--arg|-[A-Za-z]*F[A-Za-z]*) +[A-Za-z_]* *\"\\\$\\{?($SECRETOS)" "$CODIGO_SOLO"; then
+  malo=1
+fi
+# Un cuerpo, una cookie o unas credenciales inline en curl. El cuerpo va SIEMPRE en un
+# archivo (`--data-binary @…`), que es lo único que no acaba en la línea de órdenes.
+if grep -nE -- 'curl.*(-H +.Cookie|(^| )-u +|(^| )(-d|--data|--data-raw|--data-urlencode) |--data-binary +"[^@])' "$CODIGO_SOLO"; then
+  malo=1
+fi
+rm -f "$CODIGO_SOLO"
+[ "$malo" -eq 0 ] || {
+  echo "FALLO: el humo pasa un secreto por argumentos (líneas de arriba)" >&2
+  exit 1
+}
+
 # El envoltorio corre el script en un shell aparte para poder quedarse con su código de
 # salida sin que `set -e` de este mate la prueba.
 salida_de() { # STREAM_KEY-o-vacía argumentos…
