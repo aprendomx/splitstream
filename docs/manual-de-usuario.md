@@ -225,6 +225,10 @@ Si una plataforma sigue cortando la conexión y nada de lo anterior lo explica, 
 variable `SPLITSTREAM_RTMP_PRECOMMANDS` (apagada por defecto: Twitch y YouTube funcionan
 sin ella). Actívala **solo si una plataforma lo pide**.
 
+El botón **Probar** de un canal no usa esa variable: mide siempre el camino por defecto, el
+mismo con la variable encendida o apagada. Así, lo que te responde habla de la URL y de la
+clave, y no de una opción de compatibilidad.
+
 ### «Emitiendo con pérdidas»
 
 Tu subida no da para todos los canales. Splitstream descarta vídeo **por grupos completos**

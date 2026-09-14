@@ -23,3 +23,37 @@
 4. `diff -r /tmp/go-rtmp third_party/go-rtmp` sin salida más allá de `UPSTREAM.md` y `patches/`.
 
 Cuando aguas arriba publique una versión con estos arreglos: quitar el `replace`, subir la versión y borrar este directorio.
+
+## Cómo proponerlos aguas arriba
+
+Los cinco están escritos para poder mandarse a `yutopp/go-rtmp` tal cual: comentarios en
+inglés, nada de Splitstream dentro, y cada uno con un test que falla sin él. Lo que sigue es
+el orden y la única atadura que hay entre ellos.
+
+**Orden sugerido**, de lo que menos conversación necesita a lo que más:
+
+1. **Parche 2** (`streams.At` bajo el candado). Es una carrera de datos: no hay decisión de
+   diseño que discutir y su test falla con `-race` sin él. Va primero y va solo.
+2. **Parche 5** (la respuesta huérfana, acotada al stream de control). Independiente de
+   todos los demás; un archivo y su test.
+3. **Parche 3** (`ClientConn.ControlStream()`). Añade API pública, que es lo que más
+   discusión puede abrir, pero no depende de nada.
+4. **Parches 1 y 4 JUNTOS.** No es preferencia: el hunk de `stream.go` que el parche 4
+   necesita —que `Stream.CreateStream` deje de escribir `selfState.chunkSize` y lo lea con
+   `ChunkSize()`— vive dentro de `0001-write-timeout.diff`. Aplicar el 4 sin el 1 deja
+   `stream.go` sin tocar y la carrera sigue ahí; aplicar el 1 sin el 4 no compila, porque
+   `ChunkSize()` no existe todavía. Si aguas arriba prefiere dos PR, hay que separar ese
+   hunk a mano.
+
+**Por qué ese reparto raro entre el 1 y el 4**: el test de integridad
+(`TestGoRTMPCopyMatchesUpstreamPlusPatches`, en `internal/rtmpio/upstream_test.go`) compara
+archivo a archivo la copia contra «upstream + parches», y para eso necesita que cada archivo
+tocado aparezca en **exactamente un** `.diff`. Dos parches que toquen el mismo archivo tienen
+que fundir sus hunks en el diff del que «posee» ese archivo, y la tabla de arriba lo dice en
+la fila que corresponda. Aguas arriba esa restricción no existe: allí el reparto natural es
+un PR por problema.
+
+**Antes de mandar nada**: `patches/generar.sh NNNN-nombre archivo1 [archivo2 …]` regenera el
+`.diff` desde la copia. Salen normalizados —cabeceras relativas (`a/stream.go`), sin línea
+`index …`— para que no dependan de dónde viva la caché de módulos, y `git apply -p1` los
+acepta sobre una v0.0.7 limpia.

@@ -274,7 +274,7 @@ Todo se controla con variables de entorno:
 | `SPLITSTREAM_TLS_REDIRECT_ADDR` | `:80` con TLS | Listener que redirige a HTTPS y atiende el reto de Let's Encrypt; `none` lo apaga |
 | `SPLITSTREAM_TRUSTED_PROXIES` | vacío | CIDR o IP, separadas por comas, desde las que se cree `X-Forwarded-For` |
 | `SPLITSTREAM_UPDATE_CHECK` | `true` | `false` apaga la consulta diaria de versión nueva |
-| `SPLITSTREAM_RTMP_PRECOMMANDS` | `false` | Manda `releaseStream`/`FCPublish` por el stream de control antes de publicar, y `FCUnpublish` al cerrar. Apagado por defecto — Twitch y YouTube funcionan sin él. Enciéndelo (`true`) **solo si una plataforma lo pide** |
+| `SPLITSTREAM_RTMP_PRECOMMANDS` | `false` | Manda `releaseStream` y `FCPublish` por el stream de control antes de publicar. `FCUnpublish` al cerrar se manda siempre: lo que cambia la variable es que los tres salgan por el stream de control en vez de por el de datos. Apagado por defecto — Twitch y YouTube funcionan sin él. Enciéndelo (`true`) **solo si una plataforma lo pide** |
 
 Comandos:
 

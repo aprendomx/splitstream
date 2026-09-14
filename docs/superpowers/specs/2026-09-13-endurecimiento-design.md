@@ -20,7 +20,7 @@ Lo que NO cambia: funciones del panel, modelo de datos (`SchemaVersion` 9; ningu
 
 ## 2. Enmiendas al spec base
 
-- §5 (Dependencias): `github.com/yutopp/go-rtmp` sigue siendo dependencia directa, pero el código que compila es `third_party/go-rtmp` (copia de v0.0.7 + los parches de §3) por `replace`. La copia conserva `LICENCE.txt` (MIT) y lleva `UPSTREAM.md` (versión y commit de origen, lista de parches, cómo regenerarla) y `patches/*.diff` (un diff por parche, aplicables sobre la v0.0.7 limpia). `go mod verify` no cubre el `replace`: lo cubre un test (§3.4).
+- §5 (Dependencias): `github.com/yutopp/go-rtmp` sigue siendo dependencia directa, pero el código que compila es `third_party/go-rtmp` (copia de v0.0.7 + los parches de §3) por `replace`. La copia conserva `LICENCE.txt` (MIT) y lleva `UPSTREAM.md` (versión y commit de origen, lista de parches, cómo regenerarla) y `patches/*.diff` (un diff por parche, aplicables sobre la v0.0.7 limpia). `go mod verify` no cubre el `replace`: lo cubre un test (§3.6).
 - §11 (Pruebas): la CI gana `lint` y `vuln` como jobs obligatorios y un workflow nocturno. Las excepciones del linter se justifican en `.golangci.yml`, una por una.
 - §9 (API): el contrato queda documentado en `docs/api.md`, generado; el prefijo `/api/` es la v1. Añadir rutas o campos es compatible; quitar o renombrar exige `/api/v2/` y una decisión escrita.
 - §7 (Modelo de datos): la política de migraciones pasa a `docs/migraciones.md` y a un script ejecutable (`deploy/migrate-test.sh`) que corre en la integración nocturna.
@@ -105,7 +105,7 @@ En `docs/api.md` y en el spec base §9: `/api/` es la **v1**. Compatible: añadi
 
 ## 7. Pruebas
 
-- **go-rtmp**: los cinco tests de §3 (dos en `internal/rtmpio`, tres en la copia) que fallan sin su parche; `TestGoRTMPCopyMatchesUpstreamPlusPatches`; la integración contra `mediamtx` sigue en verde con y sin `PreCommands`.
+- **go-rtmp**: los cinco tests de §3 (dos en `internal/rtmpio`, tres en la copia) que fallan sin su parche; `TestGoRTMPCopyMatchesUpstreamPlusPatches`. Lo que cubre a `PreCommands` son los tests de `internal/rtmpio` con `-race` contra la ingesta propia (`TestPreCommandsGoThroughTheControlStreamBeforeCreateStream` y `TestFCUnpublishGoesThroughTheSameStreamAsThePreCommands`, los dos con la opción encendida y apagada), no una integración con la variable puesta: `test/integration` corre contra `mediamtx` con los valores por defecto. La puerta real de esta opción es el humo nocturno contra plataformas de verdad, que es lo único que puede decir si una plataforma los exige o se atraganta con ellos.
 - **CI**: `lint`, `vuln`, `test`, `web`, `docker` en verde en el PR; `nightly.yml` validado con `workflow_dispatch` una vez antes de fusionar (el controlador lo lanza tras el push y espera el resultado).
 - **API**: `TestAPIContractDocIsCurrent` en verde y `docs/api.md` regenerado; `TestDTOFieldNamesAreSnakeCase` sigue.
 - **Migraciones**: `deploy/migrate-test.sh` con `v0.13.0` → binario actual, en la nocturna y en local (el controlador lo ejecuta antes de abrir el PR).

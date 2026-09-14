@@ -276,7 +276,7 @@ Everything is driven by environment variables:
 | `SPLITSTREAM_TLS_REDIRECT_ADDR` | `:80` with TLS | Listener that redirects to HTTPS and serves the Let's Encrypt challenge; `none` turns it off |
 | `SPLITSTREAM_TRUSTED_PROXIES` | empty | CIDRs or IPs, comma separated, whose `X-Forwarded-For` is believed |
 | `SPLITSTREAM_UPDATE_CHECK` | `true` | `false` turns off the daily check for a new version |
-| `SPLITSTREAM_RTMP_PRECOMMANDS` | `false` | Sends `releaseStream`/`FCPublish` over the control stream before publishing, and `FCUnpublish` on close. Off by default — Twitch and YouTube work without it. Turn it on (`true`) **only if a platform asks for it** |
+| `SPLITSTREAM_RTMP_PRECOMMANDS` | `false` | Sends `releaseStream` and `FCPublish` over the control stream before publishing. `FCUnpublish` on close is always sent: what this variable changes is that all three go over the control stream instead of the data stream. Off by default — Twitch and YouTube work without it. Turn it on (`true`) **only if a platform asks for it** |
 
 Commands:
 
