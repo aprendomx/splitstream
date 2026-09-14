@@ -12,7 +12,7 @@
 
 La última entrega del roadmap no añade funciones: quita riesgo. Tres cosas:
 
-1. **Contingencia de `go-rtmp`**: las tres deudas conocidas de `github.com/yutopp/go-rtmp v0.0.7` (spec base §16.2 y §15.9) se arreglan en una copia parcheada que vive en este repo (`third_party/go-rtmp`) y entra por `replace` en `go.mod`, con un parche por deuda, cada uno con su test que falla sin él, y listos para proponer aguas arriba.
+1. **Contingencia de `go-rtmp`**: las cinco deudas conocidas de `github.com/yutopp/go-rtmp v0.0.7` (spec base §16.2 y §15.9, más dos carreras que aparecieron al implementar `PreCommands`: el tamaño de chunk y las respuestas huérfanas) se arreglan en una copia parcheada que vive en este repo (`third_party/go-rtmp`) y entra por `replace` en `go.mod`, con un parche por deuda, cada uno con su test que falla sin él, y listos para proponer aguas arriba.
 2. **CI estricta**: `golangci-lint` con una configuración justificada, `govulncheck`, una integración nocturna completa (con prueba opcional contra plataformas reales si hay claves) y Dependabot para Go, npm y Actions.
 3. **Contrato congelado**: `docs/api.md` generado por un test a partir de la tabla de rutas y de los DTO (falla si el documento no coincide), `docs/migraciones.md` con la política de migraciones y un script que prueba la migración desde la release anterior, y la regla de versionado: `/api/` es la v1 implícita y cualquier ruptura exige `/api/v2/`.
 
@@ -45,9 +45,21 @@ Test (en `internal/rtmpio`, con un `net.Conn` de prueba que no drena): sin el pa
 
 Test: con `PreCommands` el servidor de prueba (`mediamtx` en integración; en unidad, el `ingest` propio de `rtmpio`, que ya registra comandos) recibe `releaseStream`/`FCPublish` por el stream 0 antes de `createStream`; sin la opción, no llegan.
 
-### 3.4 Integridad de la copia
+### 3.4 Parche 4 — el tamaño de chunk se aplica tras escribir `SetChunkSize`
 
-`third_party/go-rtmp/UPSTREAM.md` fija `v0.0.7` (`h1:` del `go.sum` original) y lista los tres parches. Un test en `internal/rtmpio` (`TestGoRTMPCopyMatchesUpstreamPlusPatches`) hace `go mod download -json github.com/yutopp/go-rtmp@v0.0.7` **solo si** el módulo ya está en la caché local (`go env GOMODCACHE`; si no está, el test se salta con un motivo claro: ningún test toca la red) y comprueba que `diff -ru` entre la caché y la copia produce exactamente los `patches/*.diff` (mismos archivos tocados, mismas líneas). Así nadie edita la copia sin dejar el parche. `go vet` y `golangci-lint` excluyen `third_party/` (código ajeno; solo se lintan los parches por revisión).
+Cambiar el tamaño de chunk de salida tenía dos fallos, los dos alcanzables en cuanto algo escribe por el stream de control sin esperar respuesta — justo lo que hace `PreCommands` con `releaseStream`/`FCPublish` (§3.3). (a) Carrera de datos: `Stream.CreateStream` escribía `selfState.chunkSize` mientras la goroutine del planificador lo leía en cada chunk. (b) Carrera de orden, la grave: lo escribía al encolar el `SetChunkSize`, así que un mensaje encolado un instante antes y todavía en el planificador podía salir troceado con un tamaño que el otro extremo aún no conocía. Parche: `chunkSize` pasa a `atomic.Uint32`, toda lectura va por `ChunkSize()`, y el tamaño nuevo lo aplica la goroutine escritora en `writeChunk` justo después de escribir el `SetChunkSize` en el hilo.
+
+Test: `TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize` (en la copia) y `TestPreCommandsGoThroughTheControlStreamBeforeCreateStream` corrido con `-race` (`internal/rtmpio`), que falla sin el parche.
+
+### 3.5 Parche 5 — una respuesta huérfana no tira la conexión
+
+Un `_result`/`_error` para una transacción que este lado no registró tiraba toda la conexión: `handleCommand` devolvía error, y `runHandleMessageLoop` no lo distingue de uno de verdad. Pasa de verdad con `PreCommands`: `releaseStream` y `FCPublish` se mandan sin esperar respuesta, con `TransactionID 0`, y hay plataformas que contestan igual. Parche: la respuesta huérfana se registra a nivel debug y se ignora en vez de cerrar la conexión.
+
+Test: `TestStreamHandlerIgnoresAResponseToAnUnknownTransaction` (en la copia), que falla sin el parche.
+
+### 3.6 Integridad de la copia
+
+`third_party/go-rtmp/UPSTREAM.md` fija `v0.0.7` (`h1:` del `go.sum` original) y lista los cinco parches. Un test en `internal/rtmpio` (`TestGoRTMPCopyMatchesUpstreamPlusPatches`) hace `go mod download -json github.com/yutopp/go-rtmp@v0.0.7` **solo si** el módulo ya está en la caché local (`go env GOMODCACHE`; si no está, el test se salta con un motivo claro: ningún test toca la red) y comprueba que `diff -ru` entre la caché y la copia produce exactamente los `patches/*.diff` (mismos archivos tocados, mismas líneas). Así nadie edita la copia sin dejar el parche. `go vet` y `golangci-lint` excluyen `third_party/` (código ajeno; solo se lintan los parches por revisión).
 
 ## 4. CI estricta
 
@@ -71,7 +83,7 @@ Job `vuln`: `govulncheck ./...` (versión fijada con `go run golang.org/x/vuln/c
 
 ### 5.1 `docs/api.md` generado
 
-`internal/httpapi/server.go`: `routes()` deja de registrar a mano y recorre una tabla `var rutas = []ruta{{Metodo, Patron, Handler, Publica, Resumen}}` (los 46 `protegida` + los 11 públicos actuales, sin cambiar ninguno); `protegida` sigue existiendo como envoltorio que la tabla aplica. `TestAPIContractDocIsCurrent` (`api_doc_test.go`) genera el Markdown: cabecera con la regla de versionado (§5.4), una tabla por grupo (`auth`, `setup`, `ingest`, `destinations`, `live`, `platforms`, `accounts`, `sessions`, `recordings`, `chat`, `webhooks`, `backup`, `metrics`, `health`) con método, ruta, «sesión» (sí/no) y resumen, y una sección «Formas» con cada DTO exportado por reflexión (`reflect` sobre la lista que ya usa `TestDTOFieldNamesAreSnakeCase`, ampliada a los DTO de petición): nombre del campo JSON, tipo Go legible y si es puntero (opcional). El test compara byte a byte con `docs/api.md`; con `-update` (flag del paquete de test) lo reescribe. Falla en CI si alguien cambia una ruta o un DTO sin regenerar.
+`internal/httpapi/server.go`: `routes()` deja de registrar a mano y recorre una tabla `var rutas = []ruta{{Metodo, Patron, Handler, Publica, Resumen}}` (las 54 rutas: 7 públicas, 46 protegidas y `/metrics` con sesión o token, sin cambiar ninguna); `protegida` sigue existiendo como envoltorio que la tabla aplica. `TestAPIContractDocIsCurrent` (`api_doc_test.go`) genera el Markdown: cabecera con la regla de versionado (§5.4), una tabla por grupo, en este orden — `auth`, `setup`, `health`, `metrics`, `ingest`, `destinations`, `live`, `platforms`, `accounts`, `sessions`, `recordings`, `chat`, `webhooks`, `backup`, `ws` — con método, ruta, «sesión» (no / sí / sí (o token)) y resumen, y una sección «Formas» con los 44 DTO exportados por reflexión (`reflect` sobre la lista que ya usa `TestDTOFieldNamesAreSnakeCase`, ampliada a los DTO de petición): nombre del campo JSON, tipo Go legible y si es puntero (opcional). El test compara byte a byte con `docs/api.md`; con `-update` (flag del paquete de test) lo reescribe. Falla en CI si alguien cambia una ruta o un DTO sin regenerar.
 
 ### 5.2 `docs/migraciones.md`
 
@@ -91,7 +103,7 @@ En `docs/api.md` y en el spec base §9: `/api/` es la **v1**. Compatible: añadi
 
 ## 7. Pruebas
 
-- **go-rtmp**: los tres tests de §3 (dos en `internal/rtmpio`, uno en la copia) que fallan sin su parche; `TestGoRTMPCopyMatchesUpstreamPlusPatches`; la integración contra `mediamtx` sigue en verde con y sin `PreCommands`.
+- **go-rtmp**: los cinco tests de §3 (dos en `internal/rtmpio`, tres en la copia) que fallan sin su parche; `TestGoRTMPCopyMatchesUpstreamPlusPatches`; la integración contra `mediamtx` sigue en verde con y sin `PreCommands`.
 - **CI**: `lint`, `vuln`, `test`, `web`, `docker` en verde en el PR; `nightly.yml` validado con `workflow_dispatch` una vez antes de fusionar (el controlador lo lanza tras el push y espera el resultado).
 - **API**: `TestAPIContractDocIsCurrent` en verde y `docs/api.md` regenerado; `TestDTOFieldNamesAreSnakeCase` sigue.
 - **Migraciones**: `deploy/migrate-test.sh` con `v0.13.0` → binario actual, en la nocturna y en local (el controlador lo ejecuta antes de abrir el PR).
