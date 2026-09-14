@@ -1,15 +1,25 @@
 diff --git a/stream_handler.go b/stream_handler.go
 --- a/stream_handler.go
 +++ b/stream_handler.go
-@@ -174,7 +174,15 @@ func (h *streamHandler) handleCommand(
+@@ -174,7 +174,25 @@ func (h *streamHandler) handleCommand(
  	case "_result", "_error":
  		t, err := h.stream.transactions.At(cmdMsg.TransactionID)
  		if err != nil {
 -			return errors.Wrap(err, "Got response to the unexpected transaction")
-+			// A response nobody is waiting for. It happens with the FMLE-style commands
-+			// (releaseStream, FCPublish) that are sent fire-and-forget with transaction
-+			// id 0: some servers answer them anyway. Closing the connection because the
-+			// peer was more talkative than expected is worse than ignoring the reply.
++			// A response nobody is waiting for, tolerated ONLY on the control stream.
++			// It happens with the FMLE-style commands (releaseStream, FCPublish) that
++			// are sent fire-and-forget over stream 0 with transaction id 0: some servers
++			// answer them anyway. Closing the connection because the peer was more
++			// talkative than expected is worse than ignoring the reply.
++			//
++			// On a data stream the original behaviour stands. An `_error` answering
++			// `publish` also arrives with transaction id 0 and no registered
++			// transaction, and it means the platform is REFUSING the stream: turning it
++			// into a silent debug line would keep a dead connection open instead of
++			// letting the caller notice and reconnect.
++			if h.stream.streamID != ControlStreamID {
++				return errors.Wrap(err, "Got response to the unexpected transaction")
++			}
 +			h.Logger().Debugf(
 +				"Ignored a response to an unknown transaction: Command = %s, TransactionID = %d",
 +				cmdMsg.CommandName, cmdMsg.TransactionID,
@@ -34,18 +44,43 @@ diff --git a/stream_handler_test.go b/stream_handler_test.go
  )
  
  func TestStreamHandlerChangeState(t *testing.T) {
-@@ -57,3 +60,65 @@ func TestStreamStateString(t *testing.T) {
+@@ -57,3 +60,90 @@ func TestStreamStateString(t *testing.T) {
  	require.Equal(t, "NotConnected(Client)", streamStateClientNotConnected.String())
  	require.Equal(t, "Connected(Client)", streamStateClientConnected.String())
  }
 +
-+// TestStreamHandlerIgnoresAResponseToAnUnknownTransaction: a _result or _error for a
-+// transaction this side never registered is dropped with a debug line, not turned into an
-+// error. handleCommand's error reaches Conn.handleMessage, which is not prepared to
-+// swallow it, so returning one here tears the whole connection down — and a peer that
-+// answers a fire-and-forget releaseStream/FCPublish (transaction id 0) is not a reason to
-+// lose the stream.
++// TestStreamHandlerIgnoresAResponseToAnUnknownTransaction: on the CONTROL stream, a
++// _result or _error for a transaction this side never registered is dropped with a debug
++// line, not turned into an error. handleCommand's error reaches Conn.handleMessage, which
++// is not prepared to swallow it, so returning one here tears the whole connection down —
++// and a peer that answers a fire-and-forget releaseStream/FCPublish (transaction id 0,
++// sent over stream 0) is not a reason to lose the stream.
 +func TestStreamHandlerIgnoresAResponseToAnUnknownTransaction(t *testing.T) {
++	for _, name := range []string{"_result", "_error"} {
++		t.Run(name, func(t *testing.T) {
++			c := newConn(&rwcMock{}, nil)
++			s := newStream(ControlStreamID, c)
++
++			err := s.handler.handleCommand(3, 0, &message.CommandMessage{
++				CommandName:   name,
++				TransactionID: 0,
++				Encoding:      message.EncodingTypeAMF0,
++				Body:          bytes.NewReader(nil),
++			})
++			require.Nil(t, err)
++		})
++	}
++}
++
++// TestStreamHandlerFailsOnAnUnknownTransactionOverADataStream: the boundary of the test
++// above. Over a DATA stream the same orphan response keeps returning an error, which is
++// what tears the connection down and makes the caller reconnect.
++//
++// This is not a theoretical case: a platform that refuses a `publish` answers it with an
++// `_error` that also carries transaction id 0 and matches no registered transaction. If
++// the tolerance were not scoped to stream 0, that refusal would turn into a debug line
++// and the publisher would sit on a connection that will never carry video.
++func TestStreamHandlerFailsOnAnUnknownTransactionOverADataStream(t *testing.T) {
 +	for _, name := range []string{"_result", "_error"} {
 +		t.Run(name, func(t *testing.T) {
 +			c := newConn(&rwcMock{}, nil)
@@ -57,7 +92,7 @@ diff --git a/stream_handler_test.go b/stream_handler_test.go
 +				Encoding:      message.EncodingTypeAMF0,
 +				Body:          bytes.NewReader(nil),
 +			})
-+			require.Nil(t, err)
++			require.NotNil(t, err)
 +		})
 +	}
 +}

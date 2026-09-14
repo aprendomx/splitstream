@@ -61,13 +61,38 @@ func TestStreamStateString(t *testing.T) {
 	require.Equal(t, "Connected(Client)", streamStateClientConnected.String())
 }
 
-// TestStreamHandlerIgnoresAResponseToAnUnknownTransaction: a _result or _error for a
-// transaction this side never registered is dropped with a debug line, not turned into an
-// error. handleCommand's error reaches Conn.handleMessage, which is not prepared to
-// swallow it, so returning one here tears the whole connection down — and a peer that
-// answers a fire-and-forget releaseStream/FCPublish (transaction id 0) is not a reason to
-// lose the stream.
+// TestStreamHandlerIgnoresAResponseToAnUnknownTransaction: on the CONTROL stream, a
+// _result or _error for a transaction this side never registered is dropped with a debug
+// line, not turned into an error. handleCommand's error reaches Conn.handleMessage, which
+// is not prepared to swallow it, so returning one here tears the whole connection down —
+// and a peer that answers a fire-and-forget releaseStream/FCPublish (transaction id 0,
+// sent over stream 0) is not a reason to lose the stream.
 func TestStreamHandlerIgnoresAResponseToAnUnknownTransaction(t *testing.T) {
+	for _, name := range []string{"_result", "_error"} {
+		t.Run(name, func(t *testing.T) {
+			c := newConn(&rwcMock{}, nil)
+			s := newStream(ControlStreamID, c)
+
+			err := s.handler.handleCommand(3, 0, &message.CommandMessage{
+				CommandName:   name,
+				TransactionID: 0,
+				Encoding:      message.EncodingTypeAMF0,
+				Body:          bytes.NewReader(nil),
+			})
+			require.Nil(t, err)
+		})
+	}
+}
+
+// TestStreamHandlerFailsOnAnUnknownTransactionOverADataStream: the boundary of the test
+// above. Over a DATA stream the same orphan response keeps returning an error, which is
+// what tears the connection down and makes the caller reconnect.
+//
+// This is not a theoretical case: a platform that refuses a `publish` answers it with an
+// `_error` that also carries transaction id 0 and matches no registered transaction. If
+// the tolerance were not scoped to stream 0, that refusal would turn into a debug line
+// and the publisher would sit on a connection that will never carry video.
+func TestStreamHandlerFailsOnAnUnknownTransactionOverADataStream(t *testing.T) {
 	for _, name := range []string{"_result", "_error"} {
 		t.Run(name, func(t *testing.T) {
 			c := newConn(&rwcMock{}, nil)
@@ -79,7 +104,7 @@ func TestStreamHandlerIgnoresAResponseToAnUnknownTransaction(t *testing.T) {
 				Encoding:      message.EncodingTypeAMF0,
 				Body:          bytes.NewReader(nil),
 			})
-			require.Nil(t, err)
+			require.NotNil(t, err)
 		})
 	}
 }

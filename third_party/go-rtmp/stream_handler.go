@@ -174,10 +174,20 @@ func (h *streamHandler) handleCommand(
 	case "_result", "_error":
 		t, err := h.stream.transactions.At(cmdMsg.TransactionID)
 		if err != nil {
-			// A response nobody is waiting for. It happens with the FMLE-style commands
-			// (releaseStream, FCPublish) that are sent fire-and-forget with transaction
-			// id 0: some servers answer them anyway. Closing the connection because the
-			// peer was more talkative than expected is worse than ignoring the reply.
+			// A response nobody is waiting for, tolerated ONLY on the control stream.
+			// It happens with the FMLE-style commands (releaseStream, FCPublish) that
+			// are sent fire-and-forget over stream 0 with transaction id 0: some servers
+			// answer them anyway. Closing the connection because the peer was more
+			// talkative than expected is worse than ignoring the reply.
+			//
+			// On a data stream the original behaviour stands. An `_error` answering
+			// `publish` also arrives with transaction id 0 and no registered
+			// transaction, and it means the platform is REFUSING the stream: turning it
+			// into a silent debug line would keep a dead connection open instead of
+			// letting the caller notice and reconnect.
+			if h.stream.streamID != ControlStreamID {
+				return errors.Wrap(err, "Got response to the unexpected transaction")
+			}
 			h.Logger().Debugf(
 				"Ignored a response to an unknown transaction: Command = %s, TransactionID = %d",
 				cmdMsg.CommandName, cmdMsg.TransactionID,

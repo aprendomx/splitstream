@@ -53,9 +53,11 @@ Test: `TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize` (en la co
 
 ### 3.5 Parche 5 — una respuesta huérfana no tira la conexión
 
-Un `_result`/`_error` para una transacción que este lado no registró tiraba toda la conexión: `handleCommand` devolvía error, y `runHandleMessageLoop` no lo distingue de uno de verdad. Pasa de verdad con `PreCommands`: `releaseStream` y `FCPublish` se mandan sin esperar respuesta, con `TransactionID 0`, y hay plataformas que contestan igual. Parche: la respuesta huérfana se registra a nivel debug y se ignora en vez de cerrar la conexión.
+Un `_result`/`_error` para una transacción que este lado no registró tiraba toda la conexión: `handleCommand` devolvía error, y `runHandleMessageLoop` no lo distingue de uno de verdad. Pasa de verdad con `PreCommands`: `releaseStream` y `FCPublish` se mandan sin esperar respuesta, con `TransactionID 0`, y hay plataformas que contestan igual. Parche: la respuesta huérfana se registra a nivel debug y se ignora en vez de cerrar la conexión, **acotado al stream de control** (`h.stream.streamID == ControlStreamID`), que es por donde van esos comandos.
 
-Test: `TestStreamHandlerIgnoresAResponseToAnUnknownTransaction` (en la copia), que falla sin el parche.
+La acotación no es un detalle: por un stream de datos se sigue devolviendo el error de siempre. Un `_error` con el que una plataforma rechaza el `publish` llega también con `TransactionID 0` y sin transacción registrada, y ahí cerrar la conexión es lo correcto —es lo que dispara la reconexión del §6.5 de la spec base—; tragárselo dejaría un destino «conectado» que nunca va a llevar vídeo.
+
+Test: `TestStreamHandlerIgnoresAResponseToAnUnknownTransaction` (stream 0, devuelve `nil`) y `TestStreamHandlerFailsOnAnUnknownTransactionOverADataStream` (stream de datos, devuelve error), los dos en la copia; el primero falla sin el parche y el segundo falla si el parche se aplica sin acotar.
 
 ### 3.6 Integridad de la copia
 

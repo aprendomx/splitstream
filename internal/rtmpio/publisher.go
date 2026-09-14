@@ -344,7 +344,11 @@ func (p *Publisher) Connect(ctx context.Context) error {
 	// arreglados en la copia porque sin ellos esta opción no sería usable:
 	//   - Parche 5: estos comandos van con TransactionID 0 y no se espera respuesta, pero
 	//     hay plataformas que contestan igual. Un `_result` para una transacción que no
-	//     existe hacía que go-rtmp CERRARA la conexión; ahora se ignora.
+	//     existe hacía que go-rtmp CERRARA la conexión; ahora se ignora, pero SOLO por el
+	//     stream de control, que es por donde van estos comandos. Por un stream de datos
+	//     sigue cerrando: un `_error` al publish viaja igual —TransactionID 0, sin
+	//     transacción— y ahí significa que la plataforma rechaza la emisión, así que
+	//     cerrar es justo lo que hace falta para que el sink reconecte.
 	//   - Parche 4: el tamaño de chunk nuevo lo aplica la goroutine escritora justo
 	//     después de mandar el SetChunkSize, no quien lo encola. Si no, un FCPublish con
 	//     una clave larga (más de 128 bytes) todavía en la cola salía troceado con un
