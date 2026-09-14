@@ -76,10 +76,10 @@ SS_PID=""
 FFMPEG_PID=""
 
 limpiar() {
-  [ -n "$FFMPEG_PID" ] && kill -TERM "$FFMPEG_PID" 2>/dev/null || true
+  if [ -n "$FFMPEG_PID" ]; then kill -TERM "$FFMPEG_PID" 2>/dev/null || true; fi
   # SIGTERM, no SIGKILL: es la parada ordenada que el binario promete, y si no cerrara
   # bien su base lo descubrimos aquí y no en el servidor de alguien.
-  [ -n "$SS_PID" ] && kill -TERM "$SS_PID" 2>/dev/null || true
+  if [ -n "$SS_PID" ]; then kill -TERM "$SS_PID" 2>/dev/null || true; fi
   wait "$SS_PID" 2>/dev/null || true
   rm -rf "$TMP"
 }
@@ -197,7 +197,7 @@ api POST /api/auth/login "$TMP/login.json" >/dev/null \
   '{name: $n, platform: $pl, rtmp_url: $u, key: env.STREAM_KEY, enabled: true}' >"$TMP/destino.json")
 DEST_ID=$(api POST /api/destinations "$TMP/destino.json" | jq -r '.id') \
   || fallo "no se pudo crear el destino"
-[ -n "$DEST_ID" ] && [ "$DEST_ID" != "null" ] || fallo "el destino creado no trajo id"
+if [ -z "$DEST_ID" ] || [ "$DEST_ID" = "null" ]; then fallo "el destino creado no trajo id"; fi
 
 # La clave de ingesta solo sale en claro al rotarla (spec §8): GET /api/ingest la devuelve
 # enmascarada, así que para publicar hay que pedir una nueva.
@@ -208,7 +208,7 @@ echo '{}' >"$TMP/rotar.json"
 export INGEST_KEY
 INGEST_KEY=$(api POST /api/ingest/rotate-key "$TMP/rotar.json" | jq -r '.key') \
   || fallo "no se pudo rotar la clave de ingesta"
-[ -n "$INGEST_KEY" ] && [ "$INGEST_KEY" != "null" ] || fallo "la rotación no devolvió clave"
+if [ -z "$INGEST_KEY" ] || [ "$INGEST_KEY" = "null" ]; then fallo "la rotación no devolvió clave"; fi
 
 # La única excepción a "ningún secreto en la línea de órdenes", y es inevitable: ffmpeg solo
 # acepta la URL de salida como argumento. Se puede vivir con ella porque es la clave de la
