@@ -472,6 +472,9 @@ El [documento de diseño](docs/superpowers/specs/2026-09-01-rtmp-relay-design.md
 la arquitectura, y los [planes de implementación](docs/superpowers/plans/) el detalle de
 cada fase, incluidos los errores que cometimos y cómo se corrigieron.
 
+Si tocas el esquema de la base, [docs/migraciones.md](docs/migraciones.md) tiene las reglas
+y cómo probar la migración contra una base real de la versión anterior.
+
 ---
 
 ## Alcance

@@ -476,6 +476,9 @@ The [design document](docs/superpowers/specs/2026-09-01-rtmp-relay-design.md) ex
 architecture, and the [implementation plans](docs/superpowers/plans/) the detail of each
 phase, including the mistakes we made and how we fixed them.
 
+If you touch the database schema, [docs/migraciones.md](docs/migraciones.md) (Spanish) has
+the rules and how to test the migration against a real database from the previous release.
+
 ---
 
 ## Scope

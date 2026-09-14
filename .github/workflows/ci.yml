@@ -243,6 +243,12 @@ jobs:
       # cada push a propósito: una rotura del humo no debe aparecer de madrugada.
       - name: nightly-smoke.sh
         run: sh deploy/nightly_smoke_test.sh
+      # Lo mismo con la prueba de migración: aquí no hay release que descargar, así que se
+      # corre en modo offline —el «binario anterior» es una copia del nuevo—. Eso no prueba
+      # ninguna migración, pero sí que el script sigue funcionando; la migración de verdad,
+      # contra la última release publicada, la corre la nocturna.
+      - name: migrate-test.sh
+        run: sh deploy/migrate_test_test.sh
 
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:
