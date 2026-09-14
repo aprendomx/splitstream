@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"strings"
 	"testing"
@@ -566,11 +567,32 @@ func BenchmarkStreamerMultipleChunkRead(b *testing.B) {
 // The scheduler interleaves fragments of different chunk streams, which is why the
 // SetChunkSize message lands in the middle of msg1 and why there is exactly one 0xc3 in
 // the whole output.
+//
+// Without help this is flaky: Sched only enqueues (it does not wait for the writer
+// goroutine), so nothing stops the scheduler from pulling writer3 off the queue a
+// second time before the test's second write() call has enqueued writer2 — msg1 would
+// then come out as 128+128+44 with no SetChunkSize in between, and the assertion below
+// would fail. gatedWriter pins the queue order by blocking the writer goroutine's very
+// first Write (inside writeChunk's Flush) until the test has enqueued both writer3 and
+// writer2, which guarantees the fixed order [w3 (being written), w2, ...] and makes the
+// rest of the test deterministic.
+type gatedWriter struct {
+	w    io.Writer
+	gate <-chan struct{}
+}
+
+func (g *gatedWriter) Write(p []byte) (int, error) {
+	<-g.gate
+	return g.w.Write(p)
+}
+
 func TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize(t *testing.T) {
 	out := new(bytes.Buffer)
+	gate := make(chan struct{})
+	gw := &gatedWriter{w: out, gate: gate}
 	streamer := NewChunkStreamer(
 		bufio.NewReaderSize(new(bytes.Buffer), 2048),
-		bufio.NewWriterSize(out, 2048),
+		bufio.NewWriterSize(gw, 2048),
 		nil,
 	)
 	defer streamer.Close()
@@ -586,6 +608,13 @@ func TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize(t *testing.T
 
 	write(3, 0, &message.AudioMessage{Payload: bytes.NewReader(payload)})
 	write(2, 0, &message.SetChunkSize{ChunkSize: 4096})
+	// Both messages are enqueued now (Sched doesn't block, and the scheduler's writer
+	// goroutine is stuck waiting on the gate before it can touch `out`), so the queue
+	// order is pinned. Open the gate before the next write(), which reuses chunk stream
+	// 3's writer and therefore blocks on its previous round completing — closing the
+	// gate after that call would deadlock the writer goroutine against the test
+	// goroutine.
+	close(gate)
 	// Distinct timestamp so this message gets its own header (fmt=2) and cannot be
 	// mistaken for a continuation chunk.
 	write(3, 1000, &message.AudioMessage{Payload: bytes.NewReader(payload)})

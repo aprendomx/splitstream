@@ -83,3 +83,42 @@ func TestStreamHandlerIgnoresAResponseToAnUnknownTransaction(t *testing.T) {
 		})
 	}
 }
+
+// TestStreamHandlerDeliversAResponseToAKnownTransaction: the counterpart of the test
+// above — a _result or _error for a transaction this side DID register (the same path
+// Stream.Command/CreateStream use, via transactions.Create) must still reach the caller
+// waiting on it. Ignoring unknown transactions must not turn into ignoring known ones
+// too: handleCommand keeps resolving the transaction and returning nil, exactly as
+// before this round's fix.
+func TestStreamHandlerDeliversAResponseToAKnownTransaction(t *testing.T) {
+	for _, name := range []string{"_result", "_error"} {
+		t.Run(name, func(t *testing.T) {
+			c := newConn(&rwcMock{}, nil)
+			s := newStream(42, c)
+
+			const transactionID = 7
+			tr, err := s.transactions.Create(transactionID)
+			require.Nil(t, err)
+
+			err = s.handler.handleCommand(3, 0, &message.CommandMessage{
+				CommandName:   name,
+				TransactionID: transactionID,
+				Encoding:      message.EncodingTypeAMF0,
+				Body:          bytes.NewReader(nil),
+			})
+			require.Nil(t, err)
+
+			// The transaction was resolved with the reply, not left hanging.
+			select {
+			case <-tr.doneCh:
+			default:
+				t.Fatal("transaction was not resolved")
+			}
+			require.Equal(t, name, tr.commandName)
+
+			// And it's gone from the table, same as before this round's fix.
+			_, err = s.transactions.At(transactionID)
+			require.NotNil(t, err)
+		})
+	}
+}
