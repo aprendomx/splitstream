@@ -61,3 +61,6 @@ Revisión final de rama: despachada (opus) sobre e801472..2c376a9 (13 commits).
 Revisión final: WITH FIXES — Important: parche 5 demasiado ancho (tolera _error al publish por el stream de datos → destino escribiendo al vacío); menores listados. Ola final única despachada (opus) con final-fix-brief.md (A.1–A.3, 4–14; B.5 incluido; 15 diferido). BASE ola final: 2c376a9
 Ola final: implementada (2c376a9..33fd58a, 6 commits, 14/14 puntos + B.5). Rulings: deleteStream no se manda (comentario con el motivo vigente); seam `crearArchivoDeClave` para probar el fallo de escritura de la clave maestra; §7 del spec rebajado a lo que hay. Re-revisión acotada despachada.
 Ola final: re-review CLEAN salvo un nit diferible (sleep 200 ms en servidorRTMPQueNoDrena, publisher_test.go:556). Rama lista para PR.
+PR #19 abierto (HEAD eaff0fc). Ruling: `gh workflow run nightly.yml` devuelve 404 hasta que el workflow exista en main → la validación de la nocturna se hace justo después del merge, antes de etiquetar v1.0.0 — coste si es erróneo: un PR pequeño de arreglo antes de la etiqueta.
+CI del PR #19 en rojo sobre eaff0fc (Dockerfile: go mod download antes de copiar third_party; SC2015 ×4 en nightly-smoke.sh) → arreglado por el controlador en 8c1345d.
+CI del PR #19 en verde sobre 8c1345d (run 34870400478, 7 jobs: test, web, docker, instaladores, integración, lint, vuln).
