@@ -105,6 +105,21 @@ jobs:
       - name: compila para Windows
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/splitstream
 
+  # El linter va en su propio job: es rápido y no depende de nada, así que no tiene por
+  # qué esperar a los tests con -race. La versión es la MISMA que fija el Makefile
+  # (GOLANGCI): si se cambia una, hay que cambiar la otra o lo que pasa en local deja de
+  # valer aquí.
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.2
+
   # El panel se compila aparte del binario. Sin este job, un fallo del frontend no se
   # notaría hasta que alguien ejecutara `make build` a mano: el job de Go compila igual,
   # porque go:embed se conforma con el .gitkeep de un clon limpio.

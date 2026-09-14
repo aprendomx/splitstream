@@ -1,0 +1,181 @@
+version: "2"
+
+# Cada excepción lleva su porqué. Una excepción sin motivo escrito es un hallazgo.
+run:
+  timeout: 5m
+
+# Por defecto golangci-lint esconde lo que pase de 50 hallazgos por linter y de 3 repetidos
+# iguales, y además se queda con UN solo hallazgo por línea aunque lo firmen linters
+# distintos. Con los valores de fábrica este repo enseñaba 120 hallazgos de los 226 que hay,
+# y el G705 de logos.go quedaba tapado por el errcheck de la misma línea. Una puerta de CI
+# que oculta la mitad de lo que encuentra no sirve: aquí se enseña todo.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosec
+    - revive
+    - unused
+    - ineffassign
+    - misspell
+    - gocritic
+  settings:
+    errcheck:
+      # Cierres y flushes de mejor esfuerzo, y LogEvent: fuego y olvido por diseño (spec
+      # base §6): un evento que no se pudo persistir no debe tumbar la operación que lo
+      # generó. El resto de errores se comprueban.
+      #
+      # errcheck solo casa la INTERFAZ cuando la llamada va por ella: `(io.Closer).Close`
+      # no cubre un `*sql.Rows` ni un `*websocket.Conn`, así que cada tipo concreto que se
+      # cierra de mejor esfuerzo aparece aquí con su import path completo.
+      exclude-functions:
+        # Cierres por interfaz.
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (io/fs.File).Close
+        - (net/http.Flusher).Flush
+        # Cierres por tipo concreto.
+        - (*os.File).Close
+        - (*net.TCPConn).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        # El Rollback del defer: si la transacción ya se confirmó devuelve
+        # ErrTxDone, que es justo el caso bueno.
+        - (*database/sql.Tx).Rollback
+        - (*github.com/coder/websocket.Conn).Close
+        - (*github.com/coder/websocket.Conn).CloseNow
+        - (*github.com/yutopp/go-rtmp.ClientConn).Close
+        - (*github.com/aprendomx/splitstream/internal/store.DB).Close
+        - (github.com/aprendomx/splitstream/internal/relay.Publisher).Close
+        - (*github.com/aprendomx/splitstream/internal/rtmpio.Publisher).Close
+        # Fuego y olvido por diseño (spec base §6).
+        - (*github.com/aprendomx/splitstream/internal/store.DB).LogEvent
+        # Escribir la respuesta es de mejor esfuerzo: si el cliente ya se fue no hay
+        # nada que hacer con el error, y la cabecera ya salió.
+        - (net/http.ResponseWriter).Write
+        # Escrituras a stdout/stderr y a buffers de prueba.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # Borrar el temporal del respaldo: el sistema lo limpia igual y el handler ya
+        # respondió.
+        - os.RemoveAll
+    gosec:
+      excludes:
+        - G104 # duplica errcheck, que aquí ya está configurado con sus excepciones una a una
+        - G115 # ver la nota de abajo: son truncamientos deliberados de campos de formato
+        - G304 # rutas de archivo que vienen de la configuración del operador, no de la red
+        - G404 # math/rand solo para jitter de backoff, nunca para secretos (crypto/rand)
+      # G115 (conversión entera que podría desbordar) sale 12 veces, todas en el empaquetado
+      # de bytes de FLV/AVC y en las métricas: el valor viene acotado por el propio formato
+      # (un tipo de tag cabe en un byte, un componente RGB en un uint8) y truncarlo es lo
+      # que se quiere. No hay ninguna donde el dato venga sin acotar de la red.
+    staticcheck:
+      # Se conserva el resto de ST1xxx; solo se quitan estos, con motivo:
+      #  - ST1005: los mensajes de error son en español, van a la cara del usuario y se
+      #    traducen por el mapa de internal/httpapi/i18n_en.go. Además arrancan con el
+      #    nombre propio de la plataforma ("Kick no permite…"), que va en mayúscula.
+      #  - QF1001/QF1002/QF1008: son "quickfix", sugerencias de estilo (De Morgan, switch
+      #    con etiqueta, campo embebido). Ninguna señala un fallo y todas reescriben código
+      #    que hoy se lee bien.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1005
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF1001
+        - -QF1002
+        - -QF1008
+    revive:
+      rules:
+        - name: exported
+          disabled: true # los comentarios son en español y no empiezan por el nombre
+        - name: var-naming
+          arguments: [["ID", "URL", "RTMP", "TLS", "DTO"], []]
+    misspell:
+      locale: US
+      # misspell solo sabe inglés y este repo comenta y nombra en español: en el primer
+      # barrido dio 135 hallazgos de 34 palabras distintas y ninguno era un error. Peor
+      # aún, parte las palabras en la vocal acentuada ("asignó" -> "asign", "cuánto" ->
+      # "nto"), así que la lista de excepciones no tendría fin: cada comentario nuevo
+      # podría romper la CI con un mensaje absurdo.
+      #
+      # Por eso abajo se acota a internal/httpapi/i18n_en.go, el único archivo con prosa en
+      # inglés de verdad —las traducciones del panel—, que es donde un typo sí se ve. Estas
+      # tres son las excepciones que quedan dentro de ese archivo, que guarda las DOS caras
+      # del mapa: la clave en español y la traducción en inglés.
+      ignore-rules:
+        - momento # aparece en las claves en español ("espera un momento")
+        - recorre # el comentario de cabecera de i18n_en.go también está en español
+        - cancelled # inglés británico en la traducción; "cancelled" es además la etapa del sondeo (spec v0.8 §3)
+    gocritic:
+      enabled-tags: [diagnostic]
+  exclusions:
+    paths:
+      - third_party
+      - web
+    rules:
+      # Los tests pueden ignorar errores de limpieza y usar valores fijos.
+      - path: _test\.go
+        linters: [errcheck, gosec]
+
+      # En un test, `defer` dentro del bucle es justo lo que se quiere: los sinks se paran
+      # todos al salir de la función, no en cada vuelta. El bucle recorre 2 o 3 elementos.
+      - path: _test\.go
+        linters: [gocritic]
+        text: deferInLoop
+
+      # El `defer stop()` solo devuelve la señal al runtime; el proceso se está muriendo
+      # de todas formas. Reestructurar main para que os.Exit quede fuera del ámbito del
+      # defer no compra nada aquí.
+      - path: cmd/splitstream/main\.go
+        linters: [gocritic]
+        text: exitAfterDefer
+
+      # healthcheck() habla con 127.0.0.1 y solo mide vida. El certificado es del dominio,
+      # nunca de la IP de loopback, así que validarlo fallaría siempre; el motivo está
+      # escrito junto al código. G704 (SSRF) es la otra cara: la URL la construye
+      # healthcheckURL a partir de la configuración, no de nada que venga de la red.
+      - path: cmd/splitstream/main\.go
+        linters: [gosec]
+        text: "G402|G704"
+
+      # Las tres cookies de sesión llevan HttpOnly y SameSite=Lax; Secure sigue al
+      # despliegue (s.secure), que es false a propósito cuando se sirve por HTTP en una
+      # red local —una cookie Secure ahí no se mandaría nunca y nadie podría entrar—.
+      # gosec exige un literal true y no sabe leer la variable.
+      - path: internal/httpapi/(auth|setup)\.go
+        linters: [gosec]
+        text: G124
+
+      # El mapa de traducciones al inglés menciona "contraseña"/"password" en varias
+      # entradas; gosec lo lee como una credencial incrustada.
+      - path: internal/httpapi/i18n_en\.go
+        linters: [gosec]
+        text: G101
+
+      # G705 en logos.go: los bytes NO vienen del cliente tal cual —imagen.Normalizar los
+      # vuelve a codificar como PNG— y se sirven con Content-Type: image/png y
+      # X-Content-Type-Options: nosniff, que es justo la defensa que gosec busca y no sabe
+      # ver. El motivo está escrito junto al código.
+      - path: internal/httpapi/logos\.go
+        linters: [gosec]
+        text: G705
+
+      # misspell solo tiene sentido donde hay inglés: las traducciones del panel. En el
+      # resto del repo los comentarios y los identificadores son en español (ver la nota de
+      # settings.misspell).
+      - path-except: internal/httpapi/i18n_en\.go
+        linters: [misspell]

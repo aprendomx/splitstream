@@ -52,12 +52,6 @@ func (r *recorder) OnPublishEnd() {
 	r.ends++
 }
 
-func (r *recorder) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.msgs)
-}
-
 func TestClassifyVideoKeyframe(t *testing.T) {
 	msg, err := classifyVideo(100, []byte{0x17, 0x01, 0, 0, 0})
 	if err != nil {

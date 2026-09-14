@@ -1,8 +1,13 @@
-.PHONY: build build-web build-go test test-integration sinks-up sinks-down vet tidy run clean
+.PHONY: build build-web build-go test test-integration sinks-up sinks-down vet lint tidy run clean
 
 # La versión sale del tag más cercano. Sin tags (o sin git) queda en "dev", que es
 # exactamente lo que vale un binario que no viene de una release.
 VERSION ?= $(shell git describe --tags --dirty 2>/dev/null || echo dev)
+
+# La versión del linter se fija aquí y en el job `lint` de la CI: el mismo número en los
+# dos sitios, o lo que pasa en local deja de valer para la CI. Va por `go run` con la
+# versión pegada al módulo, que no toca go.mod ni go.sum.
+GOLANGCI := v2.13.2
 
 # El panel se compila ANTES que el binario: go:embed mete dist/spa dentro del ejecutable,
 # así que un binario construido sin esto llevaría el panel de la vez anterior.
@@ -24,6 +29,10 @@ test:
 
 vet:
 	go vet ./...
+
+# Las excepciones del linter están justificadas una a una en .golangci.yml.
+lint:
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI) run ./...
 
 tidy:
 	go mod tidy

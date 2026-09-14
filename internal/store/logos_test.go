@@ -77,7 +77,9 @@ func TestSetLogoReemplazaElAnterior(t *testing.T) {
 	if _, err := db.SetDestinationLogo(ctx, d.ID, pngFalso); err != nil {
 		t.Fatal(err)
 	}
-	nuevo := append(pngFalso, 'X')
+	// Se copia antes de añadir: `append` sobre el fixture compartido podría escribir en
+	// su array si algún día tuviera capacidad de sobra, y contaminar al resto de tests.
+	nuevo := append(append([]byte(nil), pngFalso...), 'X')
 	if _, err := db.SetDestinationLogo(ctx, d.ID, nuevo); err != nil {
 		t.Fatal(err)
 	}

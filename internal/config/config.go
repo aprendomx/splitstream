@@ -224,7 +224,7 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	tlsDomain := strings.TrimSpace(get("SPLITSTREAM_TLS_DOMAIN", ""))
 	tlsCert := get("SPLITSTREAM_TLS_CERT_FILE", "")
 	tlsKey := get("SPLITSTREAM_TLS_KEY_FILE", "")
-	if err = validarTLS(tlsDomain, tlsCert, tlsKey); err != nil {
+	if err := validarTLS(tlsDomain, tlsCert, tlsKey); err != nil {
 		return nil, err
 	}
 	conTLS := tlsDomain != "" || tlsCert != ""

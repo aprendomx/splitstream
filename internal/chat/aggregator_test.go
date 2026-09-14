@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +17,6 @@ import (
 
 // lectorFalso implementa Provider + ChatReader: manda n mensajes y espera ctx.
 type lectorFalso struct {
-	mu        sync.Mutex
 	arranques atomic.Int32
 	paradas   atomic.Int32
 	n         int
