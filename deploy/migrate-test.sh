@@ -264,14 +264,23 @@ V_DESPUES=$(version_esquema "$DB")
 APLICADAS=$((V_DESPUES - V_ANTES))
 
 # ── 3. Veredicto ─────────────────────────────────────────────────────────────
-# El runner de migraciones (internal/store/db.go) no escribe nada al log cuando aplica
-# una: la evidencia es el user_version. Se busca igual la palabra por si algún día empieza
-# a decirlo, y entonces el mensaje del log manda sobre el conteo.
+# Dos evidencias independientes, y tienen que contar lo mismo: el `user_version` de la base
+# —que dice en qué esquema quedó— y el log del binario nuevo, que desde la v1.0 escribe una
+# línea «migración aplicada» por cada migración que aplica (internal/store/db.go).
+#
+# El `user_version` se sigue leyendo y no se sustituye por el log: es la única evidencia que
+# sobrevive a que alguien cambie el texto de esa línea, y es la que mide el resultado de
+# verdad. El log añade lo que el `user_version` no puede decir: que migró en ESTE arranque y
+# cuántas veces, no que la base ya viniera así.
 DIJO_MIGRAR=no
 if grep -qi 'migraci' "$LOG_NUEVO"; then DIJO_MIGRAR=si; fi
+APLICADAS_LOG=$(grep -c 'migración aplicada' "$LOG_NUEVO" || true)
 
 if [ "$APLICADAS" -eq 0 ] && [ "$DIJO_MIGRAR" = si ]; then
   fallo "el log del binario nuevo habla de migraciones pero el esquema sigue en $V_ANTES"
+fi
+if [ "$APLICADAS" -gt 0 ] && [ "$APLICADAS_LOG" -ne "$APLICADAS" ]; then
+  fallo "el esquema subió de $V_ANTES a $V_DESPUES pero el log trae $APLICADAS_LOG líneas «migración aplicada» y no $APLICADAS"
 fi
 
 # `err=` aparece en el apagado ordenado («la ingesta dejó de atender»), así que no vale

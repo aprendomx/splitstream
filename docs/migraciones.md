@@ -10,6 +10,10 @@ El runner de migraciones es `internal/store/db.go`; las migraciones, los archivo
 `go:embed`. La versión aplicada se guarda en el `PRAGMA user_version` de la propia base:
 no hay tabla de control.
 
+Cada migración que se aplica deja una línea en el log —`migración aplicada version=N`—,
+que es lo único que distingue «migró en este arranque» de «ya venía así»: el
+`user_version` de después, por sí solo, no lo dice.
+
 ---
 
 ## Reglas
@@ -37,8 +41,8 @@ nada. Por eso el `.sql` no debe traer sus propios `BEGIN` ni `COMMIT`.
 
 **5. Las claves ajenas están apagadas mientras se migra.** El runner ejecuta
 `PRAGMA foreign_keys = OFF` antes de cada migración
-([`db.go:151`](../internal/store/db.go)) y `PRAGMA foreign_keys = ON` al terminar todas
-([`db.go:176`](../internal/store/db.go)).
+([`db.go:166`](../internal/store/db.go)) y `PRAGMA foreign_keys = ON` al terminar todas
+([`db.go:200`](../internal/store/db.go)).
 
 No es un detalle de estilo. El procedimiento que SQLite prescribe para cambiar una tabla
 —crear la nueva, copiar, `DROP` de la vieja, renombrar— es incompatible con las claves
@@ -52,9 +56,9 @@ El `PRAGMA` va fuera de la transacción a propósito: dentro de una, SQLite lo i
 silencio.
 
 **6. `SchemaVersion` es siempre la última migración.** La constante de
-[`db.go:20`](../internal/store/db.go) y el número más alto de `migrations/` tienen que
+[`db.go:21`](../internal/store/db.go) y el número más alto de `migrations/` tienen que
 coincidir; si no, el binario se niega a abrir la base con
-«SchemaVersion es N pero la última migración es M» ([`db.go:212`](../internal/store/db.go)).
+«SchemaVersion es N pero la última migración es M» ([`db.go:238`](../internal/store/db.go)).
 Es la red que atrapa el olvido más común: añadir el `.sql` y no tocar la constante.
 
 ---
@@ -173,14 +177,27 @@ Qué hacer:
 la anterior.** El esquema solo va hacia delante (regla 2) y no existe ninguna migración de
 bajada que deshaga lo que la 0012 hizo.
 
-Peor todavía, hoy el binario antiguo **no se niega**: el runner solo aplica las
-migraciones cuya versión supere `user_version`, así que si la base está en 12 y el binario
-solo conoce hasta 11, no tiene nada que aplicar, no comprueba que 12 sea mayor que su
-`SchemaVersion` y abre la base tan tranquilo. Lo que falla es después, y de forma fea: una
-columna que ya no existe, un `CHECK` que rechaza un valor que antes valía, una consulta
-que devuelve lo que no debe. *(Una comprobación explícita de «esta base viene del futuro»
-al abrir sería barata y está pendiente; mientras no esté, la única defensa es el
-respaldo.)*
+Lo que sí hay es una red: **el binario se niega a abrir una base del futuro.** El runner
+solo aplica las migraciones cuya versión supere `user_version`, así que si la base está en
+12 y el binario solo conoce hasta 11 no tendría nada que aplicar y —hasta la v1.0— abría la
+base tan tranquilo; lo que fallaba era después, y de forma fea: una columna que ya no
+existe, un `CHECK` que rechaza un valor que antes valía, una consulta que devuelve lo que
+no debe, con el servicio ya emitiendo. Ahora `migrate` compara antes de tocar nada y aborta
+el arranque:
+
+```
+error: la base es de una versión más nueva de Splitstream (esquema 12 > 11): actualiza el binario o restaura el respaldo
+```
+
+Las dos salidas son las que dice el mensaje, y no hay una tercera: volver a poner el
+binario nuevo, o restaurar el `.db` de antes de actualizar. La comprobación está en
+[`db.go:145`](../internal/store/db.go) y la fija `TestOpenRejectsANewerSchema`
+(`internal/store/db_test.go`).
+
+Un detalle que conviene tener claro: esto protege de **hoy en adelante**. Un binario
+anterior a la v1.0 no lleva la comprobación, así que bajar a una versión vieja de verdad
+sigue abriendo la base sin quejarse. Por eso el respaldo no deja de ser la defensa
+principal.
 
 En la práctica, entonces:
 

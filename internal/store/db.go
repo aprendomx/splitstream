@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"path"
 	"sort"
@@ -131,6 +132,20 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("leer user_version: %w", err)
 	}
 
+	// Una base que viene del FUTURO no se abre. El runner solo aplica lo que supere
+	// user_version, así que sin esta comprobación un binario viejo sobre una base migrada
+	// por uno nuevo no tendría nada que aplicar y arrancaría tan tranquilo; lo que falla es
+	// después, y de forma fea —una columna que ya no existe, un CHECK que rechaza un valor
+	// que antes valía—, con el servicio ya emitiendo y escribiendo en esa base.
+	//
+	// Fallar aquí es la diferencia entre un mensaje que dice qué hacer y una corrupción
+	// lenta. No hay vuelta atrás del esquema (docs/migraciones.md, regla 2): las dos
+	// salidas de verdad son subir el binario o restaurar el respaldo, y eso es justo lo que
+	// dice el error.
+	if current > SchemaVersion {
+		return fmt.Errorf("la base es de una versión más nueva de Splitstream (esquema %d > %d): actualiza el binario o restaura el respaldo", current, SchemaVersion)
+	}
+
 	for _, m := range migrations {
 		if m.version <= current {
 			continue
@@ -168,6 +183,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("migración %d: commit: %w", m.version, err)
 		}
+		// Una línea por migración aplicada. Es lo único que deja constancia de que una
+		// actualización tocó el esquema: el user_version de después no distingue "migró
+		// ahora" de "ya venía así", y quien actualiza en un servidor solo tiene el log.
+		// deploy/migrate-test.sh se apoya en ella.
+		//
+		// slog.Default() y no un logger propio porque el store no tiene ninguno: Open
+		// recibe solo el contexto y la ruta, y meterle un logger por la firma para una
+		// línea sería peor. main configura el handler por defecto antes de abrir la base.
+		slog.Info("migración aplicada", "version", m.version)
 	}
 
 	// Volver a encenderlas no es opcional: todo lo que el programa hace después cuenta con
