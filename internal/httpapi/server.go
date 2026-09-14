@@ -292,93 +292,133 @@ func New(cfg Config) (*Server, error) {
 // writeError lo encuentra sin que ninguno de sus ~90 sitios de llamada cambie.
 func (s *Server) Handler() http.Handler { return conIdioma(s.mux) }
 
-// routes registra las rutas del spec §9. Los patrones con método son de Go 1.22, así que
-// no hace falta router externo.
+// ruta es una entrada de la tabla de rutas: todo lo que hace falta saber de un endpoint,
+// tanto para registrarlo en el mux como para contarlo en docs/api.md (spec v1.0 §5.1).
 //
-// Se declaran TODAS aquí: así la lista de qué existe y qué necesita sesión se escribe en un
-// solo sitio, y no se puede añadir un endpoint olvidándose de protegerlo.
-func (s *Server) routes() {
-	// Públicas: son el camino para conseguir una sesión.
-	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
-	s.mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
-	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
-	s.mux.Handle("GET /metrics", s.requireSessionOrToken(http.HandlerFunc(s.handleMetrics)))
+// Publica significa «no pide sesión», que es la excepción y lleva escrito al lado por qué.
+// Envoltorio sustituye a requireSession cuando la ruta se autentica de otra forma: hoy solo
+// /metrics, que además del panel acepta el token del recolector.
+type ruta struct {
+	Metodo     string
+	Patron     string
+	Handler    http.HandlerFunc
+	Publica    bool
+	Grupo      string
+	Resumen    string
+	Envoltorio func(http.Handler) http.Handler
+}
 
-	// La configuración inicial también es pública, por definición: existe justo cuando
-	// todavía no hay contraseña con la que autenticarse. Se protege de otra forma —solo
-	// funciona mientras no haya contraseña, y desde fuera exige el código de la consola—.
-	s.mux.HandleFunc("GET /api/setup", s.handleSetupEstado)
-	s.mux.HandleFunc("POST /api/setup", s.handleSetup)
-
-	// El callback del flujo con redirect es público a la fuerza: quien llega es el
-	// navegador que vuelve de la plataforma, y puede no traer la cookie del panel (otro
-	// navegador, o el móvil). Lo que lo protege es el `state` firmado: sin una firma
-	// nuestra y sin un flujo pendiente que le corresponda, no hace nada.
-	s.mux.HandleFunc("GET /api/platforms/{p}/callback", s.handleAuthCallback)
-	// El webhook del chat de Kick lo llama la plataforma, que tampoco tiene sesión. Lo
-	// protege la firma del payload, que verifica el proveedor en ParseWebhook.
-	s.mux.HandleFunc("POST /api/platforms/kick/webhook", s.handleKickWebhook)
-
-	protegida := func(pattern string, h http.HandlerFunc) {
-		s.mux.Handle(pattern, s.requireSession(h))
+// rutas es la tabla con TODOS los endpoints de la API (spec §9). Se declaran aquí y en
+// ningún otro sitio: así la lista de qué existe y qué necesita sesión se escribe una sola
+// vez, no se puede añadir un endpoint olvidándose de protegerlo, y docs/api.md se genera
+// desde la misma fuente que el registro en el mux.
+func (s *Server) rutas() []ruta {
+	// publica y protegida arman las entradas; se leen igual que las llamadas que había
+	// antes en routes() y dejan a la vista cuáles no piden sesión.
+	publica := func(metodo, patron string, h http.HandlerFunc, grupo, resumen string) ruta {
+		return ruta{Metodo: metodo, Patron: patron, Handler: h, Publica: true, Grupo: grupo, Resumen: resumen}
+	}
+	protegida := func(metodo, patron string, h http.HandlerFunc, grupo, resumen string) ruta {
+		return ruta{Metodo: metodo, Patron: patron, Handler: h, Grupo: grupo, Resumen: resumen}
 	}
 
-	protegida("GET /api/ingest", s.handleGetIngest)
-	protegida("POST /api/ingest/rotate-key", s.handleRotateIngestKey)
-	protegida("GET /api/destinations", s.handleListDestinations)
-	protegida("POST /api/destinations", s.handleCreateDestination)
-	protegida("PATCH /api/destinations/{id}", s.handlePatchDestination)
-	protegida("DELETE /api/destinations/{id}", s.handleDeleteDestination)
-	protegida("POST /api/destinations/{id}/toggle", s.handleToggleDestination)
-	protegida("POST /api/destinations/reorder", s.handleReorderDestinations)
-	// toggle-all va con nombre fijo, no con {id}: el mux de Go da preferencia al patrón
-	// más específico, así que no compite con PATCH/DELETE /api/destinations/{id}.
-	protegida("POST /api/destinations/toggle-all", s.handleToggleAllDestinations)
-	// from-account va con nombre fijo, como toggle-all: tiene los mismos segmentos que
-	// POST /api/destinations pero uno más, así que no compite con el alta normal.
-	protegida("POST /api/destinations/from-account", s.handleCreateDestinationFromAccount)
-	protegida("POST /api/destinations/{id}/broadcast", s.handleCreateBroadcast)
-	protegida("GET /api/destinations/{id}/broadcast", s.handleGetBroadcast)
-	protegida("POST /api/destinations/{id}/broadcast/start", s.handleStartBroadcast)
-	protegida("POST /api/destinations/{id}/broadcast/end", s.handleEndBroadcast)
-	protegida("GET /api/destinations/{id}/key", s.handleRevealDestinationKey)
-	protegida("POST /api/destinations/{id}/retry", s.handleRetryDestination)
-	protegida("POST /api/destinations/{id}/test", s.handleTestDestination)
-	protegida("PUT /api/destinations/{id}/logo", s.handlePutDestinationLogo)
-	protegida("GET /api/destinations/{id}/logo", s.handleGetDestinationLogo)
-	protegida("DELETE /api/destinations/{id}/logo", s.handleDeleteDestinationLogo)
-	protegida("GET /api/webhooks", s.handleListWebhooks)
-	protegida("POST /api/webhooks", s.handleCreateWebhook)
-	protegida("PATCH /api/webhooks/{id}", s.handlePatchWebhook)
-	protegida("DELETE /api/webhooks/{id}", s.handleDeleteWebhook)
-	protegida("POST /api/webhooks/{id}/test", s.handleTestWebhook)
-	protegida("GET /api/status", s.handleStatus)
-	protegida("GET /api/events", s.handleEvents)
-	protegida("GET /api/sessions", s.handleSessions)
-	protegida("GET /api/sessions/{id}", s.handleSessionDetail)
-	protegida("POST /api/backup", s.handleBackup)
-	protegida("GET /api/recording/settings", s.handleGetRecordingSettings)
-	protegida("PATCH /api/recording/settings", s.handlePatchRecordingSettings)
-	protegida("GET /api/recordings", s.handleListRecordings)
-	protegida("GET /api/recordings/{id}/download", s.handleDownloadRecording)
-	protegida("DELETE /api/recordings/{id}", s.handleDeleteRecording)
-	protegida("GET /ws", s.handleWS)
-	protegida("GET /api/preview/ws", s.handlePreviewWS)
+	return []ruta{
+		// Públicas: son el camino para conseguir una sesión.
+		publica("POST", "/api/auth/login", s.handleLogin, "auth", "Entrega la cookie de sesión a cambio de la contraseña del panel"),
+		publica("POST", "/api/auth/logout", s.handleLogout, "auth", "Cierra la sesión y caduca la cookie"),
+		publica("GET", "/healthz", s.handleHealthz, "health", "Comprueba que el servidor y su base de datos responden"),
+		// /metrics no es pública: pide sesión o, para el recolector, el token configurado.
+		{Metodo: "GET", Patron: "/metrics", Handler: s.handleMetrics, Grupo: "metrics",
+			Resumen: "Métricas del relay y de cada destino en formato Prometheus", Envoltorio: s.requireSessionOrToken},
 
-	// Plataformas, flujo de autorización sondeado en el servidor, y cuentas (v0.11 §6.1).
-	protegida("GET /api/platforms", s.handleListPlatforms)
-	protegida("POST /api/platforms/{p}/auth", s.handleStartAuth)
-	// El literal "twitch/categories" es más específico que "{p}/auth/{state}" y tiene un
-	// segmento menos, así que no compite con él en el mux.
-	protegida("GET /api/platforms/twitch/categories", s.handleSearchCategories)
-	protegida("GET /api/platforms/{p}/auth/{state}", s.handleAuthStatus)
-	protegida("GET /api/accounts", s.handleListAccounts)
-	protegida("DELETE /api/accounts/{id}", s.handleDeleteAccount)
-	protegida("POST /api/live/title", s.handleLiveTitle)
+		// La configuración inicial también es pública, por definición: existe justo cuando
+		// todavía no hay contraseña con la que autenticarse. Se protege de otra forma —solo
+		// funciona mientras no haya contraseña, y desde fuera exige el código de la consola—.
+		publica("GET", "/api/setup", s.handleSetupEstado, "setup", "Dice si falta poner contraseña y si hará falta el código de la consola"),
+		publica("POST", "/api/setup", s.handleSetup, "setup", "Fija la contraseña inicial del panel"),
 
-	// Chat de la sesión: en vivo por WebSocket, e historial paginado por sesión.
-	protegida("GET /api/chat/ws", s.handleChatWS)
-	protegida("GET /api/sessions/{id}/chat", s.handleSessionChat)
+		// El callback del flujo con redirect es público a la fuerza: quien llega es el
+		// navegador que vuelve de la plataforma, y puede no traer la cookie del panel (otro
+		// navegador, o el móvil). Lo que lo protege es el `state` firmado: sin una firma
+		// nuestra y sin un flujo pendiente que le corresponda, no hace nada.
+		publica("GET", "/api/platforms/{p}/callback", s.handleAuthCallback, "platforms", "Recoge la vuelta del navegador desde la plataforma y termina la autorización"),
+		// El webhook del chat de Kick lo llama la plataforma, que tampoco tiene sesión. Lo
+		// protege la firma del payload, que verifica el proveedor en ParseWebhook.
+		publica("POST", "/api/platforms/kick/webhook", s.handleKickWebhook, "platforms", "Recibe los mensajes de chat que Kick manda por webhook"),
+
+		protegida("GET", "/api/ingest", s.handleGetIngest, "ingest", "Datos de la ingesta RTMP, con la clave enmascarada"),
+		protegida("POST", "/api/ingest/rotate-key", s.handleRotateIngestKey, "ingest", "Genera una clave de ingesta nueva y, si se pide, corta la publicación en curso"),
+		protegida("GET", "/api/destinations", s.handleListDestinations, "destinations", "Lista los destinos con su estado y sus métricas"),
+		protegida("POST", "/api/destinations", s.handleCreateDestination, "destinations", "Da de alta un destino con su URL RTMP y su clave"),
+		protegida("PATCH", "/api/destinations/{id}", s.handlePatchDestination, "destinations", "Cambia los campos indicados de un destino"),
+		protegida("DELETE", "/api/destinations/{id}", s.handleDeleteDestination, "destinations", "Borra un destino"),
+		protegida("POST", "/api/destinations/{id}/toggle", s.handleToggleDestination, "destinations", "Enciende o apaga un destino"),
+		protegida("POST", "/api/destinations/reorder", s.handleReorderDestinations, "destinations", "Reordena los destinos según la lista de ids que reciba"),
+		// toggle-all va con nombre fijo, no con {id}: el mux de Go da preferencia al patrón
+		// más específico, así que no compite con PATCH/DELETE /api/destinations/{id}.
+		protegida("POST", "/api/destinations/toggle-all", s.handleToggleAllDestinations, "destinations", "Enciende o apaga todos los destinos de una vez"),
+		// from-account va con nombre fijo, como toggle-all: tiene los mismos segmentos que
+		// POST /api/destinations pero uno más, así que no compite con el alta normal.
+		protegida("POST", "/api/destinations/from-account", s.handleCreateDestinationFromAccount, "destinations", "Crea un destino a partir de una cuenta ya vinculada"),
+		protegida("POST", "/api/destinations/{id}/broadcast", s.handleCreateBroadcast, "destinations", "Crea en la plataforma la emisión del destino"),
+		protegida("GET", "/api/destinations/{id}/broadcast", s.handleGetBroadcast, "destinations", "Consulta la emisión que la plataforma dio para el destino"),
+		protegida("POST", "/api/destinations/{id}/broadcast/start", s.handleStartBroadcast, "destinations", "Pone en directo la emisión del destino"),
+		protegida("POST", "/api/destinations/{id}/broadcast/end", s.handleEndBroadcast, "destinations", "Termina la emisión del destino"),
+		protegida("GET", "/api/destinations/{id}/key", s.handleRevealDestinationKey, "destinations", "Devuelve la clave del destino en claro, para copiarla desde el panel"),
+		protegida("POST", "/api/destinations/{id}/retry", s.handleRetryDestination, "destinations", "Fuerza un reintento de conexión del destino sin esperar la espera creciente"),
+		protegida("POST", "/api/destinations/{id}/test", s.handleTestDestination, "destinations", "Prueba la conexión con el destino sin emitir nada"),
+		protegida("PUT", "/api/destinations/{id}/logo", s.handlePutDestinationLogo, "destinations", "Sube el logotipo del destino"),
+		protegida("GET", "/api/destinations/{id}/logo", s.handleGetDestinationLogo, "destinations", "Devuelve el logotipo del destino"),
+		protegida("DELETE", "/api/destinations/{id}/logo", s.handleDeleteDestinationLogo, "destinations", "Borra el logotipo del destino"),
+		protegida("GET", "/api/webhooks", s.handleListWebhooks, "webhooks", "Lista los webhooks de notificación"),
+		protegida("POST", "/api/webhooks", s.handleCreateWebhook, "webhooks", "Da de alta un webhook de notificación"),
+		protegida("PATCH", "/api/webhooks/{id}", s.handlePatchWebhook, "webhooks", "Cambia los campos indicados de un webhook"),
+		protegida("DELETE", "/api/webhooks/{id}", s.handleDeleteWebhook, "webhooks", "Borra un webhook"),
+		protegida("POST", "/api/webhooks/{id}/test", s.handleTestWebhook, "webhooks", "Manda un evento de prueba al webhook"),
+		protegida("GET", "/api/status", s.handleStatus, "live", "Estado completo del panel: ingesta, sesión, destinos, grabación y eventos recientes"),
+		protegida("GET", "/api/events", s.handleEvents, "live", "Lista los eventos del registro, de los más nuevos a los más viejos"),
+		protegida("GET", "/api/sessions", s.handleSessions, "sessions", "Historial de sesiones con el recuento de eventos de cada una"),
+		protegida("GET", "/api/sessions/{id}", s.handleSessionDetail, "sessions", "Ficha de una sesión con eventos, grabaciones y chat"),
+		protegida("POST", "/api/backup", s.handleBackup, "backup", "Descarga una copia de seguridad consistente de la base de datos"),
+		protegida("GET", "/api/recording/settings", s.handleGetRecordingSettings, "recordings", "Ajustes de grabación y espacio en disco"),
+		protegida("PATCH", "/api/recording/settings", s.handlePatchRecordingSettings, "recordings", "Cambia los ajustes de grabación"),
+		protegida("GET", "/api/recordings", s.handleListRecordings, "recordings", "Lista las grabaciones guardadas"),
+		protegida("GET", "/api/recordings/{id}/download", s.handleDownloadRecording, "recordings", "Descarga el archivo de una grabación"),
+		protegida("DELETE", "/api/recordings/{id}", s.handleDeleteRecording, "recordings", "Borra una grabación y su archivo"),
+		protegida("GET", "/ws", s.handleWS, "ws", "Canal WebSocket con el estado del panel en tiempo real"),
+		protegida("GET", "/api/preview/ws", s.handlePreviewWS, "ws", "Canal WebSocket con la vista previa silenciada de la ingesta"),
+
+		// Plataformas, flujo de autorización sondeado en el servidor, y cuentas (v0.11 §6.1).
+		protegida("GET", "/api/platforms", s.handleListPlatforms, "platforms", "Lista las plataformas soportadas y lo que cada una permite hacer"),
+		protegida("POST", "/api/platforms/{p}/auth", s.handleStartAuth, "platforms", "Arranca la autorización de una cuenta en la plataforma"),
+		// El literal "twitch/categories" es más específico que "{p}/auth/{state}" y tiene un
+		// segmento menos, así que no compite con él en el mux.
+		protegida("GET", "/api/platforms/twitch/categories", s.handleSearchCategories, "platforms", "Busca categorías de Twitch por texto"),
+		protegida("GET", "/api/platforms/{p}/auth/{state}", s.handleAuthStatus, "platforms", "Dice cómo va una autorización en curso"),
+		protegida("GET", "/api/accounts", s.handleListAccounts, "accounts", "Lista las cuentas vinculadas y su estado"),
+		protegida("DELETE", "/api/accounts/{id}", s.handleDeleteAccount, "accounts", "Desvincula una cuenta y olvida sus tokens"),
+		protegida("POST", "/api/live/title", s.handleLiveTitle, "live", "Cambia el título y la categoría en las plataformas de los destinos indicados"),
+
+		// Chat de la sesión: en vivo por WebSocket, e historial paginado por sesión.
+		protegida("GET", "/api/chat/ws", s.handleChatWS, "chat", "Canal WebSocket con el chat unificado de la sesión en vivo"),
+		protegida("GET", "/api/sessions/{id}/chat", s.handleSessionChat, "chat", "Historial paginado del chat de una sesión"),
+	}
+}
+
+// routes registra en el mux la tabla de rutas(). Los patrones con método son de Go 1.22,
+// así que no hace falta router externo.
+func (s *Server) routes() {
+	for _, r := range s.rutas() {
+		patron := r.Metodo + " " + r.Patron
+		switch {
+		case r.Envoltorio != nil:
+			s.mux.Handle(patron, r.Envoltorio(r.Handler))
+		case r.Publica:
+			s.mux.HandleFunc(patron, r.Handler)
+		default:
+			s.mux.Handle(patron, s.requireSession(r.Handler))
+		}
+	}
 
 	// El panel va en la raíz y se registra el ÚLTIMO: en el mux de Go 1.22 los patrones
 	// más específicos ganan, así que /api/... y /ws siguen entrando por sus handlers.

@@ -176,14 +176,11 @@ func TestNewEventDTOKeepsTheOptionalIDs(t *testing.T) {
 }
 
 // TestDTOFieldNamesAreSnakeCase: el frontend de la fase 5 va a depender de estos nombres,
-// así que conviene que sean consistentes desde el principio.
+// así que conviene que sean consistentes desde el principio. Recorre dtosDocumentados
+// (api_doc_test.go), que es la misma lista que sale en docs/api.md: lo que se documenta y
+// lo que se comprueba no pueden separarse.
 func TestDTOFieldNamesAreSnakeCase(t *testing.T) {
-	tipos := []any{metricsDTO{}, destinationDTO{}, eventDTO{}, sessionDTO{}, sessionDetailDTO{}, ingestDTO{}, statusDTO{}, panelDTO{}, updateDTO{},
-		capabilitiesDTO{}, accountRefDTO{}, accountDTO{}, platformDTO{}, chatMessageDTO{},
-		broadcastDTO{}, testSkippedDTO{}, authStartDTO{}, authStartRequest{}, fromAccountRequest{},
-		broadcastRequest{}, liveResultDTO{}}
-
-	for _, v := range tipos {
+	for _, v := range dtosDocumentados {
 		rt := reflect.TypeOf(v)
 		for i := 0; i < rt.NumField(); i++ {
 			tag := rt.Field(i).Tag.Get("json")
