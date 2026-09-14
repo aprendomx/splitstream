@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,9 +58,8 @@ func TestEscribirClaveDevuelveElFalloPosteriorALaEscritura(t *testing.T) {
 	}
 }
 
-// Y si escribir falla, el archivo a medias no puede sobrevivir: el arranque siguiente lo
-// leería y daría por buena una clave que no es.
-func TestClaveDelArchivoNoDejaRestosSiFallaLaEscritura(t *testing.T) {
+// Y si CREAR falla, no puede quedar nada que leer detrás.
+func TestClaveDelArchivoNoDejaRestosSiFallaAlCrear(t *testing.T) {
 	dir := t.TempDir()
 	ruta := filepath.Join(dir, "splitstream.key")
 
@@ -74,5 +75,52 @@ func TestClaveDelArchivoNoDejaRestosSiFallaLaEscritura(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ruta) {
 		t.Errorf("el error no dice de qué archivo habla: %v", err)
+	}
+}
+
+// El otro lado, y el que de verdad importa: si falla la ESCRITURA —después de que el
+// archivo exista— el archivo a medias no puede sobrevivir. El arranque siguiente lo leería,
+// daría por buena una clave que no es, y las claves de todos los destinos quedarían
+// ilegibles sin que nada lo avisara.
+//
+// Provocarlo con un archivo de verdad no se puede: ni WriteString ni Sync fallan a
+// voluntad. Así que el archivo se crea igual —para que haya algo a medias que borrar— pero
+// el descriptor que recibe claveDelArchivo es el extremo de escritura de una tubería cuyo
+// lector ya está cerrado, y ahí el WriteString devuelve EPIPE. Go no convierte eso en
+// SIGPIPE porque el descriptor no es ni la salida ni el error estándar.
+func TestClaveDelArchivoNoDejaRestosSiFallaLaEscritura(t *testing.T) {
+	ruta := filepath.Join(t.TempDir(), "splitstream.key")
+
+	original := crearArchivoDeClave
+	t.Cleanup(func() { crearArchivoDeClave = original })
+	crearArchivoDeClave = func(r string) (*os.File, error) {
+		f, err := original(r)
+		if err != nil {
+			return nil, err
+		}
+		f.Close()
+		lector, escritor, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		lector.Close()
+		return escritor, nil
+	}
+
+	_, _, err := claveDelArchivo(ruta)
+	if err == nil {
+		t.Fatal("claveDelArchivo pasó aunque la escritura falló")
+	}
+	if !strings.Contains(err.Error(), ruta) {
+		t.Errorf("el error no dice de qué archivo habla: %v", err)
+	}
+	// Ese texto es el del caso en que NI SIQUIERA se pudo borrar. Aquí sí se podía, así que
+	// verlo significaría que el borrado falló por otro motivo.
+	if strings.Contains(err.Error(), "quedó a medias") {
+		t.Errorf("el error dice que no pudo borrar el archivo, y sí podía: %v", err)
+	}
+
+	if _, serr := os.Stat(ruta); !errors.Is(serr, fs.ErrNotExist) {
+		t.Errorf("el archivo a medias sigue ahí (stat: %v): el arranque siguiente lo leería como clave buena", serr)
 	}
 }

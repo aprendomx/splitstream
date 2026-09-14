@@ -192,10 +192,7 @@ func claveDelArchivo(ruta string) (string, bool, error) {
 			return "", false, fmt.Errorf("crear el directorio de %s: %w", ruta, err)
 		}
 	}
-	// 0600 y O_EXCL: solo el dueño puede leerla, y si otro proceso la creó entre el
-	// ReadFile de arriba y esta línea, se falla en vez de pisarla. Pisarla dejaría las
-	// claves de los destinos ilegibles para siempre.
-	f, err := os.OpenFile(ruta, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := crearArchivoDeClave(ruta)
 	if err != nil {
 		return "", false, fmt.Errorf("crear el archivo de clave %s: %w", ruta, err)
 	}
@@ -218,6 +215,23 @@ func claveDelArchivo(ruta string) (string, bool, error) {
 		return "", false, fmt.Errorf("escribir el archivo de clave %s: %w", ruta, err)
 	}
 	return clave, true, nil
+}
+
+// crearArchivoDeClave crea el archivo de clave, que tiene que no existir.
+//
+// 0600 y O_EXCL: solo el dueño puede leerla, y si otro proceso la creó entre el ReadFile de
+// claveDelArchivo y esta línea, se falla en vez de pisarla. Pisarla dejaría las claves de
+// los destinos ilegibles para siempre.
+//
+// Es una variable, y no una llamada directa a os.OpenFile, por una sola razón: el camino
+// que BORRA el archivo a medias cuando la escritura falla no se puede probar de otra forma.
+// Con un archivo de verdad ni WriteString ni Sync fallan a voluntad, y el propio O_EXCL
+// descarta los trucos de dejar una tubería o un enlace en el sitio —entonces lo que falla es
+// la creación, que es el otro camino y ya tiene su test—. El test interno la sustituye por
+// una que crea el archivo igual pero devuelve el extremo de una tubería sin lector. Fuera
+// del test nadie la toca.
+var crearArchivoDeClave = func(ruta string) (*os.File, error) {
+	return os.OpenFile(ruta, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 }
 
 // escribirClave escribe la clave y cierra el archivo, y devuelve el PRIMER error de los
