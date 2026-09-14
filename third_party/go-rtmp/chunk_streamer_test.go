@@ -541,3 +541,67 @@ func BenchmarkStreamerMultipleChunkRead(b *testing.B) {
 		}
 	}
 }
+
+// TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize: the size announced by a
+// SetChunkSize message applies to what is written AFTER that message is on the wire, and
+// the writer goroutine is what applies it.
+//
+// Applying it in the caller goroutine (as Stream.CreateStream used to) is not just a data
+// race: a message queued a moment earlier can still be sitting in the scheduler, and it
+// would then be split with a size the peer has not been told about yet, which
+// desynchronizes the stream for good. It bites exactly when a message longer than the old
+// chunk size is written right before createStream, e.g. an FCPublish carrying a long
+// stream key.
+//
+// The layout the test pins down, with an all-zero payload so every non-zero byte is a
+// header:
+//
+//	[0]        fmt=0, chunk stream 3, 11 byte message header, then 128 bytes of msg1
+//	[140]      fmt=0, chunk stream 2: the SetChunkSize message (this is the assertion:
+//	           it starts right after 128 bytes, so msg1 was split with the OLD size)
+//	[156]      0xc3: the continuation of msg1, its remaining 172 bytes in ONE chunk,
+//	           which is correct because the peer has already been told about the new size
+//	[329]      fmt=2, chunk stream 3: msg2, 300 bytes in a single chunk
+//
+// The scheduler interleaves fragments of different chunk streams, which is why the
+// SetChunkSize message lands in the middle of msg1 and why there is exactly one 0xc3 in
+// the whole output.
+func TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize(t *testing.T) {
+	out := new(bytes.Buffer)
+	streamer := NewChunkStreamer(
+		bufio.NewReaderSize(new(bytes.Buffer), 2048),
+		bufio.NewWriterSize(out, 2048),
+		nil,
+	)
+	defer streamer.Close()
+
+	payload := make([]byte, 300)
+	write := func(chunkStreamID int, timestamp uint32, msg message.Message) {
+		err := streamer.Write(context.Background(), chunkStreamID, timestamp, &ChunkMessage{
+			StreamID: 0,
+			Message:  msg,
+		})
+		require.Nil(t, err)
+	}
+
+	write(3, 0, &message.AudioMessage{Payload: bytes.NewReader(payload)})
+	write(2, 0, &message.SetChunkSize{ChunkSize: 4096})
+	// Distinct timestamp so this message gets its own header (fmt=2) and cannot be
+	// mistaken for a continuation chunk.
+	write(3, 1000, &message.AudioMessage{Payload: bytes.NewReader(payload)})
+
+	// Waiting for the chunk stream frees its writer, which happens once the last message
+	// has been written.
+	_, err := streamer.NewChunkWriter(context.Background(), 3)
+	require.Nil(t, err)
+
+	b := out.Bytes()
+	// msg1 was split with the old 128: the SetChunkSize chunk starts right after its
+	// first 128 bytes of payload (1 byte of basic header + 11 of message header before
+	// them). Applying the new size when the message was queued would have written msg1 in
+	// a single 300 byte chunk and this byte would be payload, not a header.
+	require.Equal(t, byte(0x02), b[1+11+128])
+	// And msg2 fits in one 4096 chunk: the only continuation in the output is msg1's.
+	require.Equal(t, 1, bytes.Count(b, []byte{0xc3}))
+	require.Equal(t, uint32(4096), streamer.selfState.ChunkSize())
+}

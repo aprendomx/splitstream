@@ -1,0 +1,63 @@
+diff --git a/stream_handler.go b/stream_handler.go
+--- a/stream_handler.go
++++ b/stream_handler.go
+@@ -174,7 +174,15 @@ func (h *streamHandler) handleCommand(
+ 	case "_result", "_error":
+ 		t, err := h.stream.transactions.At(cmdMsg.TransactionID)
+ 		if err != nil {
+-			return errors.Wrap(err, "Got response to the unexpected transaction")
++			// A response nobody is waiting for. It happens with the FMLE-style commands
++			// (releaseStream, FCPublish) that are sent fire-and-forget with transaction
++			// id 0: some servers answer them anyway. Closing the connection because the
++			// peer was more talkative than expected is worse than ignoring the reply.
++			h.Logger().Debugf(
++				"Ignored a response to an unknown transaction: Command = %s, TransactionID = %d",
++				cmdMsg.CommandName, cmdMsg.TransactionID,
++			)
++			return nil
+ 		}
+ 
+ 		// Set result (NOTE: should use a mutex for it?)
+diff --git a/stream_handler_test.go b/stream_handler_test.go
+--- a/stream_handler_test.go
++++ b/stream_handler_test.go
+@@ -8,9 +8,12 @@
+ package rtmp
+ 
+ import (
++	"bytes"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/require"
++
++	"github.com/yutopp/go-rtmp/message"
+ )
+ 
+ func TestStreamHandlerChangeState(t *testing.T) {
+@@ -57,3 +60,26 @@ func TestStreamStateString(t *testing.T) {
+ 	require.Equal(t, "NotConnected(Client)", streamStateClientNotConnected.String())
+ 	require.Equal(t, "Connected(Client)", streamStateClientConnected.String())
+ }
++
++// TestStreamHandlerIgnoresAResponseToAnUnknownTransaction: a _result or _error for a
++// transaction this side never registered is dropped with a debug line, not turned into an
++// error. handleCommand's error reaches Conn.handleMessage, which is not prepared to
++// swallow it, so returning one here tears the whole connection down — and a peer that
++// answers a fire-and-forget releaseStream/FCPublish (transaction id 0) is not a reason to
++// lose the stream.
++func TestStreamHandlerIgnoresAResponseToAnUnknownTransaction(t *testing.T) {
++	for _, name := range []string{"_result", "_error"} {
++		t.Run(name, func(t *testing.T) {
++			c := newConn(&rwcMock{}, nil)
++			s := newStream(42, c)
++
++			err := s.handler.handleCommand(3, 0, &message.CommandMessage{
++				CommandName:   name,
++				TransactionID: 0,
++				Encoding:      message.EncodingTypeAMF0,
++				Body:          bytes.NewReader(nil),
++			})
++			require.Nil(t, err)
++		})
++	}
++}

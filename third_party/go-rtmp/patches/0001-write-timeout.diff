@@ -41,7 +41,7 @@ diff --git a/stream.go b/stream.go
  
  	"github.com/pkg/errors"
  	"github.com/sirupsen/logrus"
-@@ -134,10 +133,10 @@ func (s *Stream) ReplyConnect(
+@@ -134,10 +133,11 @@ func (s *Stream) ReplyConnect(
  }
  
  func (s *Stream) CreateStream(body *message.NetConnectionCreateStream, chunkSize uint32) (*message.NetConnectionCreateStreamResult, error) {
@@ -50,11 +50,12 @@ diff --git a/stream.go b/stream.go
  	if chunkSize > 0 && chunkSize != oldChunkSize {
  		logrus.Infof("Changing chunkSize %d->%d", oldChunkSize, chunkSize)
 -		s.conn.streamer.selfState.chunkSize = chunkSize
-+		s.conn.streamer.selfState.chunkSize.Store(chunkSize)
++		// The state is updated by the writer goroutine once the SetChunkSize message
++		// below reaches the wire, not here: see ChunkStreamer.Write.
  		err := s.WriteSetChunkSize(chunkSize)
  		if err != nil {
  			return nil, err
-@@ -318,12 +317,16 @@ func (s *Stream) WriteSetChunkSize(chunkSize uint32) error {
+@@ -318,12 +318,16 @@ func (s *Stream) WriteSetChunkSize(chunkSize uint32) error {
  	return s.Write(chunkStreamID, timeStamp, msg)
  }
  

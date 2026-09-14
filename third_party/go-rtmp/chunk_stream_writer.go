@@ -20,6 +20,12 @@ type ChunkStreamWriter struct {
 	lastErr  error
 	aqM      sync.Mutex
 	newChunk bool
+	// selfChunkSize is the outgoing chunk size announced by the SetChunkSize message
+	// this writer currently carries, or 0 for any other message. It is applied to the
+	// connection state by the writer goroutine once that message is on the wire, never
+	// by the caller that enqueues it: a message queued earlier must still be split with
+	// the size the peer knows about.
+	selfChunkSize uint32
 }
 
 func (w *ChunkStreamWriter) Write(b []byte) (int, error) {

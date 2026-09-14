@@ -584,8 +584,9 @@ func TestUpdateCheckCanBeTurnedOff(t *testing.T) {
 	}
 }
 
-// SPLITSTREAM_RTMP_PRECOMMANDS está APAGADA por defecto y solo la encienden true, 1 y
-// yes: un valor escrito mal no puede encender algo que se midió rompiendo Twitch.
+// SPLITSTREAM_RTMP_PRECOMMANDS está APAGADA por defecto y solo la enciende `true`, como
+// SPLITSTREAM_SECURE_COOKIES: un valor escrito de cualquier otra forma no puede encender
+// algo que se midió rompiendo Twitch.
 func TestRTMPPreCommandsIsOffUnlessAskedFor(t *testing.T) {
 	for _, caso := range []struct {
 		valor  string
@@ -594,9 +595,9 @@ func TestRTMPPreCommandsIsOffUnlessAskedFor(t *testing.T) {
 	}{
 		{"", false, false}, // ausente
 		{"true", true, true},
-		{"1", true, true},
-		{"yes", true, true},
-		{"TRUE", true, true},
+		{"1", true, false},    // solo `true` la enciende
+		{"yes", true, false},  //
+		{"TRUE", true, false}, //
 		{"false", true, false},
 		{"sí", true, false}, // valor inválido: apagada, sin fallar el arranque
 		{"", true, false},   // puesta pero vacía

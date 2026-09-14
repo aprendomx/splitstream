@@ -57,7 +57,23 @@ diff --git a/conn_state.go b/conn_state.go
 diff --git a/chunk_streamer.go b/chunk_streamer.go
 --- a/chunk_streamer.go
 +++ b/chunk_streamer.go
-@@ -248,8 +248,8 @@ func (cs *ChunkStreamer) readChunk() (*ChunkStreamReader, error) {
+@@ -131,6 +131,15 @@ func (cs *ChunkStreamer) Write(
+ 	writer.messageTypeID = byte(cmsg.Message.TypeID())
+ 	writer.messageStreamID = cmsg.StreamID
+ 
++	// A SetChunkSize message changes the size of everything written AFTER it. The state
++	// is not updated here, in the caller goroutine: messages queued before this one may
++	// still be waiting in the scheduler, and splitting them with a size the peer does
++	// not know yet desynchronizes the stream. writeChunk applies it instead.
++	writer.selfChunkSize = 0
++	if scs, ok := cmsg.Message.(*message.SetChunkSize); ok {
++		writer.selfChunkSize = scs.ChunkSize
++	}
++
+ 	return cs.Sched(writer)
+ }
+ 
+@@ -248,8 +257,8 @@ func (cs *ChunkStreamer) readChunk() (*ChunkStreamReader, error) {
  		panic("invalid state") // TODO fix
  	}
  
@@ -68,7 +84,7 @@ diff --git a/chunk_streamer.go b/chunk_streamer.go
  	}
  	//cs.logger.Debugf("(READ) Length = %d", expectLen)
  
-@@ -278,8 +278,8 @@ func (cs *ChunkStreamer) writeChunk(writer *ChunkStreamWriter) (bool, error) {
+@@ -278,8 +287,8 @@ func (cs *ChunkStreamer) writeChunk(writer *ChunkStreamWriter) (bool, error) {
  	//cs.logger.Debugf("(WRITE) Buffer: %+v", writer.buf.Bytes())
  
  	expectLen := writer.buf.Len()
@@ -79,3 +95,104 @@ diff --git a/chunk_streamer.go b/chunk_streamer.go
  	}
  
  	if err := encodeChunkBasicHeader(cs.w, &writer.basicHeader); err != nil {
+@@ -301,6 +310,13 @@ func (cs *ChunkStreamer) writeChunk(writer *ChunkStreamWriter) (bool, error) {
+ 		return false, nil
+ 	}
+ 
++	// The SetChunkSize message is on the wire now, so the peer is ready for the new size
++	// and the next chunk can use it.
++	if writer.selfChunkSize != 0 {
++		cs.selfState.chunkSize.Store(writer.selfChunkSize)
++		writer.selfChunkSize = 0
++	}
++
+ 	return true, nil
+ }
+ 
+diff --git a/chunk_stream_writer.go b/chunk_stream_writer.go
+--- a/chunk_stream_writer.go
++++ b/chunk_stream_writer.go
+@@ -20,6 +20,12 @@ type ChunkStreamWriter struct {
+ 	lastErr  error
+ 	aqM      sync.Mutex
+ 	newChunk bool
++	// selfChunkSize is the outgoing chunk size announced by the SetChunkSize message
++	// this writer currently carries, or 0 for any other message. It is applied to the
++	// connection state by the writer goroutine once that message is on the wire, never
++	// by the caller that enqueues it: a message queued earlier must still be split with
++	// the size the peer knows about.
++	selfChunkSize uint32
+ }
+ 
+ func (w *ChunkStreamWriter) Write(b []byte) (int, error) {
+diff --git a/chunk_streamer_test.go b/chunk_streamer_test.go
+--- a/chunk_streamer_test.go
++++ b/chunk_streamer_test.go
+@@ -541,3 +541,67 @@ func BenchmarkStreamerMultipleChunkRead(b *testing.B) {
+ 		}
+ 	}
+ }
++
++// TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize: the size announced by a
++// SetChunkSize message applies to what is written AFTER that message is on the wire, and
++// the writer goroutine is what applies it.
++//
++// Applying it in the caller goroutine (as Stream.CreateStream used to) is not just a data
++// race: a message queued a moment earlier can still be sitting in the scheduler, and it
++// would then be split with a size the peer has not been told about yet, which
++// desynchronizes the stream for good. It bites exactly when a message longer than the old
++// chunk size is written right before createStream, e.g. an FCPublish carrying a long
++// stream key.
++//
++// The layout the test pins down, with an all-zero payload so every non-zero byte is a
++// header:
++//
++//	[0]        fmt=0, chunk stream 3, 11 byte message header, then 128 bytes of msg1
++//	[140]      fmt=0, chunk stream 2: the SetChunkSize message (this is the assertion:
++//	           it starts right after 128 bytes, so msg1 was split with the OLD size)
++//	[156]      0xc3: the continuation of msg1, its remaining 172 bytes in ONE chunk,
++//	           which is correct because the peer has already been told about the new size
++//	[329]      fmt=2, chunk stream 3: msg2, 300 bytes in a single chunk
++//
++// The scheduler interleaves fragments of different chunk streams, which is why the
++// SetChunkSize message lands in the middle of msg1 and why there is exactly one 0xc3 in
++// the whole output.
++func TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize(t *testing.T) {
++	out := new(bytes.Buffer)
++	streamer := NewChunkStreamer(
++		bufio.NewReaderSize(new(bytes.Buffer), 2048),
++		bufio.NewWriterSize(out, 2048),
++		nil,
++	)
++	defer streamer.Close()
++
++	payload := make([]byte, 300)
++	write := func(chunkStreamID int, timestamp uint32, msg message.Message) {
++		err := streamer.Write(context.Background(), chunkStreamID, timestamp, &ChunkMessage{
++			StreamID: 0,
++			Message:  msg,
++		})
++		require.Nil(t, err)
++	}
++
++	write(3, 0, &message.AudioMessage{Payload: bytes.NewReader(payload)})
++	write(2, 0, &message.SetChunkSize{ChunkSize: 4096})
++	// Distinct timestamp so this message gets its own header (fmt=2) and cannot be
++	// mistaken for a continuation chunk.
++	write(3, 1000, &message.AudioMessage{Payload: bytes.NewReader(payload)})
++
++	// Waiting for the chunk stream frees its writer, which happens once the last message
++	// has been written.
++	_, err := streamer.NewChunkWriter(context.Background(), 3)
++	require.Nil(t, err)
++
++	b := out.Bytes()
++	// msg1 was split with the old 128: the SetChunkSize chunk starts right after its
++	// first 128 bytes of payload (1 byte of basic header + 11 of message header before
++	// them). Applying the new size when the message was queued would have written msg1 in
++	// a single 300 byte chunk and this byte would be payload, not a header.
++	require.Equal(t, byte(0x02), b[1+11+128])
++	// And msg2 fits in one 4096 chunk: the only continuation in the output is msg1's.
++	require.Equal(t, 1, bytes.Count(b, []byte{0xc3}))
++	require.Equal(t, uint32(4096), streamer.selfState.ChunkSize())
++}

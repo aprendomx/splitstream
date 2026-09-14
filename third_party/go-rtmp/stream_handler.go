@@ -174,7 +174,15 @@ func (h *streamHandler) handleCommand(
 	case "_result", "_error":
 		t, err := h.stream.transactions.At(cmdMsg.TransactionID)
 		if err != nil {
-			return errors.Wrap(err, "Got response to the unexpected transaction")
+			// A response nobody is waiting for. It happens with the FMLE-style commands
+			// (releaseStream, FCPublish) that are sent fire-and-forget with transaction
+			// id 0: some servers answer them anyway. Closing the connection because the
+			// peer was more talkative than expected is worse than ignoring the reply.
+			h.Logger().Debugf(
+				"Ignored a response to an unknown transaction: Command = %s, TransactionID = %d",
+				cmdMsg.CommandName, cmdMsg.TransactionID,
+			)
+			return nil
 		}
 
 		// Set result (NOTE: should use a mutex for it?)

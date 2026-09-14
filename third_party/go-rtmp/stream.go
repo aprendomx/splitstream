@@ -136,7 +136,8 @@ func (s *Stream) CreateStream(body *message.NetConnectionCreateStream, chunkSize
 	oldChunkSize := s.conn.streamer.selfState.ChunkSize()
 	if chunkSize > 0 && chunkSize != oldChunkSize {
 		logrus.Infof("Changing chunkSize %d->%d", oldChunkSize, chunkSize)
-		s.conn.streamer.selfState.chunkSize.Store(chunkSize)
+		// The state is updated by the writer goroutine once the SetChunkSize message
+		// below reaches the wire, not here: see ChunkStreamer.Write.
 		err := s.WriteSetChunkSize(chunkSize)
 		if err != nil {
 			return nil, err

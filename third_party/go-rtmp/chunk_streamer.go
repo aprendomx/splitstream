@@ -131,6 +131,15 @@ func (cs *ChunkStreamer) Write(
 	writer.messageTypeID = byte(cmsg.Message.TypeID())
 	writer.messageStreamID = cmsg.StreamID
 
+	// A SetChunkSize message changes the size of everything written AFTER it. The state
+	// is not updated here, in the caller goroutine: messages queued before this one may
+	// still be waiting in the scheduler, and splitting them with a size the peer does
+	// not know yet desynchronizes the stream. writeChunk applies it instead.
+	writer.selfChunkSize = 0
+	if scs, ok := cmsg.Message.(*message.SetChunkSize); ok {
+		writer.selfChunkSize = scs.ChunkSize
+	}
+
 	return cs.Sched(writer)
 }
 
@@ -299,6 +308,13 @@ func (cs *ChunkStreamer) writeChunk(writer *ChunkStreamWriter) (bool, error) {
 	if writer.buf.Len() != 0 {
 		// fragmented
 		return false, nil
+	}
+
+	// The SetChunkSize message is on the wire now, so the peer is ready for the new size
+	// and the next chunk can use it.
+	if writer.selfChunkSize != 0 {
+		cs.selfState.chunkSize.Store(writer.selfChunkSize)
+		writer.selfChunkSize = 0
 	}
 
 	return true, nil

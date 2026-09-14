@@ -8,9 +8,12 @@
 package rtmp
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/yutopp/go-rtmp/message"
 )
 
 func TestStreamHandlerChangeState(t *testing.T) {
@@ -56,4 +59,27 @@ func TestStreamStateString(t *testing.T) {
 	require.Equal(t, "Play(Server)", streamStateServerPlay.String())
 	require.Equal(t, "NotConnected(Client)", streamStateClientNotConnected.String())
 	require.Equal(t, "Connected(Client)", streamStateClientConnected.String())
+}
+
+// TestStreamHandlerIgnoresAResponseToAnUnknownTransaction: a _result or _error for a
+// transaction this side never registered is dropped with a debug line, not turned into an
+// error. handleCommand's error reaches Conn.handleMessage, which is not prepared to
+// swallow it, so returning one here tears the whole connection down — and a peer that
+// answers a fire-and-forget releaseStream/FCPublish (transaction id 0) is not a reason to
+// lose the stream.
+func TestStreamHandlerIgnoresAResponseToAnUnknownTransaction(t *testing.T) {
+	for _, name := range []string{"_result", "_error"} {
+		t.Run(name, func(t *testing.T) {
+			c := newConn(&rwcMock{}, nil)
+			s := newStream(42, c)
+
+			err := s.handler.handleCommand(3, 0, &message.CommandMessage{
+				CommandName:   name,
+				TransactionID: 0,
+				Encoding:      message.EncodingTypeAMF0,
+				Body:          bytes.NewReader(nil),
+			})
+			require.Nil(t, err)
+		})
+	}
 }

@@ -382,20 +382,16 @@ func parseLevel(s string) (slog.Level, error) {
 }
 
 // parseBool interpreta una variable de encendido/apagado que está APAGADA por defecto:
-// `true`, `1` y `yes` la encienden y cualquier otra cosa —ausente, vacía o escrita mal—
-// la deja apagada.
+// solo `true` la enciende, igual que SPLITSTREAM_SECURE_COOKIES. Una sola forma de
+// escribirla es una menos que documentar y que explicar cuando alguien pone `1` y no pasa
+// nada.
 //
-// No devuelve error, igual que SPLITSTREAM_SECURE_COOKIES y SPLITSTREAM_UPDATE_CHECK: en
-// este archivo solo fallan al arrancar las variables cuyo valor no se puede adivinar (una
-// red, un nivel de log, un entero). Para un interruptor apagado por defecto, un valor
-// ilegible significa lo mismo que no ponerlo.
+// No devuelve error, también como las demás booleanas: en este archivo solo fallan al
+// arrancar las variables cuyo valor no se puede adivinar (una red, un nivel de log, un
+// entero). Para un interruptor apagado por defecto, un valor ilegible significa lo mismo
+// que no ponerlo.
 func parseBool(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "true", "1", "yes":
-		return true
-	default:
-		return false
-	}
+	return s == "true"
 }
 
 // parseNonNegative interpreta s como un entero >= 0, para las variables de retención.

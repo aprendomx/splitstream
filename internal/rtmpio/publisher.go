@@ -340,9 +340,20 @@ func (p *Publisher) Connect(ctx context.Context) error {
 	//      dos plataformas que usamos funcionan. Por eso viven detrás de una opción
 	//      apagada, para la plataforma que algún día los exija.
 	//
-	// Un error aquí NO es fatal: un destino que no los espera simplemente los ignora, y
-	// quedarse sin publicar por un comando opcional sería peor que seguir. Se registra a
-	// nivel debug, nunca con el nombre del stream: ESE nombre es la clave (spec §8).
+	// Mandarlos sin esperar respuesta destapó dos fallos más de la librería, y los dos van
+	// arreglados en la copia porque sin ellos esta opción no sería usable:
+	//   - Parche 5: estos comandos van con TransactionID 0 y no se espera respuesta, pero
+	//     hay plataformas que contestan igual. Un `_result` para una transacción que no
+	//     existe hacía que go-rtmp CERRARA la conexión; ahora se ignora.
+	//   - Parche 4: el tamaño de chunk nuevo lo aplica la goroutine escritora justo
+	//     después de mandar el SetChunkSize, no quien lo encola. Si no, un FCPublish con
+	//     una clave larga (más de 128 bytes) todavía en la cola salía troceado con un
+	//     tamaño que el destino aún no conocía y el stream se desincronizaba.
+	//
+	// Lo que NO es fatal es el error de ESCRITURA: un destino que no espera estos comandos
+	// los ignora, y quedarse sin publicar por un comando opcional sería peor que seguir.
+	// Se registra a nivel debug, nunca con el nombre del stream: ESE nombre es la clave
+	// (spec §8).
 	if p.preCommands {
 		if ctrl := conn.ControlStream(); ctrl != nil {
 			for _, nombre := range []string{"releaseStream", "FCPublish"} {
