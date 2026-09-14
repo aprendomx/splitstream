@@ -1,0 +1,59 @@
+# Copia parcheada de github.com/yutopp/go-rtmp
+
+- **Origen:** `github.com/yutopp/go-rtmp v0.0.7` (2024-07-15), `h1:` de go.sum: `github.com/yutopp/go-rtmp v0.0.7 h1:sKKm1MVV3ANbJHZlf3Kq8ecq99y5U7XnDUDxSjuK7KU=`
+- **Licencia:** MIT (`LICENCE.txt`, sin cambios)
+- **Por qué una copia y no un fork:** el módulo compila igual (`replace` en `go.mod` al mismo path), no hace falta otro repositorio, los parches viven al lado del código que los usa y se pueden proponer aguas arriba tal cual.
+- **Excluido:** `example/` (dependencias propias, no se compila).
+
+## Parches (en orden; cada uno es un `patches/NNNN-*.diff` aplicable con `git apply -p1` sobre la v0.0.7 limpia)
+
+| N.º | Archivo | Qué arregla | Test |
+| --- | --- | --- | --- |
+| 1 | `conn.go`, `stream.go` | `Stream.Write` tenía 5 s cableados (`// TODO: Fix 5s`), así que una plataforma que deja de consumir tardaba 5 s en dar error y el sink no podía reconectar antes. Ahora el plazo sale de `ConnConfig.WriteTimeout` (0 → los 5 s de siempre, comportamiento por defecto intacto) y se añade `Stream.WriteContext` para quien quiera traer su propio contexto. Su `.diff` lleva además el hunk de `stream.go` del parche 4 —quitar de `Stream.CreateStream` la aplicación del tamaño de chunk y convertir su lectura de `selfState.chunkSize` a `selfState.ChunkSize()`— porque el test de integridad compara un solo diff por archivo y `stream.go` es de este parche. | `TestWriteToAStalledPeerFailsWithinThreeSeconds` (`internal/rtmpio/publisher_test.go`) |
+| 2 | `streams.go`, `streams_test.go` | `streams.At` leía el mapa `streams` sin candado mientras `Create`/`Delete` escriben con `Lock`, lo que provocaba `DATA RACE` (y a veces `fatal error: concurrent map read and map write`) bajo acceso concurrente. `m` pasa de `sync.Mutex` a `sync.RWMutex`; `At` toma `RLock`/`RUnlock`; `Create`, `CreateIfAvailable` y `Delete` siguen con `Lock` como hasta ahora. | `TestStreamsAtIsSafeAgainstConcurrentDelete` (`third_party/go-rtmp/streams_test.go`) |
+| 3 | `client_conn.go` | El stream de control (el 0) era inalcanzable desde fuera: `newClientConnWithSetup` lo crea, se queda con su `Write` para el `streamer` y lo olvida; el único `*Stream` que la API pública devolvía era el de `CreateStream`. Los comandos que FMLE manda por el stream 0 y ANTES de `createStream` —`releaseStream`, `FCPublish`— no se podían mandar bien, solo por el stream de datos y tarde, que es peor que no mandarlos (rompía Twitch). Ahora `ClientConn` guarda el stream de control y lo expone con `ControlStream()`; nada más cambia. | `TestPreCommandsGoThroughTheControlStreamBeforeCreateStream` (`internal/rtmpio/publisher_test.go`) |
+| 4 | `conn_state.go`, `chunk_streamer.go`, `chunk_stream_writer.go`, `chunk_streamer_test.go` (y el hunk de `stream.go` dentro de `0001-write-timeout.diff`) | Cambiar el tamaño de chunk de salida tenía dos fallos, y los dos saltan en cuanto se escribe algo por el stream de control sin esperar respuesta —justo lo que hace `PreCommands` con `releaseStream` y `FCPublish`—. (a) Carrera de datos: `Stream.CreateStream` escribía `selfState.chunkSize` mientras la goroutine del planificador lo leía en CADA chunk (`writeChunk`). (b) Carrera de orden, la grave: lo escribía al ENCOLAR el `SetChunkSize`, así que un mensaje encolado un instante antes y todavía en el planificador —un `FCPublish` con una clave larga pasa de 128 bytes— salía troceado con un tamaño que el otro extremo aún no conocía, y el stream quedaba desincronizado. Ahora `chunkSize` es `atomic.Uint32`, todas las lecturas van por `ChunkSize()`, y el tamaño nuevo lo aplica la goroutine escritora en `writeChunk` justo después de poner el `SetChunkSize` en el hilo (`ChunkStreamer.Write` lo marca en el writer). | `TestStreamerAppliesTheNewChunkSizeOnlyAfterWritingSetChunkSize` (`third_party/go-rtmp/chunk_streamer_test.go`) y `TestPreCommandsGoThroughTheControlStreamBeforeCreateStream` con `-race` (`internal/rtmpio/publisher_test.go`) |
+| 5 | `stream_handler.go`, `stream_handler_test.go` | Un `_result` o `_error` para una transacción que este lado no registró tiraba la conexión: `handleCommand` devolvía error, `Conn.handleMessage` no lo distingue de uno de verdad (no es `UnknownCommandBodyDecodeError`) y `runHandleMessageLoop` cierra. Pasa de verdad: `releaseStream` y `FCPublish` se mandan sin esperar respuesta, con `TransactionID 0`, y hay plataformas que contestan igualmente. Ahora la respuesta huérfana se registra a nivel debug y se ignora, pero **solo si llegó por el stream de control** (`h.stream.streamID == ControlStreamID`), que es por donde van esos comandos. Por un stream de datos se devuelve el error de siempre: un `_error` de la plataforma al `publish` viaja también con `TransactionID 0` y sin transacción registrada, y significa que está rechazando la emisión; tragárselo dejaría la conexión muerta abierta en vez de cerrarla y reconectar. | `TestStreamHandlerIgnoresAResponseToAnUnknownTransaction` y `TestStreamHandlerFailsOnAnUnknownTransactionOverADataStream` (`third_party/go-rtmp/stream_handler_test.go`) |
+
+## Regenerar
+
+1. `UP=$(go env GOMODCACHE)/github.com/yutopp/go-rtmp@v0.0.7`
+2. `cp -R "$UP" /tmp/go-rtmp && chmod -R u+w /tmp/go-rtmp && rm -rf /tmp/go-rtmp/example`
+3. `for p in patches/*.diff; do (cd /tmp/go-rtmp && git apply -p1 "$OLDPWD/$p"); done`
+4. `diff -r /tmp/go-rtmp third_party/go-rtmp` sin salida más allá de `UPSTREAM.md` y `patches/`.
+
+Cuando aguas arriba publique una versión con estos arreglos: quitar el `replace`, subir la versión y borrar este directorio.
+
+## Cómo proponerlos aguas arriba
+
+Los cinco están escritos para poder mandarse a `yutopp/go-rtmp` tal cual: comentarios en
+inglés, nada de Splitstream dentro, y cada uno con un test que falla sin él. Lo que sigue es
+el orden y la única atadura que hay entre ellos.
+
+**Orden sugerido**, de lo que menos conversación necesita a lo que más:
+
+1. **Parche 2** (`streams.At` bajo el candado). Es una carrera de datos: no hay decisión de
+   diseño que discutir y su test falla con `-race` sin él. Va primero y va solo.
+2. **Parche 5** (la respuesta huérfana, acotada al stream de control). Independiente de
+   todos los demás; un archivo y su test.
+3. **Parche 3** (`ClientConn.ControlStream()`). Añade API pública, que es lo que más
+   discusión puede abrir, pero no depende de nada.
+4. **Parches 1 y 4 JUNTOS.** No es preferencia: el hunk de `stream.go` que el parche 4
+   necesita —que `Stream.CreateStream` deje de escribir `selfState.chunkSize` y lo lea con
+   `ChunkSize()`— vive dentro de `0001-write-timeout.diff`. Aplicar el 4 sin el 1 deja
+   `stream.go` sin tocar y la carrera sigue ahí; aplicar el 1 sin el 4 no compila, porque
+   `ChunkSize()` no existe todavía. Si aguas arriba prefiere dos PR, hay que separar ese
+   hunk a mano.
+
+**Por qué ese reparto raro entre el 1 y el 4**: el test de integridad
+(`TestGoRTMPCopyMatchesUpstreamPlusPatches`, en `internal/rtmpio/upstream_test.go`) compara
+archivo a archivo la copia contra «upstream + parches», y para eso necesita que cada archivo
+tocado aparezca en **exactamente un** `.diff`. Dos parches que toquen el mismo archivo tienen
+que fundir sus hunks en el diff del que «posee» ese archivo, y la tabla de arriba lo dice en
+la fila que corresponda. Aguas arriba esa restricción no existe: allí el reparto natural es
+un PR por problema.
+
+**Antes de mandar nada**: `patches/generar.sh NNNN-nombre archivo1 [archivo2 …]` regenera el
+`.diff` desde la copia. Salen normalizados —cabeceras relativas (`a/stream.go`), sin línea
+`index …`— para que no dependan de dónde viva la caché de módulos, y `git apply -p1` los
+acepta sobre una v0.0.7 limpia.

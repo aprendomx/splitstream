@@ -204,6 +204,18 @@ sin que cambien las cinco directas.
 **Desde la v0.11 (2026-09-11):** sin módulo nuevo; `coder/websocket` también como
 cliente (EventSub); Device Code Grant a mano con `net/http`.
 
+**Desde la v1.0 (2026-09-13):** el código de `go-rtmp` que compila deja de venir del
+módulo público. `third_party/go-rtmp` es una copia de la v0.0.7 más cinco parches (plazo
+de escritura configurable, `streams.At` bajo candado, el stream de control expuesto, el
+tamaño de chunk aplicado tras escribir `SetChunkSize` y la tolerancia a un `_result`/
+`_error` de una transacción desconocida — ver spec «v1.0 Endurecimiento» §3), con
+`UPSTREAM.md` (versión y commit de origen, lista de parches, cómo regenerarla) y
+`patches/*.diff` (uno por parche, aplicable sobre la v0.0.7 limpia). `go.mod` sigue
+declarando `github.com/yutopp/go-rtmp` como dependencia directa; un `replace` apunta a la
+copia. `go mod verify` no cubre lo que hay detrás de un `replace`, así que un test
+(`TestGoRTMPCopyMatchesUpstreamPlusPatches`) compara la copia contra la caché de módulos
+más los parches. Las cinco directas de esta tabla no cambian.
+
 ## 6. Arquitectura del motor
 
 ### 6.1 Ingesta
@@ -353,6 +365,14 @@ Migraciones versionadas en `internal/store/migrations/*.sql`, embebidas y aplica
 arranque por un runner propio que lleva la versión en `PRAGMA user_version`. SQLite en
 modo WAL con `busy_timeout`.
 
+**Desde la v1.0:** la política de migraciones (nunca editar una ya publicada, solo hacia
+delante, idempotencia con `IF NOT EXISTS`, qué hace el runner si una migración falla a
+medias) vive en `docs/migraciones.md`, con ejemplos. Se prueba de verdad con
+`deploy/migrate-test.sh <versión-anterior> <binario>`: levanta el binario de la release
+anterior, lo para, arranca el binario nuevo sobre esa misma base y comprueba en el log
+que la migración aplicó lo que faltaba. Corre en la integración nocturna y a mano antes
+de cada release.
+
 ## 8. Seguridad
 
 **Claves de destino:** AES-256-GCM, nonce aleatorio de 12 bytes prefijado al ciphertext.
@@ -468,6 +488,15 @@ peticiones.
 plataforma. `POST /api/platforms/:p/auth` acepta `{client_id?, client_secret?, origin?}` —
 obligatorio cuando la plataforma exige app propia (YouTube, Kick), ignorado en Twitch.
 
+**Desde la v1.0:** el contrato queda documentado en `docs/api.md`, generado por
+`TestAPIContractDocIsCurrent` a partir de la tabla de rutas de
+`internal/httpapi/server.go` y de los DTO leídos por reflexión; el test compara el
+archivo byte a byte con lo que genera y falla en CI si no coincide. `/api/` es la v1
+implícita: añadir rutas o campos (siempre con valor por defecto) es compatible; quitar o
+renombrar una ruta o un campo, cambiar un tipo o el significado de un `code` es
+incompatible y exige publicar `/api/v2/` conviviendo con `/api/` al menos una versión
+menor, con la decisión escrita en el spec.
+
 ## 10. Frontend
 
 SPA Quasar servida por el binario vía `go:embed`. Dark mode por defecto, responsive
@@ -530,6 +559,17 @@ video y audio en ambas salidas.
 contador de bytes del otro sink siguió creciendo de forma monótona y que el destino
 matado vuelve a `live` por sí solo al levantarse.
 
+**Desde la v1.0:** la CI gana dos jobs obligatorios — `lint` (`golangci-lint`, con las
+excepciones justificadas una a una en `.golangci.yml`) y `vuln` (`govulncheck`, que falla
+el PR si hay una vulnerabilidad alcanzable) — y un workflow nocturno
+(`.github/workflows/nightly.yml`, `schedule` a las 04:00 UTC y `workflow_dispatch`) que
+corre la integración completa contra `mediamtx` sin recortes de tiempo,
+`deploy/migrate-test.sh` desde la última release publicada y, solo si existen los
+secretos `TWITCH_TEST_KEY`, `YOUTUBE_TEST_KEY` o `KICK_TEST_KEY`, un humo de 5 minutos
+contra la plataforma real; sin esas claves, ese paso se salta con un aviso.
+`.github/dependabot.yml` mantiene `gomod`, `npm` (en `web/`) y `github-actions` al día,
+semanalmente.
+
 ## 12. Operación
 
 Configuración por variables de entorno con defaults sensatos: `SPLITSTREAM_MASTER_KEY`
@@ -574,6 +614,12 @@ Jobs de mantenimiento nuevos: `cuota` (poda `quota_usage` a los 7 días) y `webh
 (vuelve a suscribir el chat de las cuentas de Kick con URL pública que Kick dio de baja
 por fallos).
 
+**Desde la v1.0 (2026-09-13):** ninguna variable nueva obligatoria. Una opcional —
+`SPLITSTREAM_RTMP_PRECOMMANDS` (`false` por defecto) — manda `releaseStream` y
+`FCPublish` por el stream de control antes de `createStream`, y `FCUnpublish` al cerrar.
+Apagada por defecto porque hoy ninguna plataforma probada la necesita y sin ella Twitch y
+YouTube funcionan; se enciende solo si una plataforma lo pide.
+
 README con instalación, configuración de OBS, y la nota de ancho de banda: **el subida
 necesario es bitrate × número de destinos**. Sin transcodificación no hay nada que hacer
 si el enlace no da: la única palanca es bajar el bitrate en OBS o desactivar destinos.
@@ -593,11 +639,20 @@ si el enlace no da: la única palanca es bajar el bitrate en OBS o desactivar de
 
 Parada para revisión al final de cada fase.
 
+**Punto de extensión: subida al terminar (v1.0, documentado, sin código).** Cuando alguien
+pida subir las grabaciones a algún sitio al cerrar la sesión, el sitio natural es el
+cierre de sesión en `internal/record` (donde se cierra el último segmento) o un job de
+`internal/maintenance` que recorra grabaciones cerradas sin marca `uploaded_at`. El
+contrato mínimo previsto: `Uploader.Upload(ctx, path) (url string, err error)`,
+configuración por `SPLITSTREAM_UPLOAD_*`, evento `recording_uploaded` y una columna nueva
+(migración 0010). Hasta que alguien lo pida, no hay código: un job vacío sería ruido en el
+registro de mantenimiento.
+
 ## 14. Riesgos
 
 | Riesgo | Mitigación |
 | --- | --- |
-| El cliente de `go-rtmp` no publica bien contra plataformas reales | ~~Spike al inicio de la fase 2~~ → **Materializado y resuelto en la fase 4**: `releaseStream`/`FCPublish` en el stream equivocado rompían Twitch. Quitados; ver §15.9. YouTube, Twitch y Facebook conectan |
+| El cliente de `go-rtmp` no publica bien contra plataformas reales | ~~Spike al inicio de la fase 2~~ → **Materializado y resuelto en la fase 4**: `releaseStream`/`FCPublish` en el stream equivocado rompían Twitch. Quitados; ver §15.9. YouTube, Twitch y Facebook conectan → **v1.0**: las cinco deudas conocidas de la librería (plazo de escritura fijo, carrera en `streams.At`, stream de control inalcanzable, carrera del tamaño de chunk y cierre de la conexión ante una respuesta huérfana) quedan mitigadas con una copia parcheada y verificada automáticamente contra el origen (`third_party/go-rtmp`; spec «v1.0 Endurecimiento» §3) |
 | Cada plataforma tiene su propio dialecto de handshake | Probar contra `mediamtx` primero, luego contra un destino real por plataforma antes de cerrar la fase 3 |
 | El VPS no tiene subida suficiente para N destinos | Documentado en el README; la UI muestra el bitrate real por destino para diagnosticarlo |
 | Pérdida de `SPLITSTREAM_MASTER_KEY` | Irrecuperable por diseño; el README lo dice explícitamente y recomienda respaldarla aparte del `.db` |

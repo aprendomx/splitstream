@@ -1,0 +1,57 @@
+diff --git a/streams.go b/streams.go
+--- a/streams.go
++++ b/streams.go
+@@ -18,7 +18,7 @@ const ControlStreamID = 0
+ 
+ type streams struct {
+ 	streams map[uint32]*Stream
+-	m       sync.Mutex
++	m       sync.RWMutex
+ 
+ 	conn *Conn
+ }
+@@ -83,6 +83,9 @@ func (ss *streams) Delete(streamID uint32) error {
+ }
+ 
+ func (ss *streams) At(streamID uint32) (*Stream, error) {
++	ss.m.RLock()
++	defer ss.m.RUnlock()
++
+ 	stream, ok := ss.streams[streamID]
+ 	if !ok {
+ 		return nil, errors.Errorf("Stream is not found: StreamID = %d", streamID)
+diff --git a/streams_test.go b/streams_test.go
+--- a/streams_test.go
++++ b/streams_test.go
+@@ -8,6 +8,7 @@
+ package rtmp
+ 
+ import (
++	"sync"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/require"
+@@ -38,3 +39,23 @@ func TestStreams(t *testing.T) {
+ 	err = streams.Delete(s.streamID)
+ 	require.NotNil(t, err)
+ }
++
++// TestStreamsAtIsSafeAgainstConcurrentDelete exercises streams.At concurrently
++// with streams.Create/Delete to catch unsynchronized map access under -race.
++func TestStreamsAtIsSafeAgainstConcurrentDelete(t *testing.T) {
++	c := newConn(&rwcMock{}, &ConnConfig{ControlState: StreamControlStateConfig{MaxMessageStreams: 64}})
++	ss := c.streams
++	var wg sync.WaitGroup
++	for i := uint32(1); i < 32; i++ {
++		id := i
++		wg.Add(2)
++		go func() { defer wg.Done(); _, _ = ss.Create(id); _ = ss.Delete(id) }()
++		go func() {
++			defer wg.Done()
++			for j := 0; j < 100; j++ {
++				_, _ = ss.At(id)
++			}
++		}()
++	}
++	wg.Wait()
++}

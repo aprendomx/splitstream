@@ -1,0 +1,253 @@
+version: "2"
+
+# Cada excepción lleva su porqué. Una excepción sin motivo escrito es un hallazgo.
+run:
+  timeout: 5m
+
+# Por defecto golangci-lint esconde lo que pase de 50 hallazgos por linter y de 3 repetidos
+# iguales, y además se queda con UN solo hallazgo por línea aunque lo firmen linters
+# distintos. Con los valores de fábrica este repo enseñaba 120 hallazgos de los 226 que hay,
+# y el G705 de logos.go quedaba tapado por el errcheck de la misma línea. Una puerta de CI
+# que oculta la mitad de lo que encuentra no sirve: aquí se enseña todo.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
+
+# gofmt no es un linter en el formato v2: va en su propia sección. Está aquí porque el
+# formato del código es la única regla del repo que nadie tiene que discutir en una
+# revisión, y porque hasta ahora no la vigilaba nada: `gofmt -l` señalaba dos archivos
+# —una tabla de perfiles y una lista de hashes con los comentarios alineados a mano— que
+# llevaban meses así sin que la CI dijera nada.
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    paths:
+      # Mismo motivo y mismo anclaje que el de linters.exclusions.paths: la copia de
+      # go-rtmp es código ajeno y sus parches se revisan a mano.
+      - ^third_party/
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosec
+    - revive
+    - unused
+    - ineffassign
+    - misspell
+    - gocritic
+  settings:
+    errcheck:
+      # Cierres y flushes de mejor esfuerzo, y LogEvent: fuego y olvido por diseño (spec
+      # base §6): un evento que no se pudo persistir no debe tumbar la operación que lo
+      # generó. El resto de errores se comprueban.
+      #
+      # errcheck solo casa la INTERFAZ cuando la llamada va por ella: `(io.Closer).Close`
+      # no cubre un `*sql.Rows` ni un `*websocket.Conn`, así que cada tipo concreto que se
+      # cierra de mejor esfuerzo aparece aquí con su import path completo.
+      exclude-functions:
+        # Cierres por interfaz.
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (io/fs.File).Close
+        - (net/http.Flusher).Flush
+        # Cierres por tipo concreto.
+        #
+        # OJO con (*os.File).Close: esta exclusión vale para los archivos abiertos para
+        # LEER —servir una grabación, servir el respaldo, comprobar que un asset existe—,
+        # donde el error del cierre no dice nada que no supieras ya. Los archivos abiertos
+        # para ESCRIBIR comprueban su Close a mano, porque ahí el error sí es la diferencia
+        # entre "guardado" y "guardado a medias": ver escribirClave en internal/config
+        # (la clave maestra) y FLVWriter.closeSegment en internal/record (los segmentos).
+        # Si abres un archivo para escribir, no te apoyes en esta línea.
+        - (*os.File).Close
+        - (*net.TCPConn).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        # El Rollback del defer: si la transacción ya se confirmó devuelve
+        # ErrTxDone, que es justo el caso bueno.
+        - (*database/sql.Tx).Rollback
+        - (*github.com/coder/websocket.Conn).Close
+        - (*github.com/coder/websocket.Conn).CloseNow
+        - (*github.com/yutopp/go-rtmp.ClientConn).Close
+        - (*github.com/aprendomx/splitstream/internal/store.DB).Close
+        - (github.com/aprendomx/splitstream/internal/relay.Publisher).Close
+        - (*github.com/aprendomx/splitstream/internal/rtmpio.Publisher).Close
+        # Fuego y olvido por diseño (spec base §6).
+        - (*github.com/aprendomx/splitstream/internal/store.DB).LogEvent
+        # Escribir la respuesta es de mejor esfuerzo: si el cliente ya se fue no hay
+        # nada que hacer con el error, y la cabecera ya salió.
+        - (net/http.ResponseWriter).Write
+        # Escrituras a stdout/stderr y a buffers de prueba.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # Borrar el temporal del respaldo: el sistema lo limpia igual y el handler ya
+        # respondió.
+        - os.RemoveAll
+    gosec:
+      excludes:
+        - G104 # 25 hallazgos; duplica errcheck, ver la nota de abajo
+        - G115 # 18 hallazgos; truncamientos deliberados, uno a uno en la nota de abajo
+        - G304 # rutas de archivo que vienen de la configuración del operador, no de la red
+        - G404 # math/rand solo para jitter de backoff, nunca para secretos (crypto/rand)
+      #
+      # G104 (error sin comprobar) sale 25 veces y no aporta nada sobre errcheck: son las
+      # mismas llamadas —LogEvent y los cierres de mejor esfuerzo— pero gosec NO lee la
+      # configuración de errcheck, así que mantener los dos obligaría a escribir cada
+      # excepción dos veces y en dos formatos distintos.
+      #
+      # G115 (conversión entera que podría desbordar) sale 18 veces. Se revisaron una a una
+      # y ninguna recibe un dato sin acotar que venga de la red:
+      #
+      #  - FLV/AVC, 6 (internal/record/flv.go, internal/record/writer.go): el empaquetado
+      #    del encabezado de tag. `n` se compara con maxTagSize (24 bits) en la línea de
+      #    arriba, y el timestamp se parte en el 24+8 que define el propio formato FLV.
+      #    El uint32(SegmentMinutes) de writer.go va acotado a 0..240 por el store
+      #    (maxSegmentMinutes en recording_settings.go).
+      #  - imagen, 4 (internal/imagen/imagen.go): la media del filtro de caja. `sr/n` es
+      #    como mucho 0xFFFF —componentes de 16 bits— y el >>8 lo deja en 0..255 antes del
+      #    uint8. Acotado por construcción.
+      #  - vista previa, 3 (internal/httpapi/preview.go): byte(ts>>24), byte(ts>>16)… Es
+      #    la extracción big-endian de un uint32 a mano; truncar ES la operación.
+      #  - statfs, 2 (internal/record/disk_unix.go): uint64 -> int64 de Bavail y Blocks.
+      #    Un sistema de archivos con 2^63 bloques no existe.
+      #  - hash, 1 (internal/crypto/password.go): uint32(len(want)), el largo del hash que
+      #    ya estaba en nuestra propia base, no algo que llegue de fuera.
+      #  - motor, 2 (internal/relay/metrics.go, internal/relay/sink.go): uint64(n) sobre
+      #    los bytes de una escritura que ya salió bien (nunca negativa) y el uint32 -> uint8
+      #    del enum State, que es un conjunto cerrado de cuatro valores.
+    staticcheck:
+      # Se conserva el resto de ST1xxx; solo se quitan estos, con motivo:
+      #  - ST1005: los mensajes de error son en español, van a la cara del usuario y se
+      #    traducen por el mapa de internal/httpapi/i18n_en.go. Además arrancan con el
+      #    nombre propio de la plataforma ("Kick no permite…"), que va en mayúscula.
+      #  - QF1001/QF1002/QF1008: son "quickfix", sugerencias de estilo (De Morgan, switch
+      #    con etiqueta, campo embebido). Ninguna señala un fallo y todas reescriben código
+      #    que hoy se lee bien.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1005
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF1001
+        - -QF1002
+        - -QF1008
+    revive:
+      rules:
+        - name: exported
+          disabled: true # los comentarios son en español y no empiezan por el nombre
+        - name: var-naming
+          arguments: [["ID", "URL", "RTMP", "TLS", "DTO"], []]
+    misspell:
+      locale: US
+      # misspell solo sabe inglés y este repo comenta y nombra en español: en el primer
+      # barrido dio 135 hallazgos de 34 palabras distintas y ninguno era un error. Peor
+      # aún, parte las palabras en la vocal acentuada ("asignó" -> "asign", "cuánto" ->
+      # "nto"), así que la lista de excepciones no tendría fin: cada comentario nuevo
+      # podría romper la CI con un mensaje absurdo.
+      #
+      # Por eso abajo se acota a internal/httpapi/i18n_en.go, el único archivo con prosa en
+      # inglés de verdad —las traducciones del panel—, que es donde un typo sí se ve. Estas
+      # tres son las excepciones que quedan dentro de ese archivo, que guarda las DOS caras
+      # del mapa: la clave en español y la traducción en inglés.
+      ignore-rules:
+        - momento # aparece en las claves en español ("espera un momento")
+        - recorre # el comentario de cabecera de i18n_en.go también está en español
+        - cancelled # inglés británico en la traducción; "cancelled" es además la etapa del sondeo (spec v0.8 §3)
+    gocritic:
+      enabled-tags: [diagnostic]
+  exclusions:
+    paths:
+      # ANCLADO a propósito. Estos patrones son expresiones regulares contra la ruta del
+      # archivo, no prefijos de directorio: un `web` suelto también casa con
+      # `internal/webtls/`, y durante un rato dejó ese paquete entero sin revisar —tapó un
+      # os.Remove sin comprobar y dos avisos más—. Si añades una ruta aquí, ánclala.
+      #
+      # third_party/go-rtmp es un módulo aparte (replace en go.mod), así que el linter del
+      # módulo principal no entra ahí de todas formas; se escribe por claridad.
+      #
+      # `web/` NO se excluye: no es solo el frontend, tiene un archivo de Go de verdad
+      # (web/embed.go, el go:embed del panel) y queremos revisarlo.
+      - ^third_party/
+    rules:
+      # Los tests pueden ignorar errores de limpieza y usar valores fijos.
+      - path: _test\.go
+        linters: [errcheck, gosec]
+
+      # En un test, `defer` dentro del bucle es justo lo que se quiere: los sinks se paran
+      # todos al salir de la función, no en cada vuelta. El bucle recorre 2 o 3 elementos.
+      - path: _test\.go
+        linters: [gocritic]
+        text: deferInLoop
+
+      # El `defer stop()` solo devuelve la señal al runtime; el proceso se está muriendo
+      # de todas formas. Reestructurar main para que os.Exit quede fuera del ámbito del
+      # defer no compra nada aquí.
+      - path: cmd/splitstream/main\.go
+        linters: [gocritic]
+        text: exitAfterDefer
+
+      # healthcheck() habla con 127.0.0.1 y solo mide vida. El certificado es del dominio,
+      # nunca de la IP de loopback, así que validarlo fallaría siempre; el motivo está
+      # escrito junto al código. G704 (SSRF) es la otra cara: la URL la construye
+      # healthcheckURL a partir de la configuración, no de nada que venga de la red.
+      - path: cmd/splitstream/main\.go
+        linters: [gosec]
+        text: "G402|G704"
+
+      # Las tres cookies de sesión llevan HttpOnly y SameSite=Lax; Secure sigue al
+      # despliegue (s.secure), que es false a propósito cuando se sirve por HTTP en una
+      # red local —una cookie Secure ahí no se mandaría nunca y nadie podría entrar—.
+      # gosec exige un literal true y no sabe leer la variable.
+      - path: internal/httpapi/(auth|setup)\.go
+        linters: [gosec]
+        text: G124
+
+      # El mapa de traducciones al inglés menciona "contraseña"/"password" en varias
+      # entradas; gosec lo lee como una credencial incrustada.
+      - path: internal/httpapi/i18n_en\.go
+        linters: [gosec]
+        text: G101
+
+      # G705 en logos.go: los bytes NO vienen del cliente tal cual —imagen.Normalizar los
+      # vuelve a codificar como PNG— y se sirven con Content-Type: image/png y
+      # X-Content-Type-Options: nosniff, que es justo la defensa que gosec busca y no sabe
+      # ver. El motivo está escrito junto al código.
+      - path: internal/httpapi/logos\.go
+        linters: [gosec]
+        text: G705
+
+      # El doc del paquete EXPLICA go:embed y al hacerlo escribe "// go:embed:" dentro de
+      # una frase; staticcheck lo lee como una directiva mal escrita. La directiva de
+      # verdad, //go:embed all:dist/spa, está bien puesta unas líneas más abajo.
+      - path: web/embed\.go
+        linters: [staticcheck]
+        text: SA9009
+
+      # G710 (open redirect) en el handler que manda de HTTP a HTTPS. Es el MISMO patrón
+      # que el HTTPHandler de autocert —x/crypto v0.55.0, autocert.go:423, "https://" +
+      # stripPort(r.Host) + r.URL.RequestURI()—, y no es explotable aquí: el esquema es
+      # fijo ("https://"), y net/http rechaza con 400 "malformed Host header", antes de
+      # que el handler exista, cualquier Host que lleve "/" o "\" (comprobado), así que el
+      # atacante no puede hacer que el destino apunte a otro origen. Lo único que puede
+      # conseguir es que le redirijan a su propio dominio. Usar el dominio configurado en
+      # vez de r.Host rompería el camino de certificado propio, donde no hay dominio.
+      - path: internal/webtls/webtls\.go
+        linters: [gosec]
+        text: G710
+
+      # misspell solo tiene sentido donde hay inglés: las traducciones del panel. En el
+      # resto del repo los comentarios y los identificadores son en español (ver la nota de
+      # settings.misspell).
+      - path-except: internal/httpapi/i18n_en\.go
+        linters: [misspell]

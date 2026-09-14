@@ -1,0 +1,77 @@
+diff --git a/conn.go b/conn.go
+--- a/conn.go
++++ b/conn.go
+@@ -13,6 +13,7 @@ import (
+ 	"io"
+ 	"io/ioutil"
+ 	"sync"
++	"time"
+ 
+ 	"github.com/hashicorp/go-multierror"
+ 	"github.com/pkg/errors"
+@@ -48,6 +49,9 @@ type ConnConfig struct {
+ 	ReaderBufferSize int
+ 	WriterBufferSize int
+ 
++	// WriteTimeout bounds each Stream.Write; zero keeps the historical 5s.
++	WriteTimeout time.Duration
++
+ 	ControlState StreamControlStateConfig
+ 
+ 	Logger  logrus.FieldLogger
+@@ -69,6 +73,10 @@ func (cb *ConnConfig) normalize() *ConnConfig {
+ 		c.WriterBufferSize = 4 * 1024 // 4KB (Default)
+ 	}
+ 
++	if c.WriteTimeout <= 0 {
++		c.WriteTimeout = 5 * time.Second // (Default)
++	}
++
+ 	c.ControlState = *c.ControlState.normalize()
+ 
+ 	if c.Logger == nil {
+diff --git a/stream.go b/stream.go
+--- a/stream.go
++++ b/stream.go
+@@ -10,7 +10,6 @@ package rtmp
+ import (
+ 	"bytes"
+ 	"context"
+-	"time"
+ 
+ 	"github.com/pkg/errors"
+ 	"github.com/sirupsen/logrus"
+@@ -134,10 +133,11 @@ func (s *Stream) ReplyConnect(
+ }
+ 
+ func (s *Stream) CreateStream(body *message.NetConnectionCreateStream, chunkSize uint32) (*message.NetConnectionCreateStreamResult, error) {
+-	oldChunkSize := s.conn.streamer.selfState.chunkSize
++	oldChunkSize := s.conn.streamer.selfState.ChunkSize()
+ 	if chunkSize > 0 && chunkSize != oldChunkSize {
+ 		logrus.Infof("Changing chunkSize %d->%d", oldChunkSize, chunkSize)
+-		s.conn.streamer.selfState.chunkSize = chunkSize
++		// The state is updated by the writer goroutine once the SetChunkSize message
++		// below reaches the wire, not here: see ChunkStreamer.Write.
+ 		err := s.WriteSetChunkSize(chunkSize)
+ 		if err != nil {
+ 			return nil, err
+@@ -318,12 +318,16 @@ func (s *Stream) WriteSetChunkSize(chunkSize uint32) error {
+ 	return s.Write(chunkStreamID, timeStamp, msg)
+ }
+ 
++func (s *Stream) WriteContext(ctx context.Context, chunkStreamID int, timestamp uint32, msg message.Message) error {
++	s.cmsg.Message = msg
++	return s.streamer().Write(ctx, chunkStreamID, timestamp, &s.cmsg)
++}
++
+ func (s *Stream) Write(chunkStreamID int, timestamp uint32, msg message.Message) error {
+-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // TODO: Fix 5s
++	ctx, cancel := context.WithTimeout(context.Background(), s.conn.config.WriteTimeout)
+ 	defer cancel()
+ 
+-	s.cmsg.Message = msg
+-	return s.streamer().Write(ctx, chunkStreamID, timestamp, &s.cmsg)
++	return s.WriteContext(ctx, chunkStreamID, timestamp, msg)
+ }
+ 
+ func (s *Stream) handle(chunkStreamID int, timestamp uint32, msg message.Message) error {

@@ -16,9 +16,16 @@ despreciable y el de subida es `bitrate × número de destinos`.
 
 ## Estado
 
-**Las seis fases están completas.** El motor está probado contra plataformas reales
-—YouTube, Twitch y Facebook a la vez, sin descartes ni reconexiones durante quince minutos
-seguidos— y el producto se instala descargando un archivo.
+**v1.0.** Las seis fases están completas, y el motor está probado contra plataformas
+reales —YouTube, Twitch y Facebook a la vez, sin descartes ni reconexiones durante quince
+minutos seguidos— y el producto se instala descargando un archivo. La propia v1.0 no
+añade funciones: quita riesgo. El contrato de la API queda congelado y documentado
+([`docs/api.md`](docs/api.md), generado desde el código — un test falla si se
+desalinean), la CI se vuelve estricta (linter, escaneo de vulnerabilidades y una
+integración nocturna completa bloquean cada cambio), y la librería RTMP de la que depende
+corre desde una copia parcheada y verificada contra el origen en vez de la dependencia
+cruda. Nada de eso cambia el comportamiento de quien actualiza: mismo modelo de datos,
+misma API, mismos valores por defecto.
 
 | Fase | Contenido | Estado |
 | --- | --- | --- |
@@ -267,6 +274,7 @@ Todo se controla con variables de entorno:
 | `SPLITSTREAM_TLS_REDIRECT_ADDR` | `:80` con TLS | Listener que redirige a HTTPS y atiende el reto de Let's Encrypt; `none` lo apaga |
 | `SPLITSTREAM_TRUSTED_PROXIES` | vacío | CIDR o IP, separadas por comas, desde las que se cree `X-Forwarded-For` |
 | `SPLITSTREAM_UPDATE_CHECK` | `true` | `false` apaga la consulta diaria de versión nueva |
+| `SPLITSTREAM_RTMP_PRECOMMANDS` | `false` | Manda `releaseStream` y `FCPublish` por el stream de control antes de publicar. `FCUnpublish` al cerrar se manda siempre: lo que cambia la variable es que los tres salgan por el stream de control en vez de por el de datos. Apagado por defecto — Twitch y YouTube funcionan sin él. Enciéndelo (`true`) **solo si una plataforma lo pide** |
 
 Comandos:
 
@@ -455,9 +463,18 @@ make build             # panel + binario
 make build-go          # solo el binario, con el panel ya compilado
 make test              # tests con -race
 make vet
+make lint              # golangci-lint, la misma versión que la CI
+make vuln              # govulncheck, la misma versión que la CI
 make sinks-up          # levanta dos mediamtx locales
 make test-integration  # punta a punta contra ellos; necesita ffmpeg y ffprobe
 ```
+
+`lint` y `vuln` son jobs obligatorios de la CI (`.github/workflows/ci.yml`); las
+excepciones del linter están justificadas una a una en `.golangci.yml`. Un workflow
+nocturno (`.github/workflows/nightly.yml`, también ejecutable a mano con
+`workflow_dispatch`) corre la integración completa, `deploy/migrate-test.sh` contra la
+release anterior y, solo si existen los secretos de prueba de plataforma, un humo de
+cinco minutos contra una plataforma real.
 
 Para trabajar en el panel con recarga en caliente, arranca el binario y aparte:
 
@@ -471,6 +488,24 @@ producción.
 El [documento de diseño](docs/superpowers/specs/2026-09-01-rtmp-relay-design.md) explica
 la arquitectura, y los [planes de implementación](docs/superpowers/plans/) el detalle de
 cada fase, incluidos los errores que cometimos y cómo se corrigieron.
+
+Si tocas el esquema de la base, [docs/migraciones.md](docs/migraciones.md) tiene las reglas
+y cómo probar la migración contra una base real de la versión anterior.
+
+Si tocas una ruta o un DTO de `internal/httpapi`, regenera el contrato de la API:
+
+```bash
+go test ./internal/httpapi/ -run APIContract -update
+```
+
+`TestAPIContractDocIsCurrent` compara [docs/api.md](docs/api.md) byte a byte contra la
+tabla de rutas y los DTO, y falla la CI si queda desactualizado.
+
+Si tocas `third_party/go-rtmp`, edítalo como un parche (`patches/000N-*.diff`) y
+actualiza [`third_party/go-rtmp/UPSTREAM.md`](third_party/go-rtmp/UPSTREAM.md) — su
+propia sección «Regenerar» tiene los pasos exactos — para que
+`TestGoRTMPCopyMatchesUpstreamPlusPatches` siga confirmando que la copia es el origen más
+exactamente esos parches.
 
 ---
 

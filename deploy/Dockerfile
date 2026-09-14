@@ -27,7 +27,11 @@ WORKDIR /src
 # los timestamps se lean en la zona donde se opera y no siempre en UTC.
 RUN apk add --no-cache tzdata
 
+# third_party/ va ANTES de `go mod download`: go.mod tiene un `replace` de go-rtmp hacia
+# ./third_party/go-rtmp (v1.0, contingencia de go-rtmp), y sin el directorio el download
+# falla al leer su go.mod. El resto del código entra después, para conservar la caché.
 COPY go.mod go.sum ./
+COPY third_party/ ./third_party/
 RUN go mod download
 
 COPY . .

@@ -77,6 +77,11 @@ type Config struct {
 	// UpdateCheck consulta la última release de GitHub al arrancar y cada 24 h. Solo el
 	// aviso: nunca se actualiza solo. `SPLITSTREAM_UPDATE_CHECK=false` lo apaga.
 	UpdateCheck bool
+	// RTMPPreCommands manda releaseStream y FCPublish por el stream de control antes de
+	// createStream, como FMLE (spec v1.0 §3.3). Apagado por defecto y a propósito: se
+	// midieron rompiendo Twitch cuando se mandaban por el stream de datos, y sin ellos
+	// las plataformas que usamos funcionan. Solo para la plataforma que los exija.
+	RTMPPreCommands bool
 	// TwitchClientID: client_id propio para Twitch; vacío usa el incluido en el binario.
 	// Es público por diseño, no un secreto.
 	TwitchClientID string
@@ -110,6 +115,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("tls_redirect_addr", c.TLSRedirectAddr),
 		slog.String("trusted_proxies", prefijos(c.TrustedProxies)),
 		slog.Bool("update_check", c.UpdateCheck),
+		slog.Bool("rtmp_precommands", c.RTMPPreCommands),
 		slog.String("twitch_client_id", c.TwitchClientID),
 		slog.Int("retention_max_chat", c.RetentionMaxChat),
 		slog.Int("youtube_chat_budget", c.YouTubeChatBudget),
@@ -186,18 +192,61 @@ func claveDelArchivo(ruta string) (string, bool, error) {
 			return "", false, fmt.Errorf("crear el directorio de %s: %w", ruta, err)
 		}
 	}
-	// 0600 y O_EXCL: solo el dueño puede leerla, y si otro proceso la creó entre el
-	// ReadFile de arriba y esta línea, se falla en vez de pisarla. Pisarla dejaría las
-	// claves de los destinos ilegibles para siempre.
-	f, err := os.OpenFile(ruta, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := crearArchivoDeClave(ruta)
 	if err != nil {
 		return "", false, fmt.Errorf("crear el archivo de clave %s: %w", ruta, err)
 	}
-	defer f.Close()
-	if _, err := f.WriteString(clave + "\n"); err != nil {
+	// Aquí NO vale el `defer f.Close()` de siempre. Este archivo es lo que hace legibles
+	// las claves de TODOS los destinos: si se queda a medias no hay de dónde recuperarlo.
+	// Y Close puede fallar mucho después del WriteString —con el disco lleno, o con un
+	// error de escritura que el núcleo difiere hasta el cierre—, así que tirar su error
+	// era devolver como guardada una clave que no llegó entera al disco.
+	//
+	// Si algo falla se borra el archivo a medio escribir: el arranque siguiente genera
+	// otro en vez de leer basura y dar por buena una clave que no es.
+	if err := escribirClave(f, clave); err != nil {
+		if rerr := os.Remove(ruta); rerr != nil {
+			// No se pudo ni borrar el archivo a medias. Hay que decirlo en el mismo error:
+			// si queda ahí, el arranque siguiente lo lee y da por buena una clave que no
+			// lo es, y para entonces ya no hay nada que enseñe qué pasó.
+			return "", false, fmt.Errorf("escribir el archivo de clave %s: %w "+
+				"(y quedó a medias: bórralo a mano, no se pudo borrar aquí: %v)", ruta, err, rerr)
+		}
 		return "", false, fmt.Errorf("escribir el archivo de clave %s: %w", ruta, err)
 	}
 	return clave, true, nil
+}
+
+// crearArchivoDeClave crea el archivo de clave, que tiene que no existir.
+//
+// 0600 y O_EXCL: solo el dueño puede leerla, y si otro proceso la creó entre el ReadFile de
+// claveDelArchivo y esta línea, se falla en vez de pisarla. Pisarla dejaría las claves de
+// los destinos ilegibles para siempre.
+//
+// Es una variable, y no una llamada directa a os.OpenFile, por una sola razón: el camino
+// que BORRA el archivo a medias cuando la escritura falla no se puede probar de otra forma.
+// Con un archivo de verdad ni WriteString ni Sync fallan a voluntad, y el propio O_EXCL
+// descarta los trucos de dejar una tubería o un enlace en el sitio —entonces lo que falla es
+// la creación, que es el otro camino y ya tiene su test—. El test interno la sustituye por
+// una que crea el archivo igual pero devuelve el extremo de una tubería sin lector. Fuera
+// del test nadie la toca.
+var crearArchivoDeClave = func(ruta string) (*os.File, error) {
+	return os.OpenFile(ruta, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+}
+
+// escribirClave escribe la clave y cierra el archivo, y devuelve el PRIMER error de los
+// tres pasos. Sync antes de Close porque un Close limpio no promete que los bytes estén
+// en el disco, solo que el descriptor se soltó sin quejas. Es el mismo patrón que
+// FLVWriter.closeSegment.
+func escribirClave(f *os.File, clave string) error {
+	_, err := f.WriteString(clave + "\n")
+	if serr := f.Sync(); err == nil {
+		err = serr
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // LoadFrom lee la configuración de una función de consulta arbitraria, para poder
@@ -218,7 +267,7 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	tlsDomain := strings.TrimSpace(get("SPLITSTREAM_TLS_DOMAIN", ""))
 	tlsCert := get("SPLITSTREAM_TLS_CERT_FILE", "")
 	tlsKey := get("SPLITSTREAM_TLS_KEY_FILE", "")
-	if err = validarTLS(tlsDomain, tlsCert, tlsKey); err != nil {
+	if err := validarTLS(tlsDomain, tlsCert, tlsKey); err != nil {
 		return nil, err
 	}
 	conTLS := tlsDomain != "" || tlsCert != ""
@@ -276,6 +325,7 @@ func LoadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	if cfg.RetentionMaxChat, err = parseNonNegative(get("SPLITSTREAM_RETENTION_MAX_CHAT", "200000"), "SPLITSTREAM_RETENTION_MAX_CHAT"); err != nil {
 		return nil, err
 	}
+	cfg.RTMPPreCommands = parseBool(get("SPLITSTREAM_RTMP_PRECOMMANDS", ""))
 	cfg.TwitchClientID = strings.TrimSpace(get("SPLITSTREAM_TWITCH_CLIENT_ID", ""))
 	if cfg.YouTubeChatBudget, err = parseNonNegative(get("SPLITSTREAM_YOUTUBE_CHAT_BUDGET", "6000"), "SPLITSTREAM_YOUTUBE_CHAT_BUDGET"); err != nil {
 		return nil, err
@@ -372,6 +422,19 @@ func parseLevel(s string) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("SPLITSTREAM_LOG_LEVEL inválido %q: usa debug, info, warn o error", s)
 	}
+}
+
+// parseBool interpreta una variable de encendido/apagado que está APAGADA por defecto:
+// solo `true` la enciende, igual que SPLITSTREAM_SECURE_COOKIES. Una sola forma de
+// escribirla es una menos que documentar y que explicar cuando alguien pone `1` y no pasa
+// nada.
+//
+// No devuelve error, también como las demás booleanas: en este archivo solo fallan al
+// arrancar las variables cuyo valor no se puede adivinar (una red, un nivel de log, un
+// entero). Para un interruptor apagado por defecto, un valor ilegible significa lo mismo
+// que no ponerlo.
+func parseBool(s string) bool {
+	return s == "true"
 }
 
 // parseNonNegative interpreta s como un entero >= 0, para las variables de retención.

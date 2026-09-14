@@ -221,6 +221,14 @@ Mientras eso pasa, Splitstream **espacia los reintentos** —1, 2, 4, 8, hasta 3
 en lugar de insistir cada segundo. Es a propósito: reintentar sin freno contra una
 plataforma con límite de emisiones te agota la cuota y te deja sin poder emitir.
 
+Si una plataforma sigue cortando la conexión y nada de lo anterior lo explica, existe la
+variable `SPLITSTREAM_RTMP_PRECOMMANDS` (apagada por defecto: Twitch y YouTube funcionan
+sin ella). Actívala **solo si una plataforma lo pide**.
+
+El botón **Probar** de un canal no usa esa variable: mide siempre el camino por defecto, el
+mismo con la variable encendida o apagada. Así, lo que te responde habla de la URL y de la
+clave, y no de una opción de compatibilidad.
+
 ### «Emitiendo con pérdidas»
 
 Tu subida no da para todos los canales. Splitstream descarta vídeo **por grupos completos**

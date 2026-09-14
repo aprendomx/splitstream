@@ -69,9 +69,9 @@ func TestVerifyPasswordRejectsMalformedEncoding(t *testing.T) {
 	for _, bad := range []string{
 		"",
 		"texto-plano",
-		"$argon2i$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA",  // variante equivocada
-		"$argon2id$v=19$m=65536,t=3,p=4$c2FsdA",        // faltan segmentos
-		"$argon2id$v=19$m=abc,t=3,p=4$c2FsdA$aGFzaA",   // parámetro no numérico
+		"$argon2i$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA", // variante equivocada
+		"$argon2id$v=19$m=65536,t=3,p=4$c2FsdA",       // faltan segmentos
+		"$argon2id$v=19$m=abc,t=3,p=4$c2FsdA$aGFzaA",  // parámetro no numérico
 	} {
 		if _, err := crypto.VerifyPassword(bad, "x"); err == nil {
 			t.Errorf("quería error con el codificado %q", bad)

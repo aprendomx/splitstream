@@ -131,6 +131,18 @@ Hay binarios para macOS (Intel y Apple Silicon), Linux (x86 y ARM, sirve en una 
 Pi) y Windows, además de una imagen de Docker de 18 MB. El código está en GitHub bajo
 licencia MIT: úsalo, cámbialo y despliégalo donde quieras.
 
+#### v1.0.0
+
+La v1.0 no añade funciones: cierra riesgos que venían arrastrándose desde el diseño
+original. Si ya usas Splitstream, actualizar no cambia nada — mismo modelo de datos (sin
+migración nueva), misma API, mismo comportamiento por defecto de principio a fin. Lo que
+gana es garantía: la librería RTMP de la que depende corre desde una copia parcheada que
+un test verifica automáticamente contra el origen, en vez de fiarse de que nadie la tocó
+sin dejar rastro; el linter y el detector de vulnerabilidades bloquean el código en cada
+cambio, no solo cuando alguien se acuerda de correrlos; y el contrato de la API queda
+documentado en un archivo que otro test compara contra el código, así que un cambio que
+lo rompa no puede llegar a `main` sin que ese documento lo refleje.
+
 ---
 
 ## Posicionamiento
@@ -344,3 +356,15 @@ before you download it.
 There are binaries for macOS (Intel and Apple Silicon), Linux (x86 and ARM, it works on a
 Raspberry Pi) and Windows, plus an 18 MB Docker image. The code is on GitHub under the MIT
 licence: use it, change it and deploy it wherever you want.
+
+#### v1.0.0
+
+v1.0 doesn't add features: it closes risks that had been carried since the original
+design. If you already run Splitstream, updating changes nothing — same data model (no
+new migration), same API, same default behavior end to end. What it gains is guarantee:
+the RTMP library it depends on now runs from a patched copy that a test automatically
+verifies against upstream, instead of relying on nobody having touched it without
+leaving a trace; the linter and the vulnerability scanner block the code on every change,
+not only when someone remembers to run them; and the API contract is documented in a
+file that another test compares against the code, so a breaking change can't reach
+`main` without that document reflecting it.

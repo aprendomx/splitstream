@@ -1,9 +1,13 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/aprendomx/splitstream/internal/store"
@@ -124,5 +128,65 @@ func TestSchemaRejectsUnknownPlatform(t *testing.T) {
 		 VALUES ('x', 'vimeo', 'rtmp://x', X'00', '', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
 	if err == nil {
 		t.Fatal("quería que el CHECK rechazara la plataforma 'vimeo'")
+	}
+}
+
+// Una base migrada por una versión más nueva de Splitstream no se abre.
+//
+// El runner solo aplica lo que supere user_version, así que sin la comprobación un binario
+// viejo sobre una base nueva no tendría nada que aplicar y arrancaría: el fallo llegaría
+// después, con el servicio ya escribiendo, en forma de columna que no existe o de CHECK
+// que rechaza algo que antes valía. Aquí se exige que se niegue al abrir y que el mensaje
+// diga las dos salidas reales (subir el binario o restaurar el respaldo).
+func TestOpenRejectsANewerSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "futuro.db")
+
+	db, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// 99 es "cualquier versión que este binario no conoce": el número exacto da igual
+	// mientras supere SchemaVersion.
+	if _, err := db.SQL().ExecContext(context.Background(), `PRAGMA user_version = 99`); err != nil {
+		t.Fatalf("fijar user_version: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err = store.Open(context.Background(), path)
+	if err == nil {
+		t.Fatal("Open abrió una base con un esquema más nuevo que el del binario")
+	}
+	for _, quiero := range []string{"más nueva", "99", "actualiza el binario", "respaldo"} {
+		if !strings.Contains(err.Error(), quiero) {
+			t.Errorf("el error no dice %q: %v", quiero, err)
+		}
+	}
+}
+
+// Cada migración aplicada deja una línea en el log. No es cosmético: el user_version de
+// después no distingue "migró ahora" de "ya venía así", así que es lo único que le dice a
+// quien actualiza en un servidor que el esquema se tocó. deploy/migrate-test.sh se apoya
+// en ella.
+func TestMigrationsAreLogged(t *testing.T) {
+	var buf bytes.Buffer
+	anterior := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(anterior) })
+
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "nueva.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	log := buf.String()
+	if !strings.Contains(log, "migración aplicada") {
+		t.Fatalf("el log de una base nueva no dice que migró: %q", log)
+	}
+	// La última migración es SchemaVersion, así que su línea tiene que estar.
+	if quiero := fmt.Sprintf("version=%d", store.SchemaVersion); !strings.Contains(log, quiero) {
+		t.Errorf("el log no trae %q: %q", quiero, log)
 	}
 }

@@ -17,9 +17,15 @@ upload usage is `bitrate × number of destinations`.
 
 ## Status
 
-**All six phases are complete.** The engine has been tested against real platforms
-—YouTube, Twitch and Facebook at the same time, with no drops and no reconnections for
-fifteen minutes straight— and the product installs by downloading one file.
+**v1.0.** All six phases are complete, and the engine has been tested against real
+platforms —YouTube, Twitch and Facebook at the same time, with no drops and no
+reconnections for fifteen minutes straight— and the product installs by downloading one
+file. v1.0 itself doesn't add features: it closes risk instead. The API contract is
+frozen and documented ([`docs/api.md`](docs/api.md), generated from the code — a test
+fails if they drift apart), CI is strict (linter, vulnerability scan and a nightly full
+integration run block every change), and the RTMP library this depends on runs from a
+patched, upstream-verified copy instead of the raw dependency. None of that changes
+behavior for anyone updating: same data model, same API, same defaults.
 
 | Phase | Contents | Status |
 | --- | --- | --- |
@@ -270,6 +276,7 @@ Everything is driven by environment variables:
 | `SPLITSTREAM_TLS_REDIRECT_ADDR` | `:80` with TLS | Listener that redirects to HTTPS and serves the Let's Encrypt challenge; `none` turns it off |
 | `SPLITSTREAM_TRUSTED_PROXIES` | empty | CIDRs or IPs, comma separated, whose `X-Forwarded-For` is believed |
 | `SPLITSTREAM_UPDATE_CHECK` | `true` | `false` turns off the daily check for a new version |
+| `SPLITSTREAM_RTMP_PRECOMMANDS` | `false` | Sends `releaseStream` and `FCPublish` over the control stream before publishing. `FCUnpublish` on close is always sent: what this variable changes is that all three go over the control stream instead of the data stream. Off by default — Twitch and YouTube work without it. Turn it on (`true`) **only if a platform asks for it** |
 
 Commands:
 
@@ -460,9 +467,18 @@ make build             # panel + binary
 make build-go          # binary only, with the panel already built
 make test              # tests with -race
 make vet
+make lint              # golangci-lint, same version as CI
+make vuln              # govulncheck, same version as CI
 make sinks-up          # brings up two local mediamtx
 make test-integration  # end to end against them; needs ffmpeg and ffprobe
 ```
+
+`lint` and `vuln` are required CI jobs (`.github/workflows/ci.yml`); exceptions in the
+linter are justified one by one in `.golangci.yml`. A nightly workflow
+(`.github/workflows/nightly.yml`, also runnable by hand with `workflow_dispatch`) runs
+the full integration suite, `deploy/migrate-test.sh` against the previous release, and —
+only if the platform test secrets exist — a five-minute smoke test against a real
+platform.
 
 To work on the panel with hot reload, start the binary and separately:
 
@@ -475,6 +491,23 @@ Vite proxies to the API on `:8099`, so the session works just like in production
 The [design document](docs/superpowers/specs/2026-09-01-rtmp-relay-design.md) explains the
 architecture, and the [implementation plans](docs/superpowers/plans/) the detail of each
 phase, including the mistakes we made and how we fixed them.
+
+If you touch the database schema, [docs/migraciones.md](docs/migraciones.md) (Spanish) has
+the rules and how to test the migration against a real database from the previous release.
+
+If you touch a route or a DTO in `internal/httpapi`, regenerate the API contract doc:
+
+```bash
+go test ./internal/httpapi/ -run APIContract -update
+```
+
+`TestAPIContractDocIsCurrent` compares [docs/api.md](docs/api.md) against the route table
+and the DTOs byte for byte, and fails CI if it's stale.
+
+If you touch `third_party/go-rtmp`, edit it as a patch (`patches/000N-*.diff`) and update
+[`third_party/go-rtmp/UPSTREAM.md`](third_party/go-rtmp/UPSTREAM.md) — its own
+"Regenerar" section has the exact steps — so `TestGoRTMPCopyMatchesUpstreamPlusPatches`
+keeps confirming the copy is upstream plus exactly those patches.
 
 ---
 

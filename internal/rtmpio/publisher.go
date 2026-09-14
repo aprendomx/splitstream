@@ -42,6 +42,17 @@ const (
 // timeout en vez de confiar en el ajeno.
 const connectTimeout = 15 * time.Second
 
+// writeTimeout acota CADA escritura hacia el destino. go-rtmp v0.0.7 traía 5 s cableados
+// en Stream.Write; el parche 1 de third_party/go-rtmp lo hace configurable y aquí se baja
+// a 3 s (spec v1.0 §3.1).
+//
+// Por qué 3 y no 5: mientras una escritura está bloqueada, el sink de ese destino no puede
+// hacer nada más —ni vaciar su cola, ni darse por caído, ni reconectar—, así que el plazo
+// es el tiempo que tarda en detectarse una plataforma que dejó de consumir. Tres segundos
+// siguen siendo holgadísimos para un enlace sano (un GOP entero cabe de sobra) y recortan
+// casi a la mitad el hueco antes de reconectar.
+const writeTimeout = 3 * time.Second
+
 // stageError dice en qué paso falló Connect. Lo usa Probe para explicar al usuario si el
 // problema fue la red, el TLS o el handshake. El texto del error no cambia: Error()
 // delega en el error envuelto.
@@ -158,6 +169,10 @@ type PublisherConfig struct {
 	StreamKey crypto.Secret
 	ChunkSize uint32
 	Logger    *slog.Logger
+	// PreCommands manda releaseStream y FCPublish por el stream de control antes de
+	// createStream, como FMLE. APAGADO por defecto, y el comentario de connect explica
+	// por qué: enciéndelo solo si una plataforma los exige.
+	PreCommands bool
 }
 
 // Publisher publica hacia una plataforma. Implementa relay.Publisher.
@@ -169,6 +184,8 @@ type Publisher struct {
 	key       crypto.Secret
 	chunkSize uint32
 	log       *slog.Logger
+	// preCommands se fija al construir y no cambia, así que se lee sin el candado.
+	preCommands bool
 
 	mu     sync.Mutex
 	conn   *rtmp.ClientConn
@@ -191,10 +208,11 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 		log = slog.Default()
 	}
 	return &Publisher{
-		tgt:       tgt,
-		key:       cfg.StreamKey,
-		chunkSize: size,
-		log:       log.With(logAttrs(tgt)...),
+		tgt:         tgt,
+		key:         cfg.StreamKey,
+		chunkSize:   size,
+		log:         log.With(logAttrs(tgt)...),
+		preCommands: cfg.PreCommands,
 	}, nil
 }
 
@@ -249,11 +267,11 @@ func (p *Publisher) Connect(ctx context.Context) error {
 					ServerName: hostOf(p.tgt.addr),
 					MinVersion: tls.VersionTLS12,
 				},
-			}, "rtmps", p.tgt.addr, &rtmp.ConnConfig{})
+			}, "rtmps", p.tgt.addr, &rtmp.ConnConfig{WriteTimeout: writeTimeout})
 		default:
 			conn, err = rtmp.DialWithDialer(
 				&net.Dialer{Deadline: deadline},
-				"rtmp", p.tgt.addr, &rtmp.ConnConfig{})
+				"rtmp", p.tgt.addr, &rtmp.ConnConfig{WriteTimeout: writeTimeout})
 		}
 		results <- dialResult{conn: conn, err: err}
 	}()
@@ -298,43 +316,76 @@ func (p *Publisher) Connect(ctx context.Context) error {
 		return &stageError{stage: "connect", err: fmt.Errorf("handshake connect con %s: %w", p.tgt.addr, err)}
 	}
 
+	// releaseStream y FCPublish: se mandan SOLO si PreCommands está encendido, y entonces
+	// por el stream de control y antes de createStream, que es como los manda FMLE —el
+	// cliente que las plataformas esperan—.
+	//
+	// La historia completa, porque el valor por defecto no es un gusto sino una cicatriz:
+	//
+	//   1. El spike del spec §16 dio por hecho que había que mandarlos siempre. Se
+	//      mandaban MAL, y no por descuido: go-rtmp v0.0.7 no exponía su stream de
+	//      control (era interno, cc.conn.streams.At(ControlStreamID)), así que el único
+	//      Stream que su API pública devolvía era el de CreateStream. Iban por el stream
+	//      de datos y DESPUÉS de createStream. El spec §14 anotó ese riesgo desde el
+	//      principio.
+	//   2. Medido el 2026-09-03 contra las plataformas de verdad: Twitch aceptaba
+	//      connect, createStream y publish, y CORTABA en cuanto empezábamos a escribir.
+	//      Se aisló publicando con ffmpeg a Twitch con la misma clave: ffmpeg aguantaba,
+	//      nosotros no, así que el problema era nuestro. YouTube funcionaba igual con
+	//      ellos que sin ellos. Se quitaron, y Twitch pasó a transmitir sin un solo
+	//      descarte ni una reconexión.
+	//   3. Ahora el parche 3 de third_party/go-rtmp expone el stream de control
+	//      (ClientConn.ControlStream), así que ya se pueden mandar BIEN. Pero «bien» no
+	//      es lo mismo que «probado»: lo único que se sabe medido es que sin ellos las
+	//      dos plataformas que usamos funcionan. Por eso viven detrás de una opción
+	//      apagada, para la plataforma que algún día los exija.
+	//
+	// Mandarlos sin esperar respuesta destapó dos fallos más de la librería, y los dos van
+	// arreglados en la copia porque sin ellos esta opción no sería usable:
+	//   - Parche 5: estos comandos van con TransactionID 0 y no se espera respuesta, pero
+	//     hay plataformas que contestan igual. Un `_result` para una transacción que no
+	//     existe hacía que go-rtmp CERRARA la conexión; ahora se ignora, pero SOLO por el
+	//     stream de control, que es por donde van estos comandos. Por un stream de datos
+	//     sigue cerrando: un `_error` al publish viaja igual —TransactionID 0, sin
+	//     transacción— y ahí significa que la plataforma rechaza la emisión, así que
+	//     cerrar es justo lo que hace falta para que el sink reconecte.
+	//   - Parche 4: el tamaño de chunk nuevo lo aplica la goroutine escritora justo
+	//     después de mandar el SetChunkSize, no quien lo encola. Si no, un FCPublish con
+	//     una clave larga (más de 128 bytes) todavía en la cola salía troceado con un
+	//     tamaño que el destino aún no conocía y el stream se desincronizaba.
+	//
+	// Lo que NO es fatal es el error de ESCRITURA: un destino que no espera estos comandos
+	// los ignora, y quedarse sin publicar por un comando opcional sería peor que seguir.
+	// Se registra a nivel debug, nunca con el nombre del stream: ESE nombre es la clave
+	// (spec §8).
+	if p.preCommands {
+		if ctrl := conn.ControlStream(); ctrl != nil {
+			for _, nombre := range []string{"releaseStream", "FCPublish"} {
+				if err := p.writeCommand(ctrl, nombre); err != nil {
+					p.log.Debug("comando previo rechazado", "comando", nombre, "err", err)
+				}
+			}
+		}
+	}
+
+	// El tamaño de chunk se negocia AQUÍ y solo aquí: CreateStream manda el SetChunkSize
+	// por el stream de control y, desde el parche 4 de third_party/go-rtmp, es la goroutine
+	// escritora la que aplica el tamaño nuevo justo después de ponerlo en el hilo. Antes
+	// había además un WriteSetChunkSize(p.chunkSize) después del publish, de cuando el
+	// tamaño lo aplicaba quien encolaba y no se podía confiar en el momento: hoy es un
+	// SetChunkSize repetido con el mismo valor. Que sobra no es una deducción: lo mide en
+	// el cable TestFirstVideoGoesOutWithTheNegotiatedChunkSize (publisher_test.go), que
+	// cuenta los bytes que salen del primer vídeo sin él.
 	stream, err := conn.CreateStream(&message.NetConnectionCreateStream{}, p.chunkSize)
 	if err != nil {
 		return &stageError{stage: "createStream", err: fmt.Errorf("createStream con %s: %w", p.tgt.addr, err)}
 	}
-
-	// Algunas plataformas exigen releaseStream y FCPublish antes de publish. go-rtmp no
-	// tiene helper para ellos, pero Stream.Write acepta un CommandMessage (spec §16).
-	// Un rechazo aquí no es fatal: los destinos que no los esperan simplemente los ignoran.
-	// NO se mandan releaseStream ni FCPublish. Esto contradice lo que el spike del spec
-	// §16 supuso, y la razón es una prueba contra plataformas reales.
-	//
-	// FMLE —el cliente que las plataformas esperan— los manda sobre el stream 0 y ANTES de
-	// createStream. Nosotros solo podíamos mandarlos sobre el stream ya creado y con
-	// TransactionID 0, porque go-rtmp v0.0.7 no expone su stream de control: es interno
-	// (cc.conn.streams.At(ControlStreamID)) y el único Stream que su API pública devuelve
-	// es el de CreateStream. El spec §14 anotó ese riesgo desde el principio.
-	//
-	// Medido el 2026-09-03 contra las plataformas de verdad:
-	//   - Twitch aceptaba connect, createStream y publish, y CORTABA en cuanto empezábamos
-	//     a escribir. Con estos dos comandos fuera, transmite sin un solo descarte ni una
-	//     reconexión. Se aisló publicando con ffmpeg directamente a Twitch con la misma
-	//     clave: ffmpeg aguantaba, nosotros no, así que el problema era nuestro.
-	//   - YouTube funciona igual con ellos que sin ellos.
-	//
-	// Si algún día aparece una plataforma que SÍ los exija, mandarlos bien requiere que
-	// go-rtmp exponga el stream de control, o escribirlos a más bajo nivel. Mandarlos mal
-	// no es una aproximación: rompe Twitch.
 
 	if err := stream.Publish(&message.NetStreamPublish{
 		PublishingName: p.key.Reveal(),
 		PublishingType: "live",
 	}); err != nil {
 		return &stageError{stage: "publish", err: fmt.Errorf("publish en %s: %w", p.tgt.addr, err)}
-	}
-
-	if err := stream.WriteSetChunkSize(p.chunkSize); err != nil {
-		p.log.Debug("no se pudo fijar el chunk size", "err", err)
 	}
 
 	p.mu.Lock()
@@ -439,28 +490,43 @@ func (p *Publisher) Close() error {
 		// FCUnpublish antes de deleteStream: es lo que espera el cierre ordenado del
 		// spec §6.5, y varias plataformas lo usan para liberar el slot de emisión sin
 		// esperar al timeout. Que falle no es motivo para no seguir cerrando.
-		// FCUnpublish SÍ se sigue mandando, a diferencia de releaseStream y FCPublish,
-		// que se quitaron por romper Twitch. La diferencia es cuándo: este va al CERRAR,
-		// cuando la conexión se va a tirar de todas formas, así que si la plataforma no
-		// le gusta lo que ve, lo peor que puede hacer es cortar — que es justo lo que
-		// estamos pidiendo.
-		if err := p.writeCommand(stream, "FCUnpublish"); err != nil {
+		// FCUnpublish SÍ se manda siempre, a diferencia de releaseStream y FCPublish,
+		// que son opcionales. La diferencia es cuándo: este va al CERRAR, cuando la
+		// conexión se va a tirar de todas formas, así que si a la plataforma no le gusta
+		// lo que ve, lo peor que puede hacer es cortar — que es justo lo que estamos
+		// pidiendo.
+		//
+		// Por dónde sí depende: con PreCommands va por el stream de control, el mismo por
+		// el que fueron releaseStream y FCPublish, que es como lo manda FMLE. Sin la
+		// opción sigue yendo por el stream de datos, exactamente como hasta ahora: el
+		// comportamiento por defecto no cambia ni aquí.
+		destino := stream
+		if p.preCommands {
+			if ctrl := conn.ControlStream(); ctrl != nil {
+				destino = ctrl
+			}
+		}
+		if err := p.writeCommand(destino, "FCUnpublish"); err != nil {
 			p.log.Debug("FCUnpublish falló al cerrar", "err", err)
 		}
-		// NO se manda deleteStream. Provoca una carrera de datos DENTRO de go-rtmp
-		// v0.0.7: su `streams.Delete` toma el mutex del mapa de streams, pero su
-		// `streams.At` —que usa la goroutine de lectura de la conexión— lo lee SIN
-		// tomarlo (streams.go:86). Uno protege y el otro no.
+		// NO se manda deleteStream. El motivo de origen ya no vale: era la carrera de
+		// datos de go-rtmp v0.0.7, cuyo `streams.At` —el que usa la goroutine de lectura
+		// de la conexión— leía el mapa de streams SIN el candado que `streams.Delete` sí
+		// toma. Eso lo arregla el parche 2 de third_party/go-rtmp, que pasa `At` a
+		// `RLock`; hoy mandarlo no abortaría el proceso.
 		//
-		// El ledger de la fase 2 dejó anotada esa carrera como riesgo; apareció bajo
-		// -race el 2026-09-03. No es un problema de tests: en producción Close() se llama
-		// en CADA reconexión —con un destino aleteando fueron 55 seguidas— y una escritura
-		// concurrente sobre un mapa de Go puede abortar el proceso con "concurrent map
-		// writes", llevándose por delante la emisión a todos los destinos.
+		// Lo que queda en pie es más simple: no hace falta. Cerrar el socket termina el
+		// stream igual, y FCUnpublish ya le dijo a la plataforma que suelte el slot de
+		// emisión, que es el único efecto observable que nos importa. deleteStream solo
+		// le pide a la otra punta que olvide un id de stream por el que ya no va a llegar
+		// nada, y de paso borra ese stream del mapa de una conexión que estamos cerrando.
 		//
-		// Cerrar el socket termina el stream igual, y FCUnpublish ya le dijo a la
-		// plataforma que suelte el slot. ClientConn.Close solo cierra la conexión y no
-		// toca ese mapa, así que por ahí no hay carrera.
+		// Y probarlo no sería gratis: Close() se llama en CADA reconexión —con un destino
+		// aleteando fueron 55 seguidas—, así que es el camino más caliente del cierre, y
+		// la historia de PreCommands (arriba, en Connect) dejó claro lo que cuesta
+		// mandarle a una plataforma real un comando de FMLE que nadie ha medido. Si algún
+		// día una plataforma lo exige, su sitio es detrás de PreCommands, con los otros
+		// tres.
 	}
 	if conn != nil {
 		return conn.Close()

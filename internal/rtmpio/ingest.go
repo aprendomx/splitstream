@@ -35,6 +35,19 @@ type IngestHandler interface {
 	OnPublishEnd()
 }
 
+// comandoObservador es un gancho OPCIONAL: si el IngestHandler lo implementa, la ingesta
+// le avisa de cada comando de control que recibe, en orden, con el stream por el que
+// llegó. Se comprueba con una aserción de tipo y NO forma parte de IngestHandler, para no
+// obligar al motor ni a main a implementar algo que solo usan las pruebas del publisher.
+//
+// El streamID es el del stream por el que llegó el comando. go-rtmp solo despacha
+// releaseStream, FCPublish y FCUnpublish desde el handler del stream de control, así que
+// para esos es siempre rtmp.ControlStreamID; publish, en cambio, trae el suyo en el
+// StreamContext.
+type comandoObservador interface {
+	OnComando(nombre string, streamID uint32)
+}
+
 // IngestConfig son los datos para construir el servidor de ingesta.
 type IngestConfig struct {
 	Addr    string
@@ -198,12 +211,46 @@ type ingestConn struct {
 	publishing bool
 }
 
+// comando avisa al observador opcional. El nombre del stream que viaja dentro de estos
+// comandos ES la clave de ingesta, así que aquí solo se pasa el nombre del comando.
+func (c *ingestConn) comando(nombre string, streamID uint32) {
+	if obs, ok := c.handler.(comandoObservador); ok {
+		obs.OnComando(nombre, streamID)
+	}
+}
+
 func (c *ingestConn) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConnect) error {
+	c.comando("connect", rtmp.ControlStreamID)
 	c.app = cmd.Command.App
 	return nil
 }
 
+func (c *ingestConn) OnCreateStream(timestamp uint32, cmd *rtmpmsg.NetConnectionCreateStream) error {
+	c.comando("createStream", rtmp.ControlStreamID)
+	return nil
+}
+
+func (c *ingestConn) OnReleaseStream(timestamp uint32, cmd *rtmpmsg.NetConnectionReleaseStream) error {
+	c.comando("releaseStream", rtmp.ControlStreamID)
+	return nil
+}
+
+func (c *ingestConn) OnFCPublish(timestamp uint32, cmd *rtmpmsg.NetStreamFCPublish) error {
+	c.comando("FCPublish", rtmp.ControlStreamID)
+	return nil
+}
+
+func (c *ingestConn) OnFCUnpublish(timestamp uint32, cmd *rtmpmsg.NetStreamFCUnpublish) error {
+	c.comando("FCUnpublish", rtmp.ControlStreamID)
+	return nil
+}
+
 func (c *ingestConn) OnPublish(ctx *rtmp.StreamContext, timestamp uint32, cmd *rtmpmsg.NetStreamPublish) error {
+	var streamID uint32
+	if ctx != nil {
+		streamID = ctx.StreamID
+	}
+	c.comando("publish", streamID)
 	// El error no revela cuál de las dos partes falló, para no ayudar a adivinar.
 	if err := c.handler.OnPublishStart(c.app, cmd.PublishingName); err != nil {
 		c.log.Warn("publisher rechazado", "app", c.app, "err", err)

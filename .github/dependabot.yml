@@ -1,0 +1,42 @@
+# Dependabot abre los PR de actualización; quien decide sigue siendo la CI, que es la que
+# tiene que ponerse verde antes de fusionar ninguno.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    # Las indirectas van todas en un PR: por separado son una docena de PR al mes que
+    # nadie lee, y leerlos es justo lo único que los hace útiles.
+    #
+    # Se agrupan por patrón y no con `dependency-type: indirect`, que en `groups` NO es
+    # válido: ahí solo se aceptan `development` y `production`, y para gomod Dependabot
+    # considera producción todo lo que está en go.mod. Así que el grupo es «todo menos las
+    # cinco directas», que son las que sí merecen un PR con su nombre encima.
+    groups:
+      indirectas:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/coder/websocket"
+          - "github.com/yutopp/go-rtmp"
+          - "golang.org/x/crypto"
+          - "golang.org/x/time"
+          - "modernc.org/sqlite"
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    # Los mayores de Quasar y Vue NO se automatizan: son migraciones del panel entero, con
+    # su repaso a mano, no una actualización que se fusione porque la CI esté verde.
+    ignore:
+      - dependency-name: "quasar"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vue"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

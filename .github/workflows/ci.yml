@@ -47,6 +47,13 @@ jobs:
           GOMAXPROCS: "2"
         run: go test ./... -race -count=1
 
+      # third_party/go-rtmp es una copia de upstream con `replace` en go.mod (spec v1.0
+      # §3.4): sus propios tests corren aparte porque son del módulo yutopp/go-rtmp, no
+      # del nuestro. El test de integridad (que la copia es upstream + patches/, ni un
+      # byte más) ya corre arriba con `go test ./...` del módulo principal.
+      - name: la copia de go-rtmp compila y pasa sus tests
+        run: cd third_party/go-rtmp && go vet ./... && go test -race -count=1 ./...
+
       # El motor no debe conocer ni la librería RTMP ni la base de datos (spec §6).
       # Es una propiedad de la arquitectura, y sin esto se rompe sin que nadie se entere.
       - name: internal/relay sigue aislado
@@ -97,6 +104,44 @@ jobs:
       # solo en Windows se vería al etiquetar la release.
       - name: compila para Windows
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/splitstream
+
+  # El linter va en su propio job: es rápido y no depende de nada, así que no tiene por
+  # qué esperar a los tests con -race. La versión es la MISMA que fija el Makefile
+  # (GOLANGCI): si se cambia una, hay que cambiar la otra o lo que pasa en local deja de
+  # valer aquí.
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # Como en `vuln` y en el resto de jobs: sin la caché, cada corrida del linter se
+          # vuelve a bajar y a compilar los módulos desde cero.
+          cache: true
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.2
+
+  # Vulnerabilidades conocidas, de las dependencias y de la propia biblioteca estándar.
+  # govulncheck solo reporta lo ALCANZABLE desde este código: un CVE en una función que
+  # nadie llama no aparece. Por eso este job puede ser bloqueante sin volverse ruido.
+  #
+  # La versión es la MISMA que fija el Makefile (GOVULN): si se cambia una, hay que
+  # cambiar la otra, como con el linter.
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # `go run` con la versión pegada al módulo: no toca go.mod ni go.sum.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   # El panel se compila aparte del binario. Sin este job, un fallo del frontend no se
   # notaría hasta que alguien ejecutara `make build` a mano: el job de Go compila igual,
@@ -197,6 +242,17 @@ jobs:
         run: sh deploy/render_test.sh
       - name: install.sh en ubuntu y alpine contra una release local
         run: sh deploy/install_test.sh
+      # Del humo nocturno, aquí solo se puede comprobar lo que no necesita plataformas ni
+      # secretos: que el script es válido y que se niega a arrancar sin la clave. Corre en
+      # cada push a propósito: una rotura del humo no debe aparecer de madrugada.
+      - name: nightly-smoke.sh
+        run: sh deploy/nightly_smoke_test.sh
+      # Lo mismo con la prueba de migración: aquí no hay release que descargar, así que se
+      # corre en modo offline —el «binario anterior» es una copia del nuevo—. Eso no prueba
+      # ninguna migración, pero sí que el script sigue funcionando; la migración de verdad,
+      # contra la última release publicada, la corre la nocturna.
+      - name: migrate-test.sh
+        run: sh deploy/migrate_test_test.sh
 
   # Punta a punta contra dos mediamtx reales, con ffmpeg publicando de verdad.
   integration:
