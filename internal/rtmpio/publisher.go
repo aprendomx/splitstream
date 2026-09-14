@@ -368,6 +368,14 @@ func (p *Publisher) Connect(ctx context.Context) error {
 		}
 	}
 
+	// El tamaño de chunk se negocia AQUÍ y solo aquí: CreateStream manda el SetChunkSize
+	// por el stream de control y, desde el parche 4 de third_party/go-rtmp, es la goroutine
+	// escritora la que aplica el tamaño nuevo justo después de ponerlo en el hilo. Antes
+	// había además un WriteSetChunkSize(p.chunkSize) después del publish, de cuando el
+	// tamaño lo aplicaba quien encolaba y no se podía confiar en el momento: hoy es un
+	// SetChunkSize repetido con el mismo valor. Que sobra no es una deducción: lo mide en
+	// el cable TestFirstVideoGoesOutWithTheNegotiatedChunkSize (publisher_test.go), que
+	// cuenta los bytes que salen del primer vídeo sin él.
 	stream, err := conn.CreateStream(&message.NetConnectionCreateStream{}, p.chunkSize)
 	if err != nil {
 		return &stageError{stage: "createStream", err: fmt.Errorf("createStream con %s: %w", p.tgt.addr, err)}
@@ -378,10 +386,6 @@ func (p *Publisher) Connect(ctx context.Context) error {
 		PublishingType: "live",
 	}); err != nil {
 		return &stageError{stage: "publish", err: fmt.Errorf("publish en %s: %w", p.tgt.addr, err)}
-	}
-
-	if err := stream.WriteSetChunkSize(p.chunkSize); err != nil {
-		p.log.Debug("no se pudo fijar el chunk size", "err", err)
 	}
 
 	p.mu.Lock()
@@ -505,20 +509,24 @@ func (p *Publisher) Close() error {
 		if err := p.writeCommand(destino, "FCUnpublish"); err != nil {
 			p.log.Debug("FCUnpublish falló al cerrar", "err", err)
 		}
-		// NO se manda deleteStream. Provoca una carrera de datos DENTRO de go-rtmp
-		// v0.0.7: su `streams.Delete` toma el mutex del mapa de streams, pero su
-		// `streams.At` —que usa la goroutine de lectura de la conexión— lo lee SIN
-		// tomarlo (streams.go:86). Uno protege y el otro no.
+		// NO se manda deleteStream. El motivo de origen ya no vale: era la carrera de
+		// datos de go-rtmp v0.0.7, cuyo `streams.At` —el que usa la goroutine de lectura
+		// de la conexión— leía el mapa de streams SIN el candado que `streams.Delete` sí
+		// toma. Eso lo arregla el parche 2 de third_party/go-rtmp, que pasa `At` a
+		// `RLock`; hoy mandarlo no abortaría el proceso.
 		//
-		// El ledger de la fase 2 dejó anotada esa carrera como riesgo; apareció bajo
-		// -race el 2026-09-03. No es un problema de tests: en producción Close() se llama
-		// en CADA reconexión —con un destino aleteando fueron 55 seguidas— y una escritura
-		// concurrente sobre un mapa de Go puede abortar el proceso con "concurrent map
-		// writes", llevándose por delante la emisión a todos los destinos.
+		// Lo que queda en pie es más simple: no hace falta. Cerrar el socket termina el
+		// stream igual, y FCUnpublish ya le dijo a la plataforma que suelte el slot de
+		// emisión, que es el único efecto observable que nos importa. deleteStream solo
+		// le pide a la otra punta que olvide un id de stream por el que ya no va a llegar
+		// nada, y de paso borra ese stream del mapa de una conexión que estamos cerrando.
 		//
-		// Cerrar el socket termina el stream igual, y FCUnpublish ya le dijo a la
-		// plataforma que suelte el slot. ClientConn.Close solo cierra la conexión y no
-		// toca ese mapa, así que por ahí no hay carrera.
+		// Y probarlo no sería gratis: Close() se llama en CADA reconexión —con un destino
+		// aleteando fueron 55 seguidas—, así que es el camino más caliente del cierre, y
+		// la historia de PreCommands (arriba, en Connect) dejó claro lo que cuesta
+		// mandarle a una plataforma real un comando de FMLE que nadie ha medido. Si algún
+		// día una plataforma lo exige, su sitio es detrás de PreCommands, con los otros
+		// tres.
 	}
 	if conn != nil {
 		return conn.Close()

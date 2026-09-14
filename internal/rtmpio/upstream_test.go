@@ -34,7 +34,11 @@ func TestGoRTMPCopyMatchesUpstreamPlusPatches(t *testing.T) {
 		}
 	}
 	// 1) Todo archivo de upstream (salvo example/) existe en la copia y es igual, o tiene parche.
-	filepath.WalkDir(up, func(path string, d fs.DirEntry, err error) error {
+	//
+	// El error del WalkDir se comprueba: si la caché de módulos no se pudiera recorrer, el
+	// recorrido acabaría a medias y el test pasaría sin haber comparado nada, que es el
+	// único fallo que este test no puede permitirse.
+	if err := filepath.WalkDir(up, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -64,9 +68,11 @@ func TestGoRTMPCopyMatchesUpstreamPlusPatches(t *testing.T) {
 			t.Errorf("%s: el parche no coincide con el diff real\n--- esperado\n%s\n--- real\n%s", rel, want, got)
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("recorrer upstream (%s): %v", up, err)
+	}
 	// 2) Nada en la copia que no esté en upstream, salvo UPSTREAM.md y patches/.
-	filepath.WalkDir(copia, func(path string, d fs.DirEntry, err error) error {
+	if err := filepath.WalkDir(copia, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -78,7 +84,9 @@ func TestGoRTMPCopyMatchesUpstreamPlusPatches(t *testing.T) {
 			t.Errorf("%s: no existe en upstream", rel)
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("recorrer la copia (%s): %v", copia, err)
+	}
 }
 
 // goEnv devuelve el valor de una variable de entorno de Go (p.ej. GOMODCACHE).

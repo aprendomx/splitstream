@@ -312,7 +312,7 @@ func TestCloseSendsFCUnpublishWhenConnected(t *testing.T) {
 	ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: rec})
 	go ing.Serve(ln)
 	defer ing.Close()
-	time.Sleep(200 * time.Millisecond)
+	esperaAceptando(t, ln.Addr().String())
 
 	p, err := NewPublisher(PublisherConfig{
 		URL:       "rtmp://" + ln.Addr().String() + "/live",
@@ -432,7 +432,7 @@ func TestConnectUsesFullPathAsApp(t *testing.T) {
 			t.Error("el servidor de ingesta no terminó tras Close: deja goroutines sueltas")
 		}
 	})
-	time.Sleep(200 * time.Millisecond)
+	esperaAceptando(t, ln.Addr().String())
 
 	p, err := NewPublisher(PublisherConfig{
 		URL:       "rtmp://" + ln.Addr().String() + "/a/b",
@@ -798,5 +798,185 @@ func TestFCUnpublishGoesThroughTheSameStreamAsThePreCommands(t *testing.T) {
 				t.Errorf("FCUnpublish por el stream de control = %v, quería %v (comandos: %v)", got, caso.wantFCUnpublish, reg.nombres())
 			}
 		})
+	}
+}
+
+// esperaAceptando espera, con límite, a que el servidor de ingesta esté aceptando de
+// verdad en addr. Sustituye al `time.Sleep(200ms)` que había antes: un plazo fijo se queda
+// corto en un runner cargado —y entonces el test falla sin que nada esté roto— y sobra en
+// todos los demás casos.
+//
+// La comprobación es abrir y cerrar una conexión. No molesta a la ingesta: go-rtmp la ve
+// morir durante el handshake y la suelta, y ni OnPublishStart ni OnMessage llegan a
+// dispararse.
+func esperaAceptando(t *testing.T, addr string) {
+	t.Helper()
+	limite := time.Now().Add(5 * time.Second)
+	for time.Now().Before(limite) {
+		c, err := net.DialTimeout("tcp", addr, time.Second)
+		if err == nil {
+			c.Close()
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("la ingesta en %s no aceptó conexiones en 5 s", addr)
+}
+
+// espia es un proxy TCP que se mete entre el publisher y la ingesta y guarda TODO lo que
+// el publisher manda hacia el servidor.
+//
+// Hace falta porque el tamaño de chunk no se puede mirar de otra forma: ni go-rtmp ni la
+// ingesta exponen el que acabó aplicándose, y a nivel de mensaje los dos tamaños dan el
+// mismo resultado —el otro extremo reensambla igual—. La diferencia solo existe en el
+// cable, y esto es el cable.
+type espia struct {
+	addr string
+
+	mu  sync.Mutex
+	buf []byte
+}
+
+// nuevoEspia levanta el proxy delante de destino y lo cierra al terminar el test.
+func nuevoEspia(t *testing.T, destino string) *espia {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen del espía: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	e := &espia{addr: ln.Addr().String()}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go e.atiende(c, destino)
+		}
+	}()
+	return e
+}
+
+func (e *espia) atiende(cliente net.Conn, destino string) {
+	servidor, err := net.Dial("tcp", destino)
+	if err != nil {
+		cliente.Close()
+		return
+	}
+	defer cliente.Close()
+	defer servidor.Close()
+
+	// La vuelta no se guarda: lo que se mide es lo que ESCRIBE el publisher.
+	go io.Copy(cliente, servidor)
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := cliente.Read(buf)
+		if n > 0 {
+			e.mu.Lock()
+			e.buf = append(e.buf, buf[:n]...)
+			e.mu.Unlock()
+			if _, werr := servidor.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// visto devuelve una copia de lo que el publisher lleva escrito.
+func (e *espia) visto() []byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]byte(nil), e.buf...)
+}
+
+// TestFirstVideoGoesOutWithTheNegotiatedChunkSize fija que el primer vídeo sale ya
+// troceado al tamaño negociado con CreateStream, sin ningún `WriteSetChunkSize` extra
+// detrás del publish.
+//
+// Ese WriteSetChunkSize existió mientras el tamaño lo aplicaba quien ENCOLABA el
+// SetChunkSize: no se podía confiar en cuándo entraba en vigor. Desde el parche 4 de
+// third_party/go-rtmp lo aplica la goroutine escritora justo después de poner el
+// SetChunkSize en el hilo, así que el de CreateStream basta y el segundo era un mensaje
+// repetido con el mismo valor. Esto es lo que lo comprueba en vez de suponerlo.
+//
+// Cómo se mide: el payload es más largo que los 128 bytes por defecto de RTMP y más corto
+// que los 4096 que se negocian. Con el tamaño bueno el mensaje sale en UN chunk y sus
+// bytes van seguidos en el cable; con 128 irían partidos, con una cabecera de continuación
+// (fmt 3, chunk stream 5 → 0xC5) cada 128 bytes, y la comparación byte a byte falla.
+func TestFirstVideoGoesOutWithTheNegotiatedChunkSize(t *testing.T) {
+	rec := &recorder{}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ing := NewIngest(IngestConfig{Addr: ln.Addr().String(), Handler: rec})
+	go ing.Serve(ln)
+	defer ing.Close()
+	esperaAceptando(t, ln.Addr().String())
+
+	esp := nuevoEspia(t, ln.Addr().String())
+
+	p, err := NewPublisher(PublisherConfig{
+		URL:       "rtmp://" + esp.addr + "/live",
+		StreamKey: crypto.Secret("clave"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	defer p.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Un tag de vídeo AVC válido (keyframe, NALU) con relleno detrás: la ingesta lo acepta
+	// y el contenido, al ser distinto en cada byte, no puede confundirse con una cabecera.
+	payload := make([]byte, 3000)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	copy(payload, []byte{0x17, 0x01, 0x00, 0x00, 0x00})
+
+	if err := p.WriteVideo(0, payload); err != nil {
+		t.Fatalf("WriteVideo: %v", err)
+	}
+
+	// La cabecera del chunk: fmt 0 + chunk stream 5 (vídeo), timestamp 0, longitud del
+	// mensaje en 3 bytes y tipo 9 (vídeo). Los 4 bytes del message stream id que siguen no
+	// se comparan: el id lo decide CreateStream.
+	const cabLen = 12
+	cabecera := []byte{
+		0x05,
+		0x00, 0x00, 0x00,
+		byte(len(payload) >> 16), byte(len(payload) >> 8), byte(len(payload)),
+		0x09,
+	}
+
+	// La escritura es asíncrona: la saca la goroutine planificadora de go-rtmp.
+	limite := time.Now().Add(5 * time.Second)
+	for {
+		b := esp.visto()
+		if i := bytes.Index(b, cabecera); i >= 0 && len(b) >= i+cabLen+len(payload) {
+			cuerpo := b[i+cabLen : i+cabLen+len(payload)]
+			if !bytes.Equal(cuerpo, payload) {
+				corte := bytes.IndexByte(cuerpo, 0xC5)
+				t.Fatalf("el primer vídeo salió troceado: los %d bytes tras la cabecera no son el payload "+
+					"(primer 0xC5 en el byte %d, con chunk de %d no debería haber ninguno)",
+					len(payload), corte, DefaultChunkSize)
+			}
+			return
+		}
+		if !time.Now().Before(limite) {
+			t.Fatalf("el vídeo no salió al cable en 5 s (%d bytes escritos)", len(b))
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
