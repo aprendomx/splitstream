@@ -14,6 +14,20 @@ issues:
   max-same-issues: 0
   uniq-by-line: false
 
+# gofmt no es un linter en el formato v2: va en su propia sección. Está aquí porque el
+# formato del código es la única regla del repo que nadie tiene que discutir en una
+# revisión, y porque hasta ahora no la vigilaba nada: `gofmt -l` señalaba dos archivos
+# —una tabla de perfiles y una lista de hashes con los comentarios alineados a mano— que
+# llevaban meses así sin que la CI dijera nada.
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    paths:
+      # Mismo motivo y mismo anclaje que el de linters.exclusions.paths: la copia de
+      # go-rtmp es código ajeno y sus parches se revisan a mano.
+      - ^third_party/
+
 linters:
   default: none
   enable:

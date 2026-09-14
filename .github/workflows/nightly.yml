@@ -71,7 +71,17 @@ jobs:
       - name: migrar desde la última release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: deploy/migrate-test.sh "$(gh release list --limit 1 --json tagName --jq '.[0].tagName')" ./splitstream
+        # Sin releases publicadas no hay nada desde donde migrar, y eso NO es un fallo: es
+        # el estado de un repo recién abierto o de un fork. Antes, el `$(…)` vacío llegaba
+        # al script como un argumento en blanco, el script salía con 2 y la nocturna se
+        # ponía roja todas las noches por algo que nadie puede arreglar.
+        run: |
+          ultima=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          if [ -z "$ultima" ]; then
+            echo "::warning::sin releases publicadas: no hay desde dónde migrar"
+            exit 0
+          fi
+          deploy/migrate-test.sh "$ultima" ./splitstream
 
   plataformas:
     name: humo contra plataformas reales

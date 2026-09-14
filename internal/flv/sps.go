@@ -152,13 +152,23 @@ func removeEmulationPrevention(b []byte) []byte {
 // interfaz mostraría como buena. Un parser que devuelve 42x12 sin error es peor que uno
 // que falla.
 func validProfileIDC(p uint) bool {
+	// La tabla va con el comentario ENCIMA de cada fila y no al final: alineados a la
+	// derecha, gofmt los recoloca según el largo de la fila más larga y la columna se
+	// descuadra sola en cuanto se toca una.
 	switch p {
-	case 66, 77, 88, // Baseline, Main, Extended
-		100, 110, 122, 244, // High, High 10, High 4:2:2, High 4:4:4 Predictive
-		44,                 // CAVLC 4:4:4 Intra
-		83, 86,             // Scalable Baseline, Scalable High
-		118, 128,           // Multiview High, Stereo High
-		138, 139, 134, 135: // MFC / 3D
+	case
+		// Baseline, Main, Extended
+		66, 77, 88,
+		// High, High 10, High 4:2:2, High 4:4:4 Predictive
+		100, 110, 122, 244,
+		// CAVLC 4:4:4 Intra
+		44,
+		// Scalable Baseline, Scalable High
+		83, 86,
+		// Multiview High, Stereo High
+		118, 128,
+		// MFC / 3D
+		138, 139, 134, 135:
 		return true
 	}
 	return false

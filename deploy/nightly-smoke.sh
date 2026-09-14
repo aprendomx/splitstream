@@ -87,14 +87,28 @@ trap limpiar EXIT
 
 # El log del binario puede acabar llevando la URL de un destino en el texto de un error, y
 # esa URL sale de la plataforma. Nada que venga de ahí se imprime sin pasar por aquí: se
-# tiran ENTERAS las líneas que contengan la clave, que es más simple y más seguro que
+# tiran ENTERAS las líneas que contengan una clave, que es más simple y más seguro que
 # intentar sustituirla con sed y acertar con el escapado.
 #
+# Son DOS claves, no una. La de la plataforma (STREAM_KEY) es la obvia. La de la ingesta
+# (INGEST_KEY) también: es la única que viaja en un argumento —la URL de salida de ffmpeg,
+# que ffmpeg solo acepta así—, con lo que sale en el log de ffmpeg en cuanto algo va mal, y
+# de ahí al mensaje de `fallo`. Es local y de usar y tirar, pero el log de un runner es
+# público y no hay motivo para publicarla.
+#
 # awk y no `grep -vF "$STREAM_KEY"`: el patrón de grep sería un argumento, y los argumentos
-# de cualquier proceso se leen desde fuera (`ps`, /proc/PID/cmdline). awk lee la clave del
-# entorno, que solo ve el propio proceso.
+# de cualquier proceso se leen desde fuera (`ps`, /proc/PID/cmdline). awk lee las claves del
+# entorno, que solo ve el propio proceso. Por eso INGEST_KEY se exporta al asignarla.
+#
+# La comprobación de vacío no sobra: `index($0, "")` vale 1, así que una variable sin poner
+# —INGEST_KEY antes de rotarla— tiraría TODAS las líneas y el log del fallo saldría en
+# blanco justo cuando hace falta.
 sin_clave() {
-  awk 'index($0, ENVIRON["STREAM_KEY"]) == 0' || true
+  awk '
+    ENVIRON["STREAM_KEY"] != "" && index($0, ENVIRON["STREAM_KEY"]) > 0 { next }
+    ENVIRON["INGEST_KEY"] != "" && index($0, ENVIRON["INGEST_KEY"]) > 0 { next }
+    { print }
+  ' || true
 }
 
 # Un puerto libre de verdad: se comprueba que nadie esté escuchando, en vez de confiar en
@@ -189,6 +203,9 @@ DEST_ID=$(api POST /api/destinations "$TMP/destino.json" | jq -r '.id') \
 # enmascarada, así que para publicar hay que pedir una nueva.
 INGEST_URL=$(api GET /api/ingest | jq -r '.url') || fallo "no se pudo leer la ingesta"
 echo '{}' >"$TMP/rotar.json"
+# `export`: sin él, `sin_clave` —que lee las claves de ENVIRON, no de sus argumentos— no
+# vería esta y la dejaría pasar al log.
+export INGEST_KEY
 INGEST_KEY=$(api POST /api/ingest/rotate-key "$TMP/rotar.json" | jq -r '.key') \
   || fallo "no se pudo rotar la clave de ingesta"
 [ -n "$INGEST_KEY" ] && [ "$INGEST_KEY" != "null" ] || fallo "la rotación no devolvió clave"
@@ -210,7 +227,7 @@ for vuelta in $(seq 1 "$VUELTAS"); do
   sleep "$INTERVALO"
   transcurrido=$(( vuelta * INTERVALO ))
 
-  kill -0 "$FFMPEG_PID" 2>/dev/null || fallo "ffmpeg murió a los ${transcurrido}s: $(tail -n 5 "$TMP/ffmpeg.log" | tr '\n' ' ')"
+  kill -0 "$FFMPEG_PID" 2>/dev/null || fallo "ffmpeg murió a los ${transcurrido}s: $(tail -n 5 "$TMP/ffmpeg.log" | sin_clave | tr '\n' ' ')"
   kill -0 "$SS_PID" 2>/dev/null || fallo "el binario murió a los ${transcurrido}s"
 
   # Las métricas son null mientras no hay sesión viva o el destino está apagado, y de ahí

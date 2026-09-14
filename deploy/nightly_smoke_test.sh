@@ -68,7 +68,9 @@ salida_de() { # STREAM_KEY-o-vacía argumentos…
 }
 
 ERR=$(mktemp)
-trap 'rm -f "$ERR"' EXIT
+FILTRO=$(mktemp)
+MUTANTE=$(mktemp)
+trap 'rm -f "$ERR" "$FILTRO" "$MUTANTE"' EXIT
 
 echo "== sin STREAM_KEY se niega con código 2"
 if salida_de "" twitch ./splitstream; then
@@ -100,6 +102,64 @@ if salida_de no-existe-esta-clave inventada ./splitstream; then
 else
   rc=$?
   [ "$rc" -eq 2 ] || { echo "FALLO: salió $rc y se esperaba 2" >&2; exit 1; }
+fi
+
+# `sin_clave` es el único filtro entre el log de un proceso y la salida pública del runner,
+# y es fácil creer que solo hay una clave que tapar. Hay dos: la de la plataforma
+# (STREAM_KEY) y la de la ingesta (INGEST_KEY), que viaja en la URL de salida de ffmpeg
+# —ffmpeg solo la acepta como argumento— y por eso aparece en su log en cuanto algo falla,
+# de donde el mensaje de `fallo` la sacaría con un `tail`.
+#
+# Esto se comprueba EJECUTANDO la función, no leyéndola: lo que importa es lo que deja
+# pasar, no cómo está escrita.
+echo "== sin_clave tapa las dos claves"
+
+# Extrae sin_clave() del humo indicado y la corre sobre tres líneas —una limpia y una con
+# cada clave—; imprime lo que sobrevive al filtro.
+correr_filtro() { # archivo-del-humo
+  sed -n '/^sin_clave() {/,/^}/p' "$1" >"$FILTRO"
+  STREAM_KEY=CLAVE-DE-PLATAFORMA INGEST_KEY=CLAVE-DE-INGESTA \
+    bash -c '. "$1"; printf "%s\n" \
+      "linea limpia" \
+      "destino rtmp://x/app/CLAVE-DE-PLATAFORMA" \
+      "ffmpeg: rtmp://127.0.0.1/live/CLAVE-DE-INGESTA" | sin_clave' bash "$FILTRO"
+}
+
+SOBREVIVE=$(correr_filtro "$HUMO")
+[ "$SOBREVIVE" = "linea limpia" ] || {
+  echo "FALLO: sin_clave dejó pasar una clave (o se comió una línea limpia). Sobrevivió:" >&2
+  printf '%s\n' "$SOBREVIVE" >&2
+  exit 1
+}
+
+# El mutante. Un humo igual pero con sin_clave filtrando solo STREAM_KEY —que es como
+# estaba— tiene que suspender la comprobación de arriba. Si la pasa, esa comprobación no
+# está comprobando nada y el día que alguien quite la línea nadie se entera.
+grep -v 'ENVIRON\["INGEST_KEY"\]' "$HUMO" >"$MUTANTE"
+MUTA=$(correr_filtro "$MUTANTE")
+if [ "$MUTA" = "linea limpia" ]; then
+  echo "FALLO: la comprobación no caza un sin_clave que se olvida de INGEST_KEY" >&2
+  exit 1
+fi
+
+# Y con las claves sin poner el filtro no puede comerse el log entero: `index($0, "")` vale
+# 1 en awk, así que un sin_clave sin la comprobación de vacío se convierte en `>/dev/null`
+# justo cuando `fallo` intenta enseñar por qué murió el binario.
+sed -n '/^sin_clave() {/,/^}/p' "$HUMO" >"$FILTRO"
+# shellcheck disable=SC2016  # el $1 es el posicional del `bash -c`, no una expansión de aquí
+VACIO=$(env -u STREAM_KEY -u INGEST_KEY \
+  bash -c '. "$1"; printf "%s\n" "linea limpia" | sin_clave' bash "$FILTRO")
+[ "$VACIO" = "linea limpia" ] || {
+  echo "FALLO: sin claves en el entorno, sin_clave se traga el log entero" >&2
+  exit 1
+}
+
+# El filtro no sirve de nada si el log de ffmpeg se imprime por un lado.
+echo "== el log de ffmpeg no se imprime sin filtrar"
+if grep -n 'ffmpeg\.log' "$HUMO" | grep -E 'tail|cat ' | grep -qv 'sin_clave'; then
+  echo "FALLO: hay un volcado del log de ffmpeg que no pasa por sin_clave" >&2
+  grep -n 'ffmpeg\.log' "$HUMO" | grep -E 'tail|cat ' | grep -v 'sin_clave' >&2
+  exit 1
 fi
 
 echo "nightly_smoke_test: ok"
