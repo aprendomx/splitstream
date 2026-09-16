@@ -8,6 +8,7 @@ import { usePanel } from '@/stores/panel'
 import { porId } from '@/plataformas'
 import { t, formatearNumero } from '@/i18n'
 import DialogoWebhook from '@/components/DialogoWebhook.vue'
+import ChipEstado from '@/components/ChipEstado.vue'
 
 // Ajustes que no caben en el panel principal: avisos por webhook y respaldo. En la v0.9
 // gana la grabación.
@@ -192,132 +193,195 @@ const estadoEntrega = (w) => {
   if (w.last_status >= 200 && w.last_status < 300) return { texto: t('ajustes.ultimo_envio_ok', { status: w.last_status }), color: 'positive' }
   return { texto: t('ajustes.envio_fallo', { status: w.last_status }), color: 'negative' }
 }
+// El tono del chip de estado de entrega sale del color que ya calculaba estadoEntrega: solo
+// se traduce a la paleta de ChipEstado (spec §3.4, estado nunca solo por color).
+const TONO_ENTREGA = { negative: 'fallo', positive: 'emitiendo', 'grey-6': 'neutro' }
+const tonoEntrega = (w) => TONO_ENTREGA[estadoEntrega(w).color] ?? 'neutro'
+
+// Índice de secciones: pestañas que no navegan, solo desplazan hasta la sección
+// correspondiente. Sin IntersectionObserver —la pestaña activa se marca al elegirla, que es
+// la alternativa que deja abierta el propio spec cuando el observer complica más de lo que
+// resuelve.
+const reducido = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+const seccionActiva = ref('avisos')
+const secciones = computed(() => [
+  { id: 'avisos', label: t('ajustes.avisos_titulo') },
+  { id: 'cuentas', label: t('ajustes.cuentas_titulo') },
+  { id: 'grabacion', label: t('ajustes.grabacion_titulo') },
+  { id: 'respaldo', label: t('ajustes.respaldo_titulo') },
+])
+function irASeccion(id) {
+  document.getElementById(id)?.scrollIntoView({ behavior: reducido ? 'auto' : 'smooth', block: 'start' })
+}
 </script>
 
 <template>
   <q-page class="q-pa-md q-pb-xl ajustes">
-    <div class="contenido">
-      <div class="row items-center q-mb-sm">
-        <div class="text-h6">{{ t('ajustes.avisos_titulo') }}</div>
-        <q-space />
-        <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('dialogo_webhook.nuevo_aviso')" @click="abrirAlta" />
-      </div>
-      <p class="text-body2 text-grey-5">
-        {{ t('ajustes.avisos_explicacion') }}
-      </p>
+    <div class="pagina">
+      <div class="ss-t-22">{{ t('app.ajustes') }}</div>
 
-      <q-card v-if="!webhooks.length" flat bordered class="q-pa-lg text-center">
-        <q-icon :name="iWebhook" size="36px" class="text-grey-7" />
-        <div class="text-body2 text-grey-5 q-mt-sm">{{ t('ajustes.sin_avisos') }}</div>
-      </q-card>
+      <q-tabs
+        v-model="seccionActiva"
+        dense no-caps
+        active-color="primary" indicator-color="primary"
+        class="indice-secciones"
+        :aria-label="t('ajustes.indice')"
+        @update:model-value="irASeccion"
+      >
+        <q-tab v-for="s in secciones" :key="s.id" :name="s.id" :label="s.label" />
+      </q-tabs>
 
-      <q-list v-else bordered separator class="rounded-borders">
-        <q-item v-for="w in webhooks" :key="w.id">
-          <q-item-section>
-            <q-item-label>{{ w.name }} <q-badge outline color="grey-6" :label="w.format" class="q-ml-xs" /></q-item-label>
-            <q-item-label caption class="ellipsis">{{ w.url }}</q-item-label>
-            <q-item-label caption :class="`text-${estadoEntrega(w).color}`">{{ estadoEntrega(w).texto }}</q-item-label>
-          </q-item-section>
-          <q-item-section side>
-            <div class="row items-center no-wrap q-gutter-xs">
-              <q-btn flat dense no-caps size="sm" :icon="iProbar" :label="t('destino.probar')" :loading="probando === w.id" @click="probar(w)" />
-              <q-toggle :model-value="w.enabled" dense @update:model-value="alternar(w)" :aria-label="`${w.enabled ? t('ajustes.desactivar') : t('ajustes.activar')} ${w.name}`" />
-              <q-btn flat round dense :icon="iEditar" size="sm" :aria-label="t('comun.editar')" @click="abrirEdicion(w)" />
-              <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" :aria-label="t('comun.eliminar')" @click="borrar(w)" />
+      <section id="avisos">
+        <div class="row items-center titulo-seccion">
+          <div class="ss-t-18">{{ t('ajustes.avisos_titulo') }}</div>
+          <q-space />
+          <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('dialogo_webhook.nuevo_aviso')" @click="abrirAlta" />
+        </div>
+        <p class="ss-t-14 ss-muted">
+          {{ t('ajustes.avisos_explicacion') }}
+        </p>
+
+        <q-card v-if="!webhooks.length" flat bordered class="vacio">
+          <q-icon :name="iWebhook" size="32px" class="ss-muted" aria-hidden="true" />
+          <div class="ss-t-16">{{ t('ajustes.avisos_titulo') }}</div>
+          <div class="ss-t-14 ss-muted">{{ t('ajustes.sin_avisos') }}</div>
+          <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('dialogo_webhook.nuevo_aviso')" @click="abrirAlta" />
+        </q-card>
+
+        <q-list v-else bordered separator class="lista">
+          <q-item v-for="w in webhooks" :key="w.id">
+            <q-item-section>
+              <q-item-label>{{ w.name }} <q-badge outline color="grey-6" :label="w.format" class="q-ml-xs" /></q-item-label>
+              <q-item-label caption class="ellipsis ss-t-14 ss-muted">{{ w.url }}</q-item-label>
+              <ChipEstado tam="sm" :tono="tonoEntrega(w)" :texto="estadoEntrega(w).texto" class="q-mt-xs" />
+            </q-item-section>
+            <q-item-section side>
+              <div class="row items-center no-wrap q-gutter-sm acciones-fila">
+                <q-btn flat dense no-caps size="sm" :icon="iProbar" :label="t('destino.probar')" :loading="probando === w.id" class="btn-touch" @click="probar(w)" />
+                <q-toggle :model-value="w.enabled" dense @update:model-value="alternar(w)" :aria-label="`${w.enabled ? t('ajustes.desactivar') : t('ajustes.activar')} ${w.name}`" />
+                <q-btn flat round dense :icon="iEditar" size="sm" class="btn-touch" :aria-label="t('comun.editar')" @click="abrirEdicion(w)" />
+                <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative btn-touch" :aria-label="t('comun.eliminar')" @click="borrar(w)" />
+              </div>
+            </q-item-section>
+          </q-item>
+        </q-list>
+      </section>
+
+      <section id="cuentas">
+        <div class="row items-center titulo-seccion">
+          <div class="ss-t-18">{{ t('ajustes.cuentas_titulo') }}</div>
+        </div>
+        <p class="ss-t-14 ss-muted">
+          {{ t('ajustes.cuentas_explicacion') }}
+        </p>
+        <p class="ss-t-14 ss-muted">{{ t('ajustes.idioma_nota') }}</p>
+
+        <q-card v-if="!cuentas.length" flat bordered class="vacio">
+          <q-icon :name="iCuenta" size="32px" class="ss-muted" aria-hidden="true" />
+          <div class="ss-t-16">{{ t('ajustes.cuentas_titulo') }}</div>
+          <div class="ss-t-14 ss-muted">{{ t('ajustes.sin_cuentas') }}</div>
+          <q-btn outline no-caps :label="t('panel.vincular_canal')" :to="{ name: 'panel' }" />
+        </q-card>
+
+        <q-list v-else bordered separator class="lista">
+          <q-item v-for="c in cuentas" :key="c.id">
+            <q-item-section avatar>
+              <q-icon :name="porId(c.platform).icono" size="24px" :style="{ color: porId(c.platform).color }" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label>
+                {{ c.display_name }}
+                <ChipEstado v-if="c.status === 'reauth'" tam="sm" tono="atencion" :texto="t('ajustes.reconectar_badge')" class="q-ml-xs" />
+                <q-badge v-if="c.own_app" outline color="grey-6" :label="t('ajustes.app_propia_badge')" class="q-ml-xs" />
+              </q-item-label>
+              <q-item-label caption class="ss-t-14 ss-muted">
+                <template v-if="c.destinations.length">
+                  {{ t('ajustes.vinculada_a', { nombres: nombresDestinos(c).join(', ') }) }}
+                </template>
+                <template v-else>{{ t('ajustes.sin_destinos_vinculados') }}</template>
+                <template v-if="c.quota_used_today != null"> · {{ t('ajustes.unidades_hoy', { n: formatearNumero(c.quota_used_today) }) }}</template>
+              </q-item-label>
+              <q-item-label v-if="c.status === 'reauth'" caption class="ss-t-14 text-warning">
+                {{ t('ajustes.necesita_reconectar') }}
+                <q-btn flat dense no-caps size="sm" :label="t('ajustes.ir_al_panel')" :to="{ name: 'panel' }" class="q-ml-xs btn-touch" />
+              </q-item-label>
+            </q-item-section>
+            <q-item-section side>
+              <q-btn flat dense no-caps size="sm" :icon="iBorrar" :label="t('ajustes.desconectar')" class="text-negative btn-touch"
+                     @click="desconectar(c)" />
+            </q-item-section>
+          </q-item>
+        </q-list>
+      </section>
+
+      <section id="grabacion">
+        <div class="row items-center titulo-seccion">
+          <div class="ss-t-18">{{ t('ajustes.grabacion_titulo') }}</div>
+        </div>
+        <q-card flat bordered>
+          <q-card-section v-if="grabacion" class="q-gutter-y-md">
+            <p class="ss-t-14 ss-muted q-mb-none">
+              {{ t('ajustes.grabacion_explicacion') }}
+            </p>
+            <q-toggle
+              :model-value="grabacion.enabled" :label="t('ajustes.grabar_emisiones')"
+              :disable="guardandoGrab" @update:model-value="alternarGrabacion"
+            />
+            <div class="row q-col-gutter-md">
+              <q-input v-model.number="formGrab.segment_min" type="number" min="0" max="240" outlined dense
+                       :label="t('ajustes.minutos_por_segmento')" :hint="t('ajustes.minutos_hint')" class="col-12 col-sm-4" />
+              <q-input v-model.number="formGrab.max_gb" type="number" min="0.1" step="0.5" outlined dense
+                       :label="t('ajustes.tope_gb')" :hint="t('ajustes.tope_gb_hint')" class="col-12 col-sm-4" />
+              <q-input v-model.number="formGrab.keep_days" type="number" min="0" outlined dense
+                       :label="t('ajustes.dias_retencion')" :hint="t('ajustes.dias_retencion_hint')" class="col-12 col-sm-4" />
             </div>
-          </q-item-section>
-        </q-item>
-      </q-list>
+            <div class="row items-center q-gutter-sm">
+              <q-btn unelevated no-caps color="primary" :label="t('comun.guardar')" :loading="guardandoGrab" @click="guardarGrabacion" />
+              <q-btn flat no-caps :icon="iGrabaciones" :label="t('ajustes.ver_grabaciones')" :to="{ name: 'grabaciones' }" />
+            </div>
+            <div class="ss-t-14 ss-muted">
+              <q-icon :name="iDisco" size="14px" class="q-mr-xs" />{{ usoGrabacion }}
+              <br />{{ t('ajustes.carpeta') }} <span class="ss-mono ss-t-14">{{ grabacion.dir }}</span>
+            </div>
+          </q-card-section>
+        </q-card>
+      </section>
 
-      <div class="text-h6 q-mt-xl q-mb-sm">{{ t('ajustes.cuentas_titulo') }}</div>
-      <p class="text-body2 text-grey-5">
-        {{ t('ajustes.cuentas_explicacion') }}
-      </p>
-      <p class="text-caption text-grey-6">{{ t('ajustes.idioma_nota') }}</p>
-
-      <q-card v-if="!cuentas.length" flat bordered class="q-pa-lg text-center">
-        <q-icon :name="iCuenta" size="36px" class="text-grey-7" />
-        <div class="text-body2 text-grey-5 q-mt-sm">{{ t('ajustes.sin_cuentas') }}</div>
-      </q-card>
-
-      <q-list v-else bordered separator class="rounded-borders">
-        <q-item v-for="c in cuentas" :key="c.id">
-          <q-item-section avatar>
-            <q-icon :name="porId(c.platform).icono" size="24px" :style="{ color: porId(c.platform).color }" />
-          </q-item-section>
-          <q-item-section>
-            <q-item-label>
-              {{ c.display_name }}
-              <q-badge v-if="c.status === 'reauth'" color="warning" text-color="black" :label="t('ajustes.reconectar_badge')" class="q-ml-xs" />
-              <q-badge v-if="c.own_app" outline color="grey-6" :label="t('ajustes.app_propia_badge')" class="q-ml-xs" />
-            </q-item-label>
-            <q-item-label caption>
-              <template v-if="c.destinations.length">
-                {{ t('ajustes.vinculada_a', { nombres: nombresDestinos(c).join(', ') }) }}
-              </template>
-              <template v-else>{{ t('ajustes.sin_destinos_vinculados') }}</template>
-              <template v-if="c.quota_used_today != null"> · {{ t('ajustes.unidades_hoy', { n: formatearNumero(c.quota_used_today) }) }}</template>
-            </q-item-label>
-            <q-item-label v-if="c.status === 'reauth'" caption class="text-warning">
-              {{ t('ajustes.necesita_reconectar') }}
-              <q-btn flat dense no-caps size="sm" :label="t('ajustes.ir_al_panel')" :to="{ name: 'panel' }" class="q-ml-xs" />
-            </q-item-label>
-          </q-item-section>
-          <q-item-section side>
-            <q-btn flat dense no-caps size="sm" :icon="iBorrar" :label="t('ajustes.desconectar')" class="text-negative"
-                   @click="desconectar(c)" />
-          </q-item-section>
-        </q-item>
-      </q-list>
-
-      <div class="text-h6 q-mt-xl q-mb-sm">{{ t('ajustes.grabacion_titulo') }}</div>
-      <q-card flat bordered>
-        <q-card-section v-if="grabacion" class="q-gutter-y-md">
-          <p class="text-body2 text-grey-5 q-mb-none">
-            {{ t('ajustes.grabacion_explicacion') }}
-          </p>
-          <q-toggle
-            :model-value="grabacion.enabled" :label="t('ajustes.grabar_emisiones')"
-            :disable="guardandoGrab" @update:model-value="alternarGrabacion"
-          />
-          <div class="row q-col-gutter-md">
-            <q-input v-model.number="formGrab.segment_min" type="number" min="0" max="240" outlined dense
-                     :label="t('ajustes.minutos_por_segmento')" :hint="t('ajustes.minutos_hint')" class="col-12 col-sm-4" />
-            <q-input v-model.number="formGrab.max_gb" type="number" min="0.1" step="0.5" outlined dense
-                     :label="t('ajustes.tope_gb')" :hint="t('ajustes.tope_gb_hint')" class="col-12 col-sm-4" />
-            <q-input v-model.number="formGrab.keep_days" type="number" min="0" outlined dense
-                     :label="t('ajustes.dias_retencion')" :hint="t('ajustes.dias_retencion_hint')" class="col-12 col-sm-4" />
-          </div>
-          <div class="row items-center q-gutter-sm">
-            <q-btn unelevated no-caps color="primary" :label="t('comun.guardar')" :loading="guardandoGrab" @click="guardarGrabacion" />
-            <q-btn flat no-caps :icon="iGrabaciones" :label="t('ajustes.ver_grabaciones')" :to="{ name: 'grabaciones' }" />
-          </div>
-          <div class="text-caption text-grey-5">
-            <q-icon :name="iDisco" size="14px" class="q-mr-xs" />{{ usoGrabacion }}
-            <br />{{ t('ajustes.carpeta') }} <span class="mono">{{ grabacion.dir }}</span>
-          </div>
-        </q-card-section>
-      </q-card>
-
-      <div class="text-h6 q-mt-xl q-mb-sm">{{ t('ajustes.respaldo_titulo') }}</div>
-      <q-card flat bordered>
-        <q-card-section>
-          <p class="text-body2 text-grey-5 q-mb-md">
-            {{ t('ajustes.respaldo_p1_pre') }} <b>{{ t('ajustes.respaldo_p1_bold') }}</b>{{ t('ajustes.respaldo_p1_post') }}
-          </p>
-          <p class="text-body2 text-grey-5 q-mb-md">
-            {{ t('ajustes.respaldo_p2') }}
-          </p>
-          <q-btn unelevated no-caps color="primary" :icon="iDescargar" :label="t('ajustes.descargar_respaldo')"
-                 :loading="respaldando" @click="respaldar" />
-        </q-card-section>
-      </q-card>
+      <section id="respaldo">
+        <div class="row items-center titulo-seccion">
+          <div class="ss-t-18">{{ t('ajustes.respaldo_titulo') }}</div>
+        </div>
+        <q-card flat bordered>
+          <q-card-section>
+            <p class="ss-t-14 ss-muted q-mb-md">
+              {{ t('ajustes.respaldo_p1_pre') }} <b>{{ t('ajustes.respaldo_p1_bold') }}</b>{{ t('ajustes.respaldo_p1_post') }}
+            </p>
+            <p class="ss-t-14 ss-muted q-mb-md">
+              {{ t('ajustes.respaldo_p2') }}
+            </p>
+            <q-btn unelevated no-caps color="primary" :icon="iDescargar" :label="t('ajustes.descargar_respaldo')"
+                   :loading="respaldando" @click="respaldar" />
+          </q-card-section>
+        </q-card>
+      </section>
     </div>
     <DialogoWebhook v-model="dialogo" :webhook="editando" @guardado="cargar" />
   </q-page>
 </template>
 
 <style scoped>
-.contenido { max-width: 760px; margin: 0 auto; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.pagina { max-width: 960px; margin: 0 auto; padding: var(--ss-space-5) var(--ss-space-4); }
+.indice-secciones { margin: var(--ss-space-4) 0; border-bottom: 1px solid var(--ss-border); }
+.indice-secciones :deep(.q-tab) { min-height: 44px; }
+.titulo-seccion { margin-top: var(--ss-space-6); margin-bottom: var(--ss-space-2); }
+.lista :deep(.q-item) { min-height: 56px; }
+.vacio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ss-space-2);
+  padding: var(--ss-space-6) var(--ss-space-4);
+  text-align: center;
+}
+.acciones-fila .btn-touch { min-height: 44px; min-width: 44px; }
 </style>
