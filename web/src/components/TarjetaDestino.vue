@@ -1,10 +1,11 @@
 <script setup>
-import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar, iProbar, iCuenta, iAlAire, iTerminar, iAbrir } from '@/iconos'
-import { computed } from 'vue'
+import { iEditar, iBorrar, iClave, iMenu, iConsejo, iArrastrar, iRotar, iProbar, iCuenta, iAlAire, iTerminar, iAbrir, iDesplegarSeccion } from '@/iconos'
+import { computed, ref, watch } from 'vue'
 import { porId } from '@/plataformas'
 import { api } from '@/api'
-import { diagnosticar, TONOS, bitrateLegible, bytesLegibles } from '@/diagnostico'
+import { diagnosticar, TONOS, bitrateLegible } from '@/diagnostico'
 import { t, formatearNumero } from '@/i18n'
+import ChipEstado from '@/components/ChipEstado.vue'
 
 const props = defineProps({
   destino: { type: Object, required: true },
@@ -20,6 +21,24 @@ const suspendido = computed(() => m.value?.state === 'suspended')
 const conCifras = computed(() => m.value && props.haySesion && props.destino.enabled)
 const logo = computed(() => (props.destino.logo_etag ? api.urlLogo(props.destino) : null))
 const conProveedor = computed(() => Object.values(props.destino.capabilities ?? {}).some(Boolean))
+
+// El pie «Detalles» empieza cerrado y recuerda su estado por destino: quien ya comprobó la
+// URL y la clave una vez no quiere volver a abrirlo cada vez que recarga el panel.
+const claveDetalles = `splitstream.detalles.${props.destino.id}`
+function leerDetallesAbiertos() {
+  try {
+    return localStorage.getItem(claveDetalles) === '1'
+  } catch {
+    return false
+  }
+}
+const detallesAbiertos = ref(leerDetallesAbiertos())
+watch(detallesAbiertos, (abierto) => {
+  try {
+    localStorage.setItem(claveDetalles, abierto ? '1' : '0')
+  } catch { /* sin localStorage, el pie vuelve a cerrado cada vez; no es grave */ }
+})
+const etiquetaDetalles = computed(() => t(detallesAbiertos.value ? 'destino.ocultar_detalles' : 'destino.detalles'))
 </script>
 
 <template>
@@ -29,7 +48,8 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
       <q-icon
         :name="iArrastrar"
         size="20px"
-        class="arrastre text-grey-7"
+        class="arrastre"
+        tabindex="0"
         :aria-label="t('destino.reordenar', { nombre: destino.name })"
       />
       <!-- Con logo, la imagen identifica el canal y la plataforma baja a sello: se gana
@@ -39,7 +59,7 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
         <q-icon :name="plat.icono" size="12px" :style="{ color: plat.color }" class="sello" />
       </div>
       <q-icon v-else :name="plat.icono" size="22px" :style="{ color: plat.color }" class="q-mr-sm" />
-      <div class="col nombre ellipsis">{{ destino.name }}</div>
+      <div class="col nombre ss-t-18 ellipsis">{{ destino.name }}</div>
       <q-toggle
         :model-value="destino.enabled"
         dense
@@ -77,28 +97,27 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
       </q-btn>
     </div>
 
-    <!-- Estado: con icono y texto, nunca solo color. -->
-    <div class="row items-center q-gutter-xs q-px-md">
-      <q-chip dense square :color="tono.color" text-color="white" :icon="tono.icono" size="sm"
-              class="q-ml-none">
-        {{ t(diag.tituloKey) }}
-      </q-chip>
-      <span v-if="conCifras" class="bitrate">{{ bitrateLegible(m.bitrate_bps) }}</span>
+    <!-- Fila de estado: con icono y texto, nunca solo color. -->
+    <div class="row items-center q-gutter-xs q-px-md q-pb-xs">
+      <ChipEstado :tono="diag.tono" :texto="t(diag.tituloKey)" />
+    </div>
+    <div v-if="destino.account || conProveedor" class="row items-center q-gutter-xs q-px-md q-pb-xs">
+      <span v-if="destino.account" :title="destino.account.status === 'reauth' ? t('destino.cuenta_reconectar') : t('destino.cuenta_conectada')">
+        <ChipEstado
+          tam="sm"
+          :tono="destino.account.status === 'reauth' ? 'atencion' : 'neutro'"
+          :icono="iCuenta"
+          :texto="destino.account.display_name"
+        />
+      </span>
+      <span v-else-if="conProveedor" class="ss-t-12 ss-subtle">{{ t('destino.sin_cuenta') }}</span>
     </div>
 
-    <div v-if="destino.account || conProveedor" class="row items-center q-gutter-xs q-px-md q-pt-xs">
-      <q-chip v-if="destino.account" dense square size="sm" :icon="iCuenta"
-              :color="destino.account.status === 'reauth' ? 'warning' : 'grey-8'" text-color="white">
-        {{ destino.account.display_name }}
-        <q-tooltip>{{ destino.account.status === 'reauth' ? t('destino.cuenta_reconectar') : t('destino.cuenta_conectada') }}</q-tooltip>
-      </q-chip>
-      <q-chip v-else-if="conProveedor" dense square size="sm" color="grey-9" text-color="grey-5">{{ t('destino.sin_cuenta') }}</q-chip>
-    </div>
-
-    <div v-if="diag.detalleKey" class="detalle q-px-md q-pt-xs" :class="`text-${tono.color}`">
+    <!-- Diagnóstico: lo que falla y qué hacer con ello, si lo hay. -->
+    <div v-if="diag.detalleKey" class="ss-t-14 q-px-md q-pt-xs" :class="`text-${tono.color}`">
       {{ t(diag.detalleKey, diag.params) }}
     </div>
-    <div v-if="diag.consejoKey" class="consejo q-px-md q-pt-xs">
+    <div v-if="diag.consejoKey" class="consejo ss-t-14 ss-muted q-px-md q-pt-xs">
       <q-icon :name="iConsejo" size="14px" class="q-mr-xs" />{{ t(diag.consejoKey, diag.params) }}
     </div>
     <div v-if="suspendido" class="q-px-md q-pt-sm">
@@ -106,47 +125,66 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
              :label="t('destino.reintentar')" @click="$emit('reintentar')" />
     </div>
 
-    <!-- El detalle técnico va al final y en gris: importa cuando algo falla, no antes. -->
+    <!-- Cifras: solo mientras hay sesión y el destino está encendido, o son ceros mintiendo. -->
+    <div v-if="conCifras" class="cifras row q-gutter-x-md ss-t-14 ss-tabular q-px-md q-pt-sm">
+      <div class="cifra column">
+        <span class="ss-t-12 ss-subtle">{{ t('destino.bitrate_etiqueta') }}</span>
+        <span>{{ bitrateLegible(m.bitrate_bps) }}</span>
+      </div>
+      <div v-if="m.dropped_frames" class="cifra column">
+        <span class="ss-t-12 ss-subtle">{{ t('destino.descartes_etiqueta') }}</span>
+        <span>{{ formatearNumero(m.dropped_frames) }}</span>
+      </div>
+      <div v-if="m.reconnections" class="cifra column">
+        <span class="ss-t-12 ss-subtle">{{ t('destino.reconexiones_etiqueta') }}</span>
+        <span>{{ formatearNumero(m.reconnections) }}</span>
+      </div>
+    </div>
+
     <div class="col" />
-    <div class="pie q-px-md q-pb-sm q-pt-sm">
-      <div class="mono ellipsis" :title="destino.rtmp_url">{{ destino.rtmp_url }}</div>
-      <div class="row items-center justify-between q-mt-xs">
-        <span v-if="destino.key_from_api" class="mono">
-          {{ t('destino.clave_api') }}
-          <q-tooltip>{{ t('destino.clave_api_tooltip') }}</q-tooltip>
-        </span>
-        <span v-else class="mono">{{ t('destino.clave_mask', { mascara: destino.key_mask }) }}</span>
-        <span v-if="conCifras" class="cifras">
-          {{ bytesLegibles(m.bytes_sent) }}
-          <template v-if="m.dropped_frames">
-            · {{ t('destino.descartes', { n: formatearNumero(m.dropped_frames) }) }}
-          </template>
-          <template v-if="m.reconnections">
-            · {{ t('destino.reconexiones', { n: formatearNumero(m.reconnections) }) }}
-          </template>
-        </span>
+
+    <!-- Pie plegable: el detalle técnico importa poco salvo para copiar o depurar. -->
+    <q-expansion-item
+      v-model="detallesAbiertos"
+      dense
+      :expand-icon="iDesplegarSeccion"
+      :label="etiquetaDetalles"
+      header-class="pie-cabecera ss-t-14 ss-muted"
+      class="pie-plegable"
+    >
+      <div class="ss-mono ss-t-14 ss-muted q-px-md q-pb-sm">
+        <div class="ellipsis" :title="destino.rtmp_url">{{ destino.rtmp_url }}</div>
+        <div class="q-mt-xs">
+          <span v-if="destino.key_from_api">
+            {{ t('destino.clave_api') }}
+            <q-tooltip>{{ t('destino.clave_api_tooltip') }}</q-tooltip>
+          </span>
+          <span v-else>{{ t('destino.clave_mask', { mascara: destino.key_mask }) }}</span>
+        </div>
       </div>
-      <div v-if="destino.broadcast?.broadcast_ref" class="row items-center q-gutter-sm q-mt-xs">
-        <q-btn
-          v-if="destino.broadcast.status !== 'live'"
-          dense no-caps unelevated color="primary" size="sm"
-          :icon="iAlAire" :label="t('destino.salir_al_aire')" @click="$emit('alAire')"
-        />
-        <q-btn
-          v-else
-          dense no-caps unelevated color="negative" size="sm"
-          :icon="iTerminar" :label="t('destino.terminar')" @click="$emit('terminar')"
-        />
-        <a
-          v-if="destino.broadcast.watch_url"
-          :href="destino.broadcast.watch_url"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="enlace-ver text-caption row items-center no-wrap"
-        >
-          <q-icon :name="iAbrir" size="12px" class="q-mr-xs" />{{ t('destino.ver_en_youtube') }}
-        </a>
-      </div>
+    </q-expansion-item>
+
+    <!-- Acciones de emisión: fuera del plegable, siempre a la vista cuando aplican. -->
+    <div v-if="destino.broadcast?.broadcast_ref" class="acciones row items-center q-gutter-sm q-pa-md">
+      <q-btn
+        v-if="destino.broadcast.status !== 'live'"
+        unelevated no-caps color="primary" size="md"
+        :icon="iAlAire" :label="t('destino.salir_al_aire')" @click="$emit('alAire')"
+      />
+      <q-btn
+        v-else
+        unelevated no-caps color="negative" size="md"
+        :icon="iTerminar" :label="t('destino.terminar')" @click="$emit('terminar')"
+      />
+      <a
+        v-if="destino.broadcast.watch_url"
+        :href="destino.broadcast.watch_url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="enlace-ver ss-t-14 ss-muted row items-center no-wrap"
+      >
+        <q-icon :name="iAbrir" size="14px" class="q-mr-xs" />{{ t('destino.ver_en_youtube') }}
+      </a>
     </div>
   </q-card>
 </template>
@@ -154,13 +192,13 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
 <style scoped>
 .tarjeta-destino {
   border-left: 3px solid transparent;
-  transition: border-color 200ms ease;
+  transition: border-color var(--ss-motion) var(--ss-ease);
   height: 100%;
 }
-.tarjeta-destino.tono-emitiendo { border-left-color: var(--q-positive); }
-.tarjeta-destino.tono-atencion  { border-left-color: var(--q-warning); }
-.tarjeta-destino.tono-fallo     { border-left-color: var(--q-negative); }
-.tarjeta-destino.tono-trabajando{ border-left-color: var(--q-info); }
+.tarjeta-destino.tono-emitiendo { border-left-color: var(--ss-live); }
+.tarjeta-destino.tono-atencion  { border-left-color: var(--ss-warn); }
+.tarjeta-destino.tono-fallo     { border-left-color: var(--ss-danger); }
+.tarjeta-destino.tono-trabajando{ border-left-color: var(--ss-info); }
 
 .avatar {
   position: relative;
@@ -171,19 +209,19 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
 .avatar img {
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--ss-radius-sm);
   object-fit: cover;
   display: block;
-  /* El logo lo elige el usuario y puede ser casi blanco o casi negro: el borde tenue lo
-     separa del fondo de la tarjeta en los dos casos. */
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  /* El logo lo elige el usuario y puede ser casi blanco o casi negro: el fondo y el borde
+     tenue lo separan de la tarjeta en los dos casos. */
+  background: var(--ss-surface-2);
+  box-shadow: 0 0 0 1px var(--ss-border);
 }
 .avatar .sello {
   position: absolute;
   right: -3px;
   bottom: -3px;
-  background: var(--q-dark-page, #1d1d1d);
+  background: var(--ss-surface);
   border-radius: 50%;
   padding: 1px;
 }
@@ -193,43 +231,37 @@ const conProveedor = computed(() => Object.values(props.destino.capabilities ?? 
   gap: 2px;
 }
 .nombre {
-  font-size: 15px;
-  font-weight: 500;
+  color: var(--ss-fg);
 }
-.bitrate {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: rgba(255, 255, 255, 0.7);
+.consejo { line-height: 1.45; }
+.cifra { gap: 2px; }
+.pie-plegable {
+  border-top: 1px solid var(--ss-border);
+  margin-top: var(--ss-space-2);
+  background: transparent;
 }
-.detalle { font-size: 12px; line-height: 1.4; }
-.consejo {
-  font-size: 12px;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.62);
-}
-.pie {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  margin-top: 8px;
-}
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.5);
-}
-.cifras {
-  font-size: 11px;
-  /* Tabulares: se actualizan cada segundo y sin esto los números bailan. */
-  font-variant-numeric: tabular-nums;
-  color: rgba(255, 255, 255, 0.62);
+/* El encabezado del q-expansion-item es un nodo interno de Quasar: hace falta :deep()
+   para que el padding llegue a alinearlo con el resto de la tarjeta. */
+.pie-plegable :deep(.q-expansion-item__container .q-item) {
+  padding-left: var(--ss-space-4);
+  padding-right: var(--ss-space-4);
+  min-height: 44px;
 }
 .arrastre {
   cursor: grab;
   touch-action: none;
-  /* Área táctil por encima del icono, que es pequeño a propósito. */
-  padding: 10px 4px;
+  color: var(--ss-fg-subtle);
+  /* Área táctil por encima del icono, que es pequeño a propósito: 44 px de alto. */
+  padding: 12px 4px;
+}
+/* En puntero fino el asa se insinúa solo al pasar por la tarjeta; en táctil, sin hover
+   posible, se ve siempre. */
+@media (hover: hover) {
+  .arrastre { opacity: 0.35; }
+  .tarjeta-destino:hover .arrastre,
+  .tarjeta-destino:focus-within .arrastre { opacity: 1; }
 }
 .enlace-ver {
-  color: rgba(255, 255, 255, 0.7);
   text-decoration: none;
 }
 .enlace-ver:hover {
