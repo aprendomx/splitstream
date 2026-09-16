@@ -54,6 +54,7 @@ async function configurar() {
       no-caps
       dense
       unelevated
+      toggle-color="primary"
       :options="idiomas.map((l) => ({ label: l.nombre, value: l.id }))"
       :aria-label="t('app.idioma')"
     />
@@ -61,8 +62,8 @@ async function configurar() {
     <q-card flat bordered class="asistente">
       <q-card-section class="text-center q-pb-none">
         <q-icon :name="iBroadcast" size="40px" class="text-primary" />
-        <div class="text-h6 q-mt-sm">{{ t('asistente.bienvenida') }}</div>
-        <div class="text-body2 text-grey-5 q-mt-xs">
+        <div class="ss-t-22 q-mt-sm">{{ t('asistente.bienvenida') }}</div>
+        <div class="ss-t-14 ss-muted q-mt-xs">
           {{ t('asistente.subtitulo') }}
         </div>
       </q-card-section>
@@ -80,7 +81,6 @@ async function configurar() {
             :label="t('asistente.codigo_label')"
             placeholder="XXXX-XXXX-XXXX"
             outlined
-            dense
             autocapitalize="characters"
             autocorrect="off"
             spellcheck="false"
@@ -94,7 +94,6 @@ async function configurar() {
           :type="verPassword ? 'text' : 'password'"
           :hint="t('asistente.hint_contrasena')"
           outlined
-          dense
           autofocus
           autocomplete="new-password"
         >
@@ -115,7 +114,6 @@ async function configurar() {
           :error="noCoinciden"
           :error-message="t('asistente.no_coinciden')"
           outlined
-          dense
           autocomplete="new-password"
           @keyup.enter="puedeSeguir && configurar()"
         />
@@ -135,7 +133,7 @@ async function configurar() {
 
       <q-card-actions class="q-px-md q-pb-md">
         <q-btn
-          unelevated no-caps color="primary" class="full-width"
+          unelevated no-caps color="primary" class="full-width" size="md"
           :loading="guardando"
           :disable="!puedeSeguir"
           :label="t('asistente.empezar')"
@@ -147,7 +145,7 @@ async function configurar() {
 </template>
 
 <style scoped>
-.asistente-envoltorio { width: 400px; max-width: 100%; }
+.asistente-envoltorio { width: 480px; max-width: 100%; }
 .asistente { width: 100%; }
 .codigo :deep(input) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -45,6 +45,16 @@ const verClave = ref(false)
 const habilitado = ref(true)
 const guardando = ref(false)
 
+// Validación de campos obligatorios en el cliente: solo marca error al intentar guardar
+// (no en cada tecleo), y enfoca el primero inválido. No sustituye la validación del
+// backend, que sigue siendo la fuente de verdad para todo lo demás.
+const nombreRef = ref(null)
+const servidorRef = ref(null)
+const claveRef = ref(null)
+const errorNombre = ref(false)
+const errorServidor = ref(false)
+const errorClave = ref(false)
+
 // El logo elegido en el diálogo. Mientras no se guarda vive aquí, porque en el alta el
 // destino todavía no tiene id al que subirlo.
 const logoArchivo = ref(null)
@@ -156,6 +166,9 @@ watch(
     error.value = null
     guardando.value = false
     verClave.value = false
+    errorNombre.value = false
+    errorServidor.value = false
+    errorClave.value = false
     soltarPrevia()
     logoArchivo.value = null
     logoQuitado.value = false
@@ -236,7 +249,21 @@ function cerrar() {
   emit('update:modelValue', false)
 }
 
+/** Marca los campos obligatorios vacíos y enfoca el primero. true si todo está bien. */
+function validar() {
+  errorNombre.value = !nombre.value.trim()
+  errorServidor.value = necesitaServidor.value && !servidor.value.trim()
+  // Al crear, la clave hace falta ya (el alta la manda en el POST); al editar, vacía
+  // significa "no la toques".
+  errorClave.value = !editando.value && !clave.value.trim()
+  if (errorNombre.value) { nombreRef.value?.focus(); return false }
+  if (errorServidor.value) { servidorRef.value?.focus(); return false }
+  if (errorClave.value) { claveRef.value?.focus(); return false }
+  return true
+}
+
 async function guardar() {
+  if (!validar()) return
   guardando.value = true
   error.value = null
   try {
@@ -305,19 +332,21 @@ async function guardar() {
     transition-show="jump-up"
     transition-hide="jump-down"
   >
-    <q-card class="dialogo-destino column no-wrap">
-      <q-card-section class="row items-center q-pb-sm">
-        <div class="text-h6">
-          {{ editando ? t('dialogo_destino.editar_destino') : t('dialogo_destino.vincular_canal') }}
+    <q-card class="dialogo column no-wrap" style="width: 640px; max-width: 100vw">
+      <q-card-section class="row items-center no-wrap cabecera">
+        <div class="col">
+          <div class="ss-t-18">
+            {{ editando ? t('dialogo_destino.editar_destino') : t('dialogo_destino.vincular_canal') }}
+          </div>
+          <div class="ss-t-12 ss-subtle">{{ t('dialogo_destino.paso_de', { n: paso }) }}</div>
         </div>
-        <q-space />
-        <q-btn flat round dense :icon="iCerrar" :aria-label="t('comun.cerrar')" @click="cerrar" />
+        <q-btn flat round class="cerrar" :icon="iCerrar" v-close-popup size="md" :aria-label="t('comun.cerrar')" />
       </q-card-section>
 
       <!-- Paso 1: elegir plataforma. Precargar la URL evita la clase entera de error
            "URL mal escrita", que el usuario no debería llegar a ver nunca. -->
-      <q-card-section v-if="paso === 1" class="col scroll q-pt-none">
-        <p class="text-body2 text-grey-5 q-mb-md">
+      <q-card-section v-if="paso === 1" class="col scroll cuerpo">
+        <p class="ss-t-14 ss-muted">
           {{ t('dialogo_destino.elige_plataforma') }}
         </p>
         <div class="rejilla-plataformas">
@@ -325,17 +354,19 @@ async function guardar() {
             v-for="p in PLATAFORMAS"
             :key="p.id"
             class="tarjeta-plataforma"
+            :class="{ seleccionada: plataforma === p.id }"
             type="button"
+            :aria-pressed="plataforma === p.id"
             @click="elegir(p)"
           >
-            <q-icon :name="p.icono" size="28px" :style="{ color: p.color }" />
-            <span class="nombre">{{ nombreDe(p) }}</span>
+            <q-icon :name="p.icono" size="32px" :style="{ color: p.color }" />
+            <span class="nombre ss-t-14">{{ nombreDe(p) }}</span>
           </button>
         </div>
       </q-card-section>
 
       <!-- Paso 2: los datos. -->
-      <q-card-section v-else class="col scroll q-pt-none q-gutter-y-md">
+      <q-card-section v-else class="col scroll cuerpo">
         <div v-if="plat" class="row items-center q-gutter-sm cabecera-plataforma">
           <q-icon :name="plat.icono" size="24px" :style="{ color: plat.color }" />
           <div class="text-subtitle1">{{ nombreDe(plat) }}</div>
@@ -357,12 +388,15 @@ async function guardar() {
         </q-banner>
 
         <q-input
+          ref="nombreRef"
           v-model="nombre"
           :label="t('comun.nombre')"
           :hint="t('dialogo_destino.hint_nombre')"
+          :error="errorNombre"
+          :error-message="t('comun.campo_obligatorio')"
           outlined
-          dense
           maxlength="60"
+          @update:model-value="errorNombre = false"
         />
 
         <div class="row items-center q-gutter-md bloque-logo">
@@ -378,7 +412,6 @@ async function guardar() {
               :hint="t('dialogo_destino.hint_logo')"
               accept="image/png,image/jpeg"
               outlined
-              dense
               clearable
               :clear-icon="iCerrar"
               @clear="elegirLogo(null)"
@@ -396,7 +429,7 @@ async function guardar() {
         </div>
 
         <div v-if="plataformaConProveedor" class="bloque-cuenta q-gutter-y-sm">
-          <div class="text-caption text-grey-5">{{ t('dialogo_destino.cuenta_caption') }}</div>
+          <p class="ss-t-14 ss-muted">{{ t('dialogo_destino.cuenta_caption') }}</p>
           <div class="row items-center q-gutter-xs">
             <q-chip v-for="c in ['title','category','chat','ingest_key','schedule']" :key="c" dense square size="sm"
                     :color="capacidades?.[c] ? 'primary' : 'grey-8'" :text-color="capacidades?.[c] ? 'white' : 'grey-5'">
@@ -404,7 +437,7 @@ async function guardar() {
             </q-chip>
           </div>
           <q-select v-if="cuentas.length" v-model="cuentaId" :options="[{label: t('dialogo_destino.sin_cuenta_opcion'), value: null}, ...cuentas.map(c => ({label: c.display_name + (c.status === 'reauth' ? t('dialogo_destino.reconectar_sufijo') : ''), value: c.id}))]"
-                    emit-value map-options outlined dense :label="t('dialogo_destino.cuenta_vinculada_label')" :dropdown-icon="iDesplegar" />
+                    emit-value map-options outlined :label="t('dialogo_destino.cuenta_vinculada_label')" :dropdown-icon="iDesplegar" />
           <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="nombreDe(plat)"
                           :requiere-app="Boolean(capacidades?.requires_own_app)" @conectada="trasConectar" />
           <q-banner v-else dense class="bg-grey-9 text-grey-3 rounded-borders">
@@ -416,13 +449,13 @@ async function guardar() {
              mano. Sustituye por completo a servidor + clave mientras no se pida lo
              contrario. -->
         <div v-if="mostrarBloqueAPI" class="bloque-clave-api q-gutter-y-sm">
-          <div class="text-caption text-grey-5">{{ t('dialogo_destino.clave_api_caption') }}</div>
+          <p class="ss-t-14 ss-muted">{{ t('dialogo_destino.clave_api_caption') }}</p>
           <template v-if="plataforma === 'youtube'">
-            <q-input v-model="tituloEmision" :label="t('dialogo_destino.titulo_emision_label')" :placeholder="nombre" outlined dense maxlength="140" />
-            <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined dense :label="t('dialogo_destino.privacidad_label')" :dropdown-icon="iDesplegar" />
-            <q-input v-model="horaEmision" type="datetime-local" outlined dense :label="t('dialogo_destino.hora_label')" :hint="t('dialogo_destino.hora_hint')" />
+            <q-input v-model="tituloEmision" :label="t('dialogo_destino.titulo_emision_label')" :placeholder="nombre" outlined maxlength="140" />
+            <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined :label="t('dialogo_destino.privacidad_label')" :dropdown-icon="iDesplegar" />
+            <q-input v-model="horaEmision" type="datetime-local" outlined :label="t('dialogo_destino.hora_label')" :hint="t('dialogo_destino.hora_hint')" />
           </template>
-          <div v-if="!cuentaId" class="text-caption text-grey-6">{{ t('dialogo_destino.elige_cuenta_arriba') }}</div>
+          <p v-if="!cuentaId" class="ss-t-14 ss-muted">{{ t('dialogo_destino.elige_cuenta_arriba') }}</p>
           <q-btn
             unelevated
             no-caps
@@ -433,30 +466,36 @@ async function guardar() {
             :label="plataforma === 'youtube' ? t('dialogo_destino.crear_emision_youtube') : t('dialogo_destino.traer_clave_kick')"
             @click="crearConCuenta"
           />
-          <div><a href="#" class="text-caption" @click.prevent="claveManual = true">{{ t('dialogo_destino.pegar_clave_mano') }}</a></div>
+          <div>
+            <q-btn flat dense no-caps color="primary" class="ss-t-14 enlace" :label="t('dialogo_destino.pegar_clave_mano')" @click="claveManual = true" />
+          </div>
           <q-banner v-if="errorEmision" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">{{ errorEmision }}</q-banner>
         </div>
 
         <template v-else>
           <q-input
             v-if="necesitaServidor"
+            ref="servidorRef"
             v-model="servidor"
             :label="t('dialogo_destino.servidor_label')"
             placeholder="rtmp://…"
             :hint="hintDonde"
+            :error="errorServidor"
+            :error-message="t('comun.campo_obligatorio')"
             outlined
-            dense
             inputmode="url"
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
+            @update:model-value="errorServidor = false"
           />
           <div v-else class="servidor-fijo">
-            <div class="etiqueta">{{ t('dialogo_destino.servidor_label') }}</div>
-            <div class="valor">{{ servidor }}</div>
+            <div class="etiqueta ss-t-12 ss-muted">{{ t('dialogo_destino.servidor_label') }}</div>
+            <div class="valor ss-t-14 ss-mono ss-muted">{{ servidor }}</div>
           </div>
 
           <q-input
+            ref="claveRef"
             v-model="clave"
             :label="editando ? t('dialogo_destino.clave_nueva_label') : t('dialogo_destino.clave_retransmision_label')"
             :type="verClave ? 'text' : 'password'"
@@ -465,12 +504,14 @@ async function guardar() {
                 ? t('dialogo_destino.hint_clave_actual', { mascara: destino.key_mask })
                 : hintDonde
             "
+            :error="errorClave"
+            :error-message="t('comun.campo_obligatorio')"
             outlined
-            dense
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
             autocomplete="off"
+            @update:model-value="errorClave = false"
           >
             <template #append>
               <q-btn
@@ -487,16 +528,16 @@ async function guardar() {
           <!-- Alta: si esta plataforma da clave por API, un enlace vuelve al bloque de
                arriba en vez de pegarla a mano. -->
           <div v-if="usaClaveAPI && !editando">
-            <a href="#" class="text-caption" @click.prevent="claveManual = false">{{ t('dialogo_destino.traer_clave_api') }}</a>
+            <q-btn flat dense no-caps color="primary" class="ss-t-14 enlace" :label="t('dialogo_destino.traer_clave_api')" @click="claveManual = false" />
           </div>
 
           <!-- Edición: sobre un destino con cuenta y clave por API, releer la clave o abrir
                una emisión nueva sin tocar el resto del formulario. -->
           <div v-if="usaClaveAPI && editando" class="bloque-clave-api q-gutter-y-sm">
             <template v-if="plataforma === 'youtube'">
-              <q-input v-model="tituloEmision" :label="t('dialogo_destino.titulo_nueva_emision_label')" :placeholder="nombre" outlined dense maxlength="140" />
-              <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined dense :label="t('dialogo_destino.privacidad_label')" :dropdown-icon="iDesplegar" />
-              <q-input v-model="horaEmision" type="datetime-local" outlined dense :label="t('dialogo_destino.hora_label')" :hint="t('dialogo_destino.hora_hint')" />
+              <q-input v-model="tituloEmision" :label="t('dialogo_destino.titulo_nueva_emision_label')" :placeholder="nombre" outlined maxlength="140" />
+              <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined :label="t('dialogo_destino.privacidad_label')" :dropdown-icon="iDesplegar" />
+              <q-input v-model="horaEmision" type="datetime-local" outlined :label="t('dialogo_destino.hora_label')" :hint="t('dialogo_destino.hora_hint')" />
             </template>
             <q-btn
               flat
@@ -520,8 +561,9 @@ async function guardar() {
         </q-banner>
       </q-card-section>
 
-      <q-card-actions v-if="paso === 2" align="right" class="q-pa-md">
+      <q-card-actions v-if="paso === 2" class="pie">
         <q-btn flat no-caps :label="t('comun.cancelar')" @click="cerrar" />
+        <q-space />
         <!-- Con la clave por API, la petición sale del botón «Crear emisión…» de arriba:
              este cierra el diálogo por su cuenta, así que aquí no hace falta un «Vincular»
              que intentaría guardar sin clave. -->
@@ -540,51 +582,77 @@ async function guardar() {
 </template>
 
 <style scoped>
-.dialogo-destino {
-  width: 480px;
-  max-width: 100vw;
+.dialogo {
   max-height: 90vh;
+}
+.cabecera {
+  padding: var(--ss-space-4) var(--ss-space-5);
+  border-bottom: 1px solid var(--ss-border);
+  gap: var(--ss-space-3);
+}
+/* El botón cerrar cubre el objetivo táctil de 44px aunque el tamaño visual de Quasar
+   ("md") se quede un poco corto. */
+.cabecera .cerrar {
+  min-width: 44px;
+  min-height: 44px;
+}
+.cuerpo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ss-space-4);
+  padding: var(--ss-space-4) var(--ss-space-5);
+}
+.pie {
+  border-top: 1px solid var(--ss-border);
+  padding: var(--ss-space-3) var(--ss-space-5);
+}
+/* Enlaces secundarios convertidos en q-btn: el hueco visual es "dense", pero el
+   objetivo táctil se mantiene en 44px. */
+.enlace {
+  min-height: 44px;
 }
 .rejilla-plataformas {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--ss-space-3);
 }
 .tarjeta-plataforma {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  /* Muy por encima del mínimo táctil de 44px: se pulsa con el pulgar y a veces con prisa. */
-  min-height: 88px;
-  padding: 12px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  gap: var(--ss-space-2);
+  min-height: 96px;
+  padding: var(--ss-space-3) var(--ss-space-2);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-md);
+  background: var(--ss-surface);
   color: inherit;
   font: inherit;
   cursor: pointer;
-  transition: background-color 160ms ease, border-color 160ms ease;
+  transition: background-color var(--ss-motion) var(--ss-ease), border-color var(--ss-motion) var(--ss-ease);
 }
 .tarjeta-plataforma:hover {
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.24);
+  border-color: var(--ss-border-strong);
 }
-.tarjeta-plataforma:focus-visible {
-  outline: 2px solid var(--q-primary);
-  outline-offset: 2px;
+.tarjeta-plataforma.seleccionada {
+  border-color: var(--ss-primary);
+  background: color-mix(in srgb, var(--ss-primary) 12%, var(--ss-surface));
+}
+.tarjeta-plataforma .nombre {
+  text-align: center;
+  line-height: 1.2;
 }
 .previa-logo {
   width: 48px;
   height: 48px;
   flex: none;
-  border-radius: 8px;
+  border-radius: var(--ss-radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  background: var(--ss-surface);
+  box-shadow: 0 0 0 1px var(--ss-border);
   overflow: hidden;
 }
 .previa-logo img {
@@ -596,28 +664,31 @@ async function guardar() {
 .bloque-logo {
   flex-wrap: nowrap;
 }
-
-.tarjeta-plataforma .nombre {
-  font-size: 13px;
-  text-align: center;
-  line-height: 1.2;
-}
 .cabecera-plataforma {
-  padding-bottom: 4px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: var(--ss-space-1);
+  border-bottom: 1px solid var(--ss-border);
 }
 .servidor-fijo .etiqueta {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.55);
   margin-bottom: 2px;
 }
 .servidor-fijo .valor {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.75);
   word-break: break-all;
 }
 @media (prefers-reduced-motion: reduce) {
   .tarjeta-plataforma { transition: none; }
+}
+/* Maximizado (<600px, spec §3.4): pie apilado, el botón principal arriba. */
+@media (max-width: 599.98px) {
+  .pie {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: var(--ss-space-2);
+  }
+  .pie :deep(.q-btn) {
+    width: 100%;
+  }
+  .pie :deep(.q-space) {
+    display: none;
+  }
 }
 </style>

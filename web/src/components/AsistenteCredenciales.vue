@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { useQuasar } from 'quasar'
 import { usePanel } from '@/stores/panel'
-import { iCopiar, iVer, iOcultar, iAviso, iEditar, iOk } from '@/iconos'
+import { iCopiar, iVer, iOcultar, iAviso, iEditar, iOk, iFallo } from '@/iconos'
 import { t } from '@/i18n'
 
 // Guía paso a paso para crear la app propia que YouTube y Kick exigen (spec §3.3). Las
@@ -71,7 +71,7 @@ function continuar() {
 <template>
   <div class="asistente-credenciales q-gutter-y-md">
     <q-stepper v-model="paso" vertical flat bordered color="primary" animated class="rounded-borders"
-               :active-icon="iEditar" :done-icon="iOk">
+               :active-icon="iEditar" :done-icon="iOk" :error-icon="iFallo">
       <template v-if="plataforma === 'youtube'">
         <q-step :name="1" :title="t('asistente_credenciales.youtube.paso1.titulo')" :done="paso > 1">
           <p class="text-body2">
@@ -114,7 +114,7 @@ function continuar() {
             <template #avatar><q-icon :name="iAviso" color="warning" /></template>
             {{ t('asistente_credenciales.youtube.paso4.aviso_testing') }}
           </q-banner>
-          <p class="text-caption text-grey-5">
+          <p class="ss-t-14 ss-muted">
             {{ t('asistente_credenciales.guia_capturas') }}
             <a href="https://github.com/aprendomx/splitstream/blob/main/docs/youtube-credenciales.md" target="_blank" rel="noopener noreferrer">docs/youtube-credenciales.md</a>
           </p>
@@ -143,7 +143,7 @@ function continuar() {
             <b>{{ t('asistente_credenciales.kick.paso3.enfasis') }}</b>{{ t('asistente_credenciales.kick.paso3.texto_post') }}
           </p>
           <div class="row items-center no-wrap q-gutter-sm campo-copiable">
-            <div class="col campo-mono">{{ redirectUrl }}</div>
+            <div class="col campo-mono ss-t-14 ss-mono">{{ redirectUrl }}</div>
             <q-btn flat round dense :icon="iCopiar" :aria-label="t('asistente_credenciales.kick.paso3.copiar_url')" @click="copiar(redirectUrl)" />
           </div>
           <q-stepper-navigation>
@@ -157,7 +157,7 @@ function continuar() {
               {{ t('asistente_credenciales.kick.paso4.texto_url_publica') }}
             </p>
             <div class="row items-center no-wrap q-gutter-sm campo-copiable">
-              <div class="col campo-mono">{{ webhookUrl }}</div>
+              <div class="col campo-mono ss-t-14 ss-mono">{{ webhookUrl }}</div>
               <q-btn flat round dense :icon="iCopiar" :aria-label="t('asistente_credenciales.kick.paso4.copiar_webhook')" @click="copiar(webhookUrl)" />
             </div>
           </template>
@@ -170,7 +170,7 @@ function continuar() {
             <code>client_id</code> {{ t('asistente_credenciales.kick.paso4.texto_final_mid') }} <code>client_secret</code>
             {{ t('asistente_credenciales.kick.paso4.texto_final_post') }}
           </p>
-          <p class="text-caption text-grey-5">
+          <p class="ss-t-14 ss-muted">
             {{ t('asistente_credenciales.guia_capturas') }}
             <a href="https://github.com/aprendomx/splitstream/blob/main/docs/kick-credenciales.md" target="_blank" rel="noopener noreferrer">docs/kick-credenciales.md</a>
           </p>
@@ -179,7 +179,7 @@ function continuar() {
     </q-stepper>
 
     <div>
-      <a href="#" class="text-caption enlace-por-que" @click.prevent="porQue = !porQue">{{ t('asistente_credenciales.por_que_pregunta') }}</a>
+      <q-btn flat dense no-caps color="primary" class="ss-t-14 enlace" :label="t('asistente_credenciales.por_que_pregunta')" @click="porQue = !porQue" />
       <p v-if="porQue" class="text-body2 text-grey-5 q-mt-xs">
         <template v-if="plataforma === 'youtube'">
           {{ t('asistente_credenciales.por_que_youtube') }}
@@ -194,7 +194,6 @@ function continuar() {
       v-model="clientId"
       :label="t('asistente_credenciales.client_id')"
       outlined
-      dense
       autocapitalize="off"
       autocorrect="off"
       spellcheck="false"
@@ -205,7 +204,6 @@ function continuar() {
       :type="verSecreto ? 'text' : 'password'"
       :label="t('asistente_credenciales.client_secret')"
       outlined
-      dense
       autocapitalize="off"
       autocorrect="off"
       spellcheck="false"
@@ -230,9 +228,10 @@ function continuar() {
 <style scoped>
 .campo-copiable { max-width: 100%; }
 .campo-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
   word-break: break-all;
-  color: rgba(255, 255, 255, 0.85);
+}
+/* Botón "dense" convertido desde un enlace: el objetivo táctil se mantiene en 44px. */
+.enlace {
+  min-height: 44px;
 }
 </style>
