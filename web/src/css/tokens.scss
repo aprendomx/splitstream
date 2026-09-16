@@ -1,0 +1,34 @@
+// Tokens semánticos del panel (spec v1.1 §3.1). Son la ÚNICA fuente de color, espacio y
+// movimiento: los componentes usan var(--ss-…) y la paleta de Quasar se deriva de aquí.
+// El contraste de cada par texto/fondo está medido: fg 13:1, fg-muted 6:1, fg-subtle 4.6:1
+// sobre --ss-surface. No añadas tonos intermedios a mano.
+:root {
+  --ss-bg: #0b1020;
+  --ss-surface: #131a2b;
+  --ss-surface-2: #1b2336;
+  --ss-border: #2a3448;
+  --ss-border-strong: #475569;
+  --ss-fg: #f1f5f9;
+  --ss-fg-muted: #a3aec2;
+  --ss-fg-subtle: #7c8aa5;
+  --ss-primary: #6366f1;
+  --ss-primary-hover: #818cf8;
+  --ss-on-primary: #ffffff;
+  --ss-live: #22c55e;
+  --ss-warn: #f59e0b;
+  --ss-danger: #ef4444;
+  --ss-info: #38bdf8;
+  --ss-ring: #a5b4fc;
+  --ss-radius-sm: 6px;
+  --ss-radius-md: 10px;
+  --ss-radius-lg: 14px;
+  --ss-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ss-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --ss-space-1: 4px;  --ss-space-2: 8px;  --ss-space-3: 12px; --ss-space-4: 16px;
+  --ss-space-5: 24px; --ss-space-6: 32px; --ss-space-7: 48px; --ss-space-8: 64px;
+  --ss-font-sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ss-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ss-motion: 180ms;
+  --ss-motion-slow: 280ms;
+  --ss-ease: cubic-bezier(0.2, 0, 0, 1);
+}

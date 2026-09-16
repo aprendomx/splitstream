@@ -52,4 +52,13 @@ export {
   mdiPlayCircle as iAlAire,
   mdiStopCircle as iTerminar,
   mdiKeyLink as iClaveApi,
+  mdiMenuDown as iDesplegar,
+  mdiDotsHorizontal as iMasOpciones,
+  mdiViewDashboardOutline as iPanel,
+  mdiTranslate as iTraducir,
+  mdiSignalVariant as iSenal,
+  mdiSignalOff as iSinSenal,
+  mdiRecordRec as iGrabacionActiva,
+  mdiChevronUp as iPlegar,
+  mdiChevronDown as iDesplegarSeccion,
 } from '@quasar/extras/mdi-v7'

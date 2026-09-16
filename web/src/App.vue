@@ -1,5 +1,5 @@
 <script setup>
-import { iAjustes, iBroadcast, iGrabaciones, iHistorial, iInfo, iOcultar, iSalir, iVer } from '@/iconos'
+import { iAjustes, iBroadcast, iDesplegar, iGrabaciones, iHistorial, iInfo, iOcultar, iSalir, iVer } from '@/iconos'
 import { ref, computed, onMounted } from 'vue'
 import { usePanel } from '@/stores/panel'
 import Asistente from '@/components/Asistente.vue'
@@ -54,7 +54,7 @@ async function entrar() {
       <q-toolbar>
         <q-icon :name="iBroadcast" size="24px" class="q-mr-sm text-primary" />
         <q-toolbar-title class="text-weight-medium">Splitstream</q-toolbar-title>
-        <q-btn-dropdown flat dense no-caps :label="idioma.toUpperCase()" :aria-label="t('app.idioma')">
+        <q-btn-dropdown flat dense no-caps :label="idioma.toUpperCase()" :aria-label="t('app.idioma')" :dropdown-icon="iDesplegar">
           <q-list>
             <q-item
               v-for="l in idiomas" :key="l.id" clickable v-close-popup

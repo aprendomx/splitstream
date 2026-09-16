@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { iCerrar, iError } from '@/iconos'
+import { iCerrar, iDesplegar, iError } from '@/iconos'
 import { api, ApiError } from '@/api'
 import { t } from '@/i18n'
 
@@ -87,14 +87,14 @@ async function guardar() {
       </q-card-section>
       <q-card-section class="col scroll q-pt-none q-gutter-y-md">
         <q-input v-model="nombre" :label="t('comun.nombre')" outlined dense maxlength="60" />
-        <q-select v-model="formato" :options="formatos" emit-value map-options :label="t('dialogo_webhook.formato_label')" outlined dense />
+        <q-select v-model="formato" :options="formatos" emit-value map-options :label="t('dialogo_webhook.formato_label')" outlined dense :dropdown-icon="iDesplegar" />
         <q-input v-model="url" :label="t('dialogo_webhook.url_label')" placeholder="https://…" outlined dense inputmode="url"
                  autocapitalize="off" autocorrect="off" spellcheck="false"
                  :hint="t('dialogo_webhook.hint_url')" />
         <q-input v-if="formato === 'json'" v-model="secreto" :label="t('dialogo_webhook.secreto_label')" outlined dense
                  type="password" autocomplete="off"
                  :hint="editando && webhook?.has_secret ? t('dialogo_webhook.hint_secreto_editar') : t('dialogo_webhook.hint_secreto_nuevo')" />
-        <q-select v-model="nivel" :options="niveles" emit-value map-options :label="t('dialogo_webhook.avisar_de_label')" outlined dense />
+        <q-select v-model="nivel" :options="niveles" emit-value map-options :label="t('dialogo_webhook.avisar_de_label')" outlined dense :dropdown-icon="iDesplegar" />
         <q-toggle v-model="habilitado" :label="t('dialogo_webhook.activo')" />
         <q-banner v-if="error" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">
           <template #avatar><q-icon :name="iError" color="negative" /></template>

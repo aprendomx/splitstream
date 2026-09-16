@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { useQuasar } from 'quasar'
 import { api, ApiError } from '@/api'
 import { usePanel } from '@/stores/panel'
-import { iTitulo, iOk, iCerrar } from '@/iconos'
+import { iTitulo, iOk, iCerrar, iDesplegar } from '@/iconos'
 import { t } from '@/i18n'
 
 const $q = useQuasar()
@@ -56,7 +56,7 @@ const nombreDe = (id) => panel.destinos.find((d) => d.id === id)?.name ?? `#${id
         <div class="col-12 col-sm"><q-input v-model="titulo" outlined dense :label="t('titulo.campo_titulo')" maxlength="140" counter /></div>
         <div v-if="hayTwitch" class="col-12 col-sm-5">
           <q-select v-model="categoria" :options="opciones" option-label="name" outlined dense use-input fill-input hide-selected
-                    input-debounce="300" :label="t('titulo.categoria_twitch_label')" clearable @filter="buscar">
+                    input-debounce="300" :label="t('titulo.categoria_twitch_label')" clearable :dropdown-icon="iDesplegar" :clear-icon="iCerrar" @filter="buscar">
             <template #option="{ itemProps, opt }">
               <q-item v-bind="itemProps"><q-item-section avatar><img :src="opt.box_art_url" width="24" alt="" /></q-item-section><q-item-section>{{ opt.name }}</q-item-section></q-item>
             </template>

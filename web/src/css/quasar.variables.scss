@@ -1,15 +1,13 @@
-// Paleta del panel. Oscura por defecto (spec §10) y con los tres colores de estado que
-// el producto necesita: emitiendo, degradado y caído.
-//
-// Se eligen tonos desaturados en vez de los saturados por defecto de Quasar: esta pantalla
-// se mira a mitad de una transmisión, a veces de noche, y el verde chillón de "todo va
-// bien" cansa cuando está permanentemente encendido.
-$primary   : #4f46e5;
-$secondary : #6366f1;
+// Paleta del panel, derivada de los tokens de `tokens.scss` (spec v1.1 §3.1). Sass no
+// puede leer variables CSS en tiempo de compilación, así que los valores se repiten aquí:
+// `tokens.scss` manda, esto solo refleja los mismos tonos para los componentes de Quasar
+// que no usan var(--ss-…) directamente.
+$primary   : #6366f1;
+$secondary : #818cf8;
 $accent    : #22c55e;
 
-$dark      : #16161f;
-$dark-page : #0f0f16;
+$dark      : #131a2b;
+$dark-page : #0b1020;
 
 $positive  : #22c55e;  // live
 $negative  : #ef4444;  // caído

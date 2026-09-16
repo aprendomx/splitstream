@@ -1,5 +1,5 @@
 <script setup>
-import { iBorrar, iCerrar, iClaveApi, iError, iInfo, iOcultar, iVer } from '@/iconos'
+import { iBorrar, iCerrar, iClaveApi, iDesplegar, iError, iInfo, iOcultar, iVer } from '@/iconos'
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { PLATAFORMAS, porId, pideServidor, nombreDe } from '@/plataformas'
 import { api, ApiError } from '@/api'
@@ -380,6 +380,7 @@ async function guardar() {
               outlined
               dense
               clearable
+              :clear-icon="iCerrar"
               @clear="elegirLogo(null)"
             />
           </div>
@@ -403,7 +404,7 @@ async function guardar() {
             </q-chip>
           </div>
           <q-select v-if="cuentas.length" v-model="cuentaId" :options="[{label: t('dialogo_destino.sin_cuenta_opcion'), value: null}, ...cuentas.map(c => ({label: c.display_name + (c.status === 'reauth' ? t('dialogo_destino.reconectar_sufijo') : ''), value: c.id}))]"
-                    emit-value map-options outlined dense :label="t('dialogo_destino.cuenta_vinculada_label')" />
+                    emit-value map-options outlined dense :label="t('dialogo_destino.cuenta_vinculada_label')" :dropdown-icon="iDesplegar" />
           <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="nombreDe(plat)"
                           :requiere-app="Boolean(capacidades?.requires_own_app)" @conectada="trasConectar" />
           <q-banner v-else dense class="bg-grey-9 text-grey-3 rounded-borders">
@@ -418,7 +419,7 @@ async function guardar() {
           <div class="text-caption text-grey-5">{{ t('dialogo_destino.clave_api_caption') }}</div>
           <template v-if="plataforma === 'youtube'">
             <q-input v-model="tituloEmision" :label="t('dialogo_destino.titulo_emision_label')" :placeholder="nombre" outlined dense maxlength="140" />
-            <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined dense :label="t('dialogo_destino.privacidad_label')" />
+            <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined dense :label="t('dialogo_destino.privacidad_label')" :dropdown-icon="iDesplegar" />
             <q-input v-model="horaEmision" type="datetime-local" outlined dense :label="t('dialogo_destino.hora_label')" :hint="t('dialogo_destino.hora_hint')" />
           </template>
           <div v-if="!cuentaId" class="text-caption text-grey-6">{{ t('dialogo_destino.elige_cuenta_arriba') }}</div>
@@ -494,7 +495,7 @@ async function guardar() {
           <div v-if="usaClaveAPI && editando" class="bloque-clave-api q-gutter-y-sm">
             <template v-if="plataforma === 'youtube'">
               <q-input v-model="tituloEmision" :label="t('dialogo_destino.titulo_nueva_emision_label')" :placeholder="nombre" outlined dense maxlength="140" />
-              <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined dense :label="t('dialogo_destino.privacidad_label')" />
+              <q-select v-model="privacidadEmision" :options="opcionesPrivacidad" emit-value map-options outlined dense :label="t('dialogo_destino.privacidad_label')" :dropdown-icon="iDesplegar" />
               <q-input v-model="horaEmision" type="datetime-local" outlined dense :label="t('dialogo_destino.hora_label')" :hint="t('dialogo_destino.hora_hint')" />
             </template>
             <q-btn

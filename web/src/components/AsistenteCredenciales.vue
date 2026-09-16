@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { useQuasar } from 'quasar'
 import { usePanel } from '@/stores/panel'
-import { iCopiar, iVer, iOcultar, iAviso } from '@/iconos'
+import { iCopiar, iVer, iOcultar, iAviso, iEditar, iOk } from '@/iconos'
 import { t } from '@/i18n'
 
 // Guía paso a paso para crear la app propia que YouTube y Kick exigen (spec §3.3). Las
@@ -70,7 +70,8 @@ function continuar() {
 
 <template>
   <div class="asistente-credenciales q-gutter-y-md">
-    <q-stepper v-model="paso" vertical flat bordered color="primary" animated class="rounded-borders">
+    <q-stepper v-model="paso" vertical flat bordered color="primary" animated class="rounded-borders"
+               :active-icon="iEditar" :done-icon="iOk">
       <template v-if="plataforma === 'youtube'">
         <q-step :name="1" :title="t('asistente_credenciales.youtube.paso1.titulo')" :done="paso > 1">
           <p class="text-body2">

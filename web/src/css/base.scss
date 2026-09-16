@@ -1,0 +1,52 @@
+// Base global: tipografía, foco y movimiento. Una vez, aquí; los componentes no repiten.
+html { color-scheme: dark; }
+body, .q-body--dark {
+  background: var(--ss-bg);
+  color: var(--ss-fg);
+  font-family: var(--ss-font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+}
+// Escala de texto (spec §3.2): tamaño + interlineado + peso. 12 px solo para etiquetas.
+.ss-t-12 { font-size: 12px; line-height: 1.4; font-weight: 500; }
+.ss-t-14 { font-size: 14px; line-height: 1.5; }
+.ss-t-16 { font-size: 16px; line-height: 1.5; }
+.ss-t-18 { font-size: 18px; line-height: 1.3; font-weight: 600; }
+.ss-t-22 { font-size: 22px; line-height: 1.3; font-weight: 600; }
+.ss-t-28 { font-size: 28px; line-height: 1.25; font-weight: 600; }
+.ss-muted { color: var(--ss-fg-muted); }
+.ss-subtle { color: var(--ss-fg-subtle); font-weight: 500; }
+.ss-mono { font-family: var(--ss-font-mono); }
+.ss-tabular { font-variant-numeric: tabular-nums; }
+.ss-surface-2 { background: var(--ss-surface-2); border-radius: var(--ss-radius-sm); }
+// Texto solo para lectores de pantalla (estados de carga, etiquetas extra).
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+// Foco visible en TODO lo interactivo (spec §3.4). Quasar quita el outline nativo; aquí
+// vuelve como anillo con separación, sin depender de que cada componente se acuerde.
+// .ss-focus es la misma regla como clase reutilizable, para elementos que no sean
+// interactivos nativos (no reciben :focus-visible por sí solos).
+:focus-visible,
+.ss-focus,
+.q-focus-helper:focus-visible,
+.q-btn:focus-visible,
+.q-item:focus-visible,
+.q-tab:focus-visible,
+.q-toggle:focus-visible {
+  outline: 2px solid var(--ss-ring);
+  outline-offset: 2px;
+  border-radius: var(--ss-radius-sm);
+}
+// Movimiento reducido: sin transiciones ni pulsos. Los componentes con animación propia
+// (indicador en vivo, arrastre) consultan la misma media query.
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}
+// Tarjeta base de Quasar con los tokens: borde, radio y fondo iguales en todo el panel.
+.q-card.q-card--bordered, .q-card--dark.q-card--bordered {
+  background: var(--ss-surface);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-md);
+  box-shadow: none;
+}
+.q-menu, .q-dialog .q-card { background: var(--ss-surface-2); box-shadow: var(--ss-shadow-2); }
+.q-dialog__backdrop { background: rgba(0, 0, 0, 0.6); }
