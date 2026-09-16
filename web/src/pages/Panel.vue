@@ -411,10 +411,11 @@ async function rotarClave() {
         </div>
         <div class="campo-ingesta">
           <div class="ss-t-12 ss-subtle">{{ t('panel.clave') }}</div>
+          <!-- Sin botón de copiar: esto es una máscara, no la clave real. Copiarla
+               engañaría a quien la pegue en OBS; la clave de verdad solo se ve (y se
+               copia) una vez, en el diálogo que abre «Rotar clave». -->
           <div class="row items-center no-wrap valor-ingesta ss-surface-2">
             <div class="col ss-mono ss-t-14">{{ panel.ingesta.key_mask }}</div>
-            <q-btn flat round dense :icon="iCopiar" size="md" :aria-label="t('panel.copiar_clave')"
-                   @click="copiar(panel.ingesta.key_mask, t('panel.clave'))" />
           </div>
           <q-btn outline no-caps size="md" class="q-mt-sm" :label="t('panel.rotar_clave')" :icon="iRotar"
                  :loading="rotando" @click="confirmarRotacion" />
