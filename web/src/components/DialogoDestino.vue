@@ -55,6 +55,15 @@ const errorNombre = ref(false)
 const errorServidor = ref(false)
 const errorClave = ref(false)
 
+/** Quita las marcas de "campo obligatorio vacío": al abrir el diálogo y al cambiar de
+ * plataforma, para que un error de un intento anterior no se quede pegado a un campo
+ * que la persona todavía no ha tocado. */
+function limpiarErrores() {
+  errorNombre.value = false
+  errorServidor.value = false
+  errorClave.value = false
+}
+
 // El logo elegido en el diálogo. Mientras no se guarda vive aquí, porque en el alta el
 // destino todavía no tiene id al que subirlo.
 const logoArchivo = ref(null)
@@ -166,9 +175,7 @@ watch(
     error.value = null
     guardando.value = false
     verClave.value = false
-    errorNombre.value = false
-    errorServidor.value = false
-    errorClave.value = false
+    limpiarErrores()
     soltarPrevia()
     logoArchivo.value = null
     logoQuitado.value = false
@@ -241,6 +248,9 @@ function elegir(p) {
   if (!nombre.value) nombre.value = nombreDe(p)
   if (p.url) servidor.value = p.url
   cuentaId.value = null
+  // Un intento de guardar fallido en la plataforma anterior no debe dejar campos
+  // marcados en rojo en esta, que la persona ni ha visto todavía.
+  limpiarErrores()
   cargarCuentas()
   paso.value = 2
 }

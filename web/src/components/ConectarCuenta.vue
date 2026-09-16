@@ -99,7 +99,7 @@ onUnmounted(() => clearTimeout(temporizador))
 
     <!-- Kick: vuelve por el navegador. Un enlace de verdad, nunca un window.open a mano: el
          segundo lo bloquea cualquier bloqueador de ventanas emergentes. -->
-    <div v-if="estado === 'pending' && inicio?.redirect_url" class="codigo-dispositivo">
+    <div v-if="estado === 'pending' && inicio?.redirect_url">
       <p class="ss-t-14">{{ t('conectar.autoriza_pestana') }}</p>
       <q-btn
         unelevated
@@ -113,7 +113,7 @@ onUnmounted(() => clearTimeout(temporizador))
       <p class="ss-t-14 ss-muted q-mt-sm" role="status" aria-live="polite"><q-spinner size="14px" class="q-mr-xs" />{{ t('conectar.esperando') }}</p>
     </div>
 
-    <div v-else-if="estado === 'pending' && inicio" class="codigo-dispositivo">
+    <div v-else-if="estado === 'pending' && inicio">
       <p class="ss-t-14">{{ t('conectar.abre_pre') }} <a :href="inicio.verification_uri" target="_blank" rel="noopener">{{ inicio.verification_uri.replace(/^https:\/\//, '') }}</a> {{ t('conectar.abre_post') }}</p>
       <div class="caja-codigo ss-surface-2">
         <div class="codigo ss-t-28 ss-mono ss-tabular">{{ inicio.user_code }}</div>
