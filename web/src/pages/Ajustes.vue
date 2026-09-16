@@ -241,10 +241,11 @@ function irASeccion(id) {
           {{ t('ajustes.avisos_explicacion') }}
         </p>
 
+        <!-- Sin repetir el título de la sección: el icono ya da el contexto, y el
+             mensaje «sin X» hace de encabezado del vacío. -->
         <q-card v-if="!webhooks.length" flat bordered class="vacio">
           <q-icon :name="iWebhook" size="32px" class="ss-muted" aria-hidden="true" />
-          <div class="ss-t-16">{{ t('ajustes.avisos_titulo') }}</div>
-          <div class="ss-t-14 ss-muted">{{ t('ajustes.sin_avisos') }}</div>
+          <div class="ss-t-16">{{ t('ajustes.sin_avisos') }}</div>
           <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('dialogo_webhook.nuevo_aviso')" @click="abrirAlta" />
         </q-card>
 
@@ -278,8 +279,7 @@ function irASeccion(id) {
 
         <q-card v-if="!cuentas.length" flat bordered class="vacio">
           <q-icon :name="iCuenta" size="32px" class="ss-muted" aria-hidden="true" />
-          <div class="ss-t-16">{{ t('ajustes.cuentas_titulo') }}</div>
-          <div class="ss-t-14 ss-muted">{{ t('ajustes.sin_cuentas') }}</div>
+          <div class="ss-t-16">{{ t('ajustes.sin_cuentas') }}</div>
           <q-btn outline no-caps :label="t('panel.vincular_canal')" :to="{ name: 'panel' }" />
         </q-card>
 

@@ -5,6 +5,7 @@ import { useQuasar } from 'quasar'
 import { iDescargar, iRegistro, iGrabaciones } from '@/iconos'
 import { api, ApiError } from '@/api'
 import { usePanel } from '@/stores/panel'
+import { nombrePorId } from '@/plataformas'
 import { bitrateLegible, bytesLegibles, duracionLegible } from '@/diagnostico'
 import Chat from '@/components/Chat.vue'
 import { t, formatearFecha, formatearNumero } from '@/i18n'
@@ -101,11 +102,18 @@ const resumen = computed(() => {
     if (KINDS_SUSPENSION.includes(e.kind)) d.suspendido = true
     porDestino.set(e.destination_id, d)
   }
+  const grabaciones = ficha.value?.recordings ?? []
   return {
     destinos: destinos.size,
     reconexiones: [...porDestino.values()].reduce((s, d) => s + d.reconexiones, 0),
+    // Desglose por destino, solo los que de verdad reconectaron: se enseña como lista
+    // compacta bajo el KPI de reconexiones.
+    destinosConReconexiones: [...porDestino.entries()].filter(([, d]) => d.reconexiones > 0),
     suspendidos: [...porDestino.values()].filter((d) => d.suspendido).length,
-    grabaciones: ficha.value?.recordings ?? [],
+    // Desglose del chat por plataforma, para la lista bajo el KPI de mensajes de chat.
+    chat: Object.entries(ficha.value?.chat_by_platform ?? {}).sort((a, b) => b[1] - a[1]),
+    grabaciones,
+    bytes: grabaciones.reduce((s, r) => s + r.bytes, 0),
   }
 })
 
@@ -175,6 +183,10 @@ const nombreGrabacion = (g) => g.path.split('/').at(-1)
             <div class="ss-t-12 ss-subtle">{{ t('sesion.reconexiones_etiqueta') }}</div>
             <div class="ss-t-22 ss-tabular">{{ formatearNumero(resumen.reconexiones) }}</div>
             <div v-if="!resumen.reconexiones" class="ss-t-12 ss-subtle">{{ t('sesion.sin_reconexiones') }}</div>
+            <!-- Una línea por destino que tuvo reconexiones; sin lista cuando el total es 0. -->
+            <div v-for="[idDestino, d] in resumen.destinosConReconexiones" :key="idDestino" class="ss-t-12 ss-subtle">
+              {{ t('sesion.reconexiones_destino', { destino: nombreDestino(idDestino), n: d.reconexiones }) }}
+            </div>
           </div>
           <div class="kpi">
             <div class="ss-t-12 ss-subtle">{{ t('sesion.suspendidos_etiqueta') }}</div>
@@ -185,11 +197,18 @@ const nombreGrabacion = (g) => g.path.split('/').at(-1)
             <div class="ss-t-12 ss-subtle">{{ t('sesion.chat_etiqueta') }}</div>
             <div class="ss-t-22 ss-tabular">{{ formatearNumero(ficha.chat_count) }}</div>
             <div v-if="!ficha.chat_count" class="ss-t-12 ss-subtle">{{ t('sesion.sin_chat') }}</div>
+            <!-- Una línea por plataforma con mensajes; sin lista cuando el total es 0. -->
+            <div v-for="[plataforma, n] in resumen.chat" :key="plataforma" class="ss-t-12 ss-subtle">
+              {{ t('sesion.chat_plataforma', { plataforma: nombrePorId(plataforma), n: formatearNumero(n) }) }}
+            </div>
           </div>
           <div class="kpi">
             <div class="ss-t-12 ss-subtle">{{ t('app.grabaciones') }}</div>
             <div class="ss-t-22 ss-tabular">{{ formatearNumero(resumen.grabaciones.length) }}</div>
             <div v-if="!resumen.grabaciones.length" class="ss-t-12 ss-subtle">{{ t('sesion.sin_grabaciones') }}</div>
+            <div v-else class="ss-t-12 ss-subtle">
+              {{ t('sesion.grabaciones_resumen', { n: resumen.grabaciones.length, bytes: bytesLegibles(resumen.bytes) }) }}
+            </div>
           </div>
         </div>
         <p class="ss-t-14 ss-muted nota-metricas">{{ t('sesion.sin_metricas') }}</p>
