@@ -17,7 +17,7 @@ const entrando = ref(false)
 
 // Nombre completo del idioma activo: aparece como etiqueta del menú (≥ 600 px) y en su
 // aria-label, tanto con etiqueta visible como sin ella (móvil).
-const nombreIdioma = computed(() => idiomas.find((l) => l.id === idioma.value)?.nombre)
+const nombreIdioma = computed(() => idiomas.find((l) => l.id === idioma.value)?.nombre ?? idioma.value)
 
 onMounted(() => panel.cargar())
 
@@ -202,11 +202,13 @@ async function entrar() {
 }
 // Por debajo de 768 px las pestañas apiladas (icono + etiqueta, por el modo dense) ocupan
 // menos si el texto y el icono encogen un poco; las cuatro siguen cabiendo a 375 px.
+// :deep() porque .q-tab__label/.q-tab__icon los pinta QTab en su propio render, no en
+// la plantilla de App.vue: sin :deep() no llevan el atributo de scope y la regla no pega.
 @media (max-width: 767px) {
-  .pestanas .q-tab__label {
+  .pestanas :deep(.q-tab__label) {
     font-size: 12px;
   }
-  .pestanas .q-tab__icon {
+  .pestanas :deep(.q-tab__icon) {
     font-size: 20px;
   }
 }
