@@ -596,3 +596,78 @@ func TestRecorderSinkIDIsNegative(t *testing.T) {
 		t.Fatalf("RecorderSinkID = %d: debe ser negativo para no chocar con AUTOINCREMENT", RecorderSinkID)
 	}
 }
+
+// La cámara del navegador no pasa por el validador: quien llega ya se autenticó con la
+// cookie del panel, y la clave de ingesta es cosa de RTMP (spec cámara §4). Todo lo
+// demás —sesión en el store, sinks, evento, cierre— es idéntico a OBS.
+func TestEngineStartLocalSessionSkipsTheValidator(t *testing.T) {
+	st := &fakeStore{}
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: st})
+	e.SetValidator(func(string, string) error { return errors.New("nadie pasa por aquí") })
+	var provisto int64
+	e.SetSinkProvider(func(id int64) ([]*Sink, error) { provisto = id; return nil, nil })
+
+	if err := e.StartLocalSession(); err != nil {
+		t.Fatalf("StartLocalSession: %v", err)
+	}
+	ses := e.Session()
+	if ses.ID == 0 || ses.Source != SourceBrowser {
+		t.Fatalf("Session() = %+v, quería una sesión con Source browser", ses)
+	}
+	if provisto != ses.ID {
+		t.Errorf("el proveedor de sinks recibió la sesión %d, quería %d", provisto, ses.ID)
+	}
+	st.mu.Lock()
+	eventos := append([]EngineEvent(nil), st.events...)
+	st.mu.Unlock()
+	if len(eventos) != 1 || eventos[0].Kind != "publisher_connected" {
+		t.Errorf("eventos = %+v, quería solo publisher_connected", eventos)
+	}
+
+	e.OnPublishEnd()
+	if e.SessionID() != 0 {
+		t.Error("OnPublishEnd no cerró la sesión local")
+	}
+	st.mu.Lock()
+	ended := st.ended
+	st.mu.Unlock()
+	if ended != 1 {
+		t.Errorf("FinishSession se llamó %d veces, quería 1", ended)
+	}
+}
+
+// OBS y la cámara comparten el motor: una excluye a la otra, en los dos sentidos, y al
+// cerrar la que estaba la otra vuelve a poder entrar.
+func TestEngineLocalAndRTMPSessionsExcludeEachOther(t *testing.T) {
+	st := &fakeStore{}
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: st})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.StartLocalSession(); err != nil {
+		t.Fatalf("StartLocalSession: %v", err)
+	}
+	if err := e.OnPublishStart("live", "ok"); !errors.Is(err, ErrSessionInProgress) {
+		t.Errorf("OnPublishStart con la cámara en el aire = %v, quería ErrSessionInProgress", err)
+	}
+	e.OnPublishEnd()
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart tras cerrar la local: %v", err)
+	}
+	if got := e.Session().Source; got != SourceRTMP {
+		t.Errorf("Source = %q, quería %q", got, SourceRTMP)
+	}
+	if err := e.StartLocalSession(); !errors.Is(err, ErrSessionInProgress) {
+		t.Errorf("StartLocalSession con OBS en el aire = %v, quería ErrSessionInProgress", err)
+	}
+	e.OnPublishEnd()
+
+	if err := e.StartLocalSession(); err != nil {
+		t.Fatalf("StartLocalSession tras cerrar la RTMP: %v", err)
+	}
+	e.OnPublishEnd()
+}
