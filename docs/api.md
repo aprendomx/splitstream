@@ -498,6 +498,7 @@ Los cuerpos de petición y de respuesta, leídos de los tipos Go.
 | `width` | int | sí |
 | `height` | int | sí |
 | `bitrate_bps` | int | sí |
+| `source` | string | no |
 
 ### sessionDetailDTO
 

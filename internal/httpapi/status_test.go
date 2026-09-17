@@ -581,3 +581,21 @@ func TestStatusCarriesTheUpdateNotice(t *testing.T) {
 		t.Errorf("update = %+v", st.Update)
 	}
 }
+
+// El panel deshabilita «Emitir» en la página de cámara cuando lo que hay en el aire es
+// OBS, y al revés: para eso necesita saber el origen, no solo que hay sesión.
+func TestStatusReportsTheSessionSource(t *testing.T) {
+	srv, _, eng, _, cookies := newDestServer(t)
+	eng.setSesion(relay.LiveSession{ID: 7, StartedAt: time.Now(), Source: relay.SourceBrowser})
+
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if !st.Session.Live || st.Session.Source != "browser" {
+		t.Errorf("session = %+v, quería live con source browser", st.Session)
+	}
+
+	eng.setSesion(relay.LiveSession{})
+	st = decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if st.Session.Source != "" {
+		t.Errorf("sin sesión, source = %q, quería vacío", st.Session.Source)
+	}
+}

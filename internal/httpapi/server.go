@@ -87,6 +87,13 @@ type EngineView interface {
 	// tests son un canal y un slice que el test controla.
 	Tap() (<-chan *relay.Message, func())
 	VideoConfig() []byte
+
+	// StartLocalSession, OnMessage y OnPublishEnd son la ingesta de la cámara del
+	// navegador (spec cámara §4): aquí la API ES el publisher. Son los mismos métodos
+	// con los que rtmpio alimenta al motor, a través de una interfaz que no lo importa.
+	StartLocalSession() error
+	OnMessage(msg *relay.Message)
+	OnPublishEnd()
 }
 
 // WebhookSender manda un evento a un webhook. Lo cumple *alerts.WebhookDispatcher; la API
