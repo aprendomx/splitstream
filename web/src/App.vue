@@ -1,5 +1,5 @@
 <script setup>
-import { iAjustes, iAnterior, iBroadcast, iDesplegar, iGrabaciones, iHistorial, iInfo, iMasOpciones, iOcultar, iOk, iPanel, iSalir, iSiguiente, iTraducir, iVer } from '@/iconos'
+import { iAjustes, iAnterior, iBroadcast, iCamara, iDesplegar, iGrabaciones, iHistorial, iInfo, iMasOpciones, iOcultar, iOk, iPanel, iSalir, iSiguiente, iTraducir, iVer } from '@/iconos'
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePanel } from '@/stores/panel'
@@ -20,7 +20,7 @@ const entrando = ref(false)
 // aria-label, tanto con etiqueta visible como sin ella (móvil).
 const nombreIdioma = computed(() => idiomas.find((l) => l.id === idioma.value)?.nombre ?? idioma.value)
 
-// La ficha de una sesión (/historial/:id) no es ninguna de las cuatro pestañas: sin este
+// La ficha de una sesión (/historial/:id) no es ninguna de las cinco pestañas: sin este
 // mapeo se abre con todas las pestañas apagadas. Pertenece a Historial.
 const pestanaActiva = computed(() => ({ sesion: 'historial' })[route.name] ?? route.name)
 
@@ -79,7 +79,7 @@ async function entrar() {
         <!-- Autenticado: pestañas de navegación. Sin sesión: solo el espacio, para que el
              menú de idioma quede a la derecha igual que en la pantalla de entrada. -->
         <!-- :model-value="pestanaActiva": ver el comentario del script; no hay :to. -->
-        <!-- Las cuatro pestañas con icono + etiqueta no caben a 375 px junto al logo, el
+        <!-- Las cinco pestañas con icono + etiqueta no caben a 375 px junto al logo, el
              idioma y «más»: por debajo de 480 px se quita la etiqueta visible (el icono y
              el aria-label bastan) para que quepan sin scroll horizontal. -->
         <q-tabs v-if="panel.autenticado" :model-value="pestanaActiva" dense no-caps narrow-indicator
@@ -89,6 +89,9 @@ async function entrar() {
           <q-tab name="panel" :icon="iPanel"
                  :label="$q.screen.width >= 480 ? t('app.panel') : undefined"
                  :aria-label="t('app.panel')" @click="router.push({ name: 'panel' })" />
+          <q-tab name="camara" :icon="iCamara"
+                 :label="$q.screen.width >= 480 ? t('app.camara') : undefined"
+                 :aria-label="t('app.camara')" @click="router.push({ name: 'camara' })" />
           <q-tab name="historial" :icon="iHistorial"
                  :label="$q.screen.width >= 480 ? t('app.historial') : undefined"
                  :aria-label="t('app.historial')" @click="router.push({ name: 'historial' })" />
