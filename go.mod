@@ -4,6 +4,7 @@ go 1.26.8
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/yutopp/go-amf0 v0.1.0
 	github.com/yutopp/go-rtmp v0.0.7
 	golang.org/x/crypto v0.57.0
 	golang.org/x/time v0.16.0
@@ -21,7 +22,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sirupsen/logrus v1.7.0 // indirect
-	github.com/yutopp/go-amf0 v0.1.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
