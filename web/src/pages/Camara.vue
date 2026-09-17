@@ -29,6 +29,10 @@ const motivoFin = ref(null)     // texto ya traducido del último corte, o null
 let stream = null
 const hayStream = ref(false)
 let calidadAbierta = null
+// Cada llamada a abrirCamara() se lleva un número. Si su getUserMedia resuelve después de
+// que ya arrancó una llamada más nueva, lo que consiguió queda obsoleto: se descarta (parando
+// sus pistas) en vez de instalarse y pisar la elección más reciente del usuario.
+let generacion = 0
 
 // Se deshabilita cuando hay sesión de OTRA fuente: OBS o una cámara en otro dispositivo.
 // Cuando la sesión es la nuestra, el botón es «Parar».
@@ -62,6 +66,7 @@ function yaAbierto() {
 // Abre la cámara y el micrófono elegidos. Sin ids (primera vez) deja que el navegador
 // elija: en el móvil, la frontal, que es la que quiere quien se emite a sí mismo.
 async function abrirCamara() {
+  const mia = ++generacion
   await pararStream()
   const alto = calidad.value === '1080p' ? 1080 : 720
   const restricciones = {
@@ -72,13 +77,17 @@ async function abrirCamara() {
       ? { deviceId: { exact: microfonoId.value }, echoCancellation: true, noiseSuppression: true }
       : { echoCancellation: true, noiseSuppression: true },
   }
+  let nuevo
   try {
-    stream = await navigator.mediaDevices.getUserMedia(restricciones)
+    nuevo = await navigator.mediaDevices.getUserMedia(restricciones)
+    if (mia !== generacion) { for (const pista of nuevo.getTracks()) pista.stop(); return }
     permisoKey.value = null
   } catch {
+    if (mia !== generacion) return
     permisoKey.value = 'camara.permiso_denegado'
     return
   }
+  stream = nuevo
   videoEl.value.srcObject = stream
   calidadAbierta = calidad.value
   hayStream.value = true
@@ -100,7 +109,7 @@ onBeforeUnmount(() => { pararStream() })
 
 // Cambiar de dispositivo o de calidad reabre la captura; mientras se emite los controles
 // están deshabilitados, así que aquí nunca hay emisión en curso.
-watch([camaraId, microfonoId, calidad], () => { if (stream && !emitiendo.value && !yaAbierto()) abrirCamara() })
+watch([camaraId, microfonoId, calidad], () => { if (!emitiendo.value && !yaAbierto()) abrirCamara() })
 
 function emitir() {
   $q.notify({ type: 'info', message: t('camara.conectando') })
