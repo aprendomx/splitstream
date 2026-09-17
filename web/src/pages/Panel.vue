@@ -212,7 +212,7 @@ async function probar(d) {
     aviso()
     $q.dialog({
       title: titulo,
-      message: `${escaparHtml(r.message)}<br><br><span class="text-caption text-grey-5">${escaparHtml(r.stage)} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
+      message: `${escaparHtml(r.message)}<br><br><span class="ss-t-12 ss-muted">${escaparHtml(r.stage)} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
       html: true,
       ok: { flat: true, noCaps: true, label: t('comun.cerrar') },
     })

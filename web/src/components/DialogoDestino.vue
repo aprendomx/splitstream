@@ -379,7 +379,7 @@ async function guardar() {
       <q-card-section v-else class="col scroll cuerpo">
         <div v-if="plat" class="row items-center q-gutter-sm cabecera-plataforma">
           <q-icon :name="plat.icono" size="24px" :style="{ color: plat.color }" />
-          <div class="text-subtitle1">{{ nombreDe(plat) }}</div>
+          <div class="ss-t-16">{{ nombreDe(plat) }}</div>
           <q-space />
           <q-btn
             v-if="!editando"
@@ -392,7 +392,7 @@ async function guardar() {
           />
         </div>
 
-        <q-banner v-if="plat?.notaKey" dense class="bg-grey-9 text-grey-3 rounded-borders">
+        <q-banner v-if="plat?.notaKey" dense class="bg-grey-9 ss-muted rounded-borders">
           <template #avatar><q-icon :name="iInfo" color="info" /></template>
           {{ t(plat.notaKey) }}
         </q-banner>
@@ -450,7 +450,7 @@ async function guardar() {
                     emit-value map-options outlined :label="t('dialogo_destino.cuenta_vinculada_label')" :dropdown-icon="iDesplegar" />
           <ConectarCuenta v-if="plataformaConfigurada" :plataforma="plataforma" :nombre="nombreDe(plat)"
                           :requiere-app="Boolean(capacidades?.requires_own_app)" @conectada="trasConectar" />
-          <q-banner v-else dense class="bg-grey-9 text-grey-3 rounded-borders">
+          <q-banner v-else dense class="bg-grey-9 ss-muted rounded-borders">
             {{ t('dialogo_destino.banner_necesita_client_id_pre', { plataforma: nombreDe(plat) }) }} <code>SPLITSTREAM_TWITCH_CLIENT_ID</code> {{ t('dialogo_destino.banner_necesita_client_id_post') }}
           </q-banner>
         </div>

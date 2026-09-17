@@ -539,6 +539,19 @@ resolución, bitrate, contadores de eventos por nivel e icono de grabación) y `
 (`/historial/:id`, ficha con resumen calculado en el cliente, línea de tiempo filtrable por
 nivel, chat de la sesión en lectura y grabaciones con descarga).
 
+**Rediseño v1.1** (spec completo en
+`docs/superpowers/specs/2026-09-16-rediseno-panel-design.md`): mismo panel, sin cambios de
+funciones ni de API, con un sistema de diseño explícito. Tokens semánticos de color,
+espacio, radio y movimiento en `web/src/css/tokens.scss` (único origen de color: los
+componentes usan `var(--ss-…)` o clases de Quasar derivadas de la paleta, nunca un color
+suelto); escala tipográfica y utilidades compartidas en `web/src/css/base.scss`
+(`.ss-t-*`, `.ss-muted`, `.ss-subtle`, `.ss-mono`, `.ss-tabular`, `.ss-surface-2`,
+`.sr-only`, anillo de foco visible en todo lo interactivo). Estado de destino unificado en
+`ChipEstado` (icono + texto, nunca solo color). Barra superior con pestañas etiquetadas
+(Panel, Historial, Grabaciones, Ajustes) en vez de iconos sueltos sin nombre. Rejilla de
+tarjetas, diálogos y esqueletos de carga consistentes en las seis páginas.
+`prefers-reduced-motion` respetado en toda animación y objetivos táctiles ≥ 44 px.
+
 ## 11. Pruebas
 
 **Unitarias (sin Docker, sin red):**

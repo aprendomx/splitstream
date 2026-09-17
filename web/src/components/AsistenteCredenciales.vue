@@ -74,7 +74,7 @@ function continuar() {
                :active-icon="iEditar" :done-icon="iOk" :error-icon="iFallo">
       <template v-if="plataforma === 'youtube'">
         <q-step :name="1" :title="t('asistente_credenciales.youtube.paso1.titulo')" :done="paso > 1">
-          <p class="text-body2">
+          <p class="ss-t-14">
             {{ t('asistente_credenciales.youtube.paso1.texto_pre') }}
             <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud Console</a>
             {{ t('asistente_credenciales.youtube.paso1.texto_post') }}
@@ -84,7 +84,7 @@ function continuar() {
           </q-stepper-navigation>
         </q-step>
         <q-step :name="2" :title="t('asistente_credenciales.youtube.paso2.titulo')" :done="paso > 2">
-          <p class="text-body2">
+          <p class="ss-t-14">
             {{ t('asistente_credenciales.youtube.paso2.texto_pre') }}
             <b>YouTube Data API v3</b> {{ t('asistente_credenciales.youtube.paso2.texto_post') }}
           </p>
@@ -94,7 +94,7 @@ function continuar() {
           </q-stepper-navigation>
         </q-step>
         <q-step :name="3" :title="t('asistente_credenciales.youtube.paso3.titulo')" :done="paso > 3">
-          <p class="text-body2">
+          <p class="ss-t-14">
             {{ t('asistente_credenciales.youtube.paso3.texto_pre') }}
             <b>{{ t('asistente_credenciales.youtube.paso3.tipo') }}</b> {{ t('asistente_credenciales.youtube.paso3.texto_post') }}
           </p>
@@ -104,13 +104,13 @@ function continuar() {
           </q-stepper-navigation>
         </q-step>
         <q-step :name="4" :title="t('asistente_credenciales.youtube.paso4.titulo')" :done="paso > 4">
-          <p class="text-body2">
+          <p class="ss-t-14">
             {{ t('asistente_credenciales.youtube.paso4.texto_pre') }}
             <b>«TVs and Limited Input devices»</b> {{ t('asistente_credenciales.youtube.paso4.texto_post1') }}
             <code>client_id</code> {{ t('asistente_credenciales.youtube.paso4.texto_post2') }} <code>client_secret</code>
             {{ t('asistente_credenciales.youtube.paso4.texto_post3') }}
           </p>
-          <q-banner dense class="bg-grey-9 text-grey-3 rounded-borders">
+          <q-banner dense class="bg-grey-9 ss-muted rounded-borders">
             <template #avatar><q-icon :name="iAviso" color="warning" /></template>
             {{ t('asistente_credenciales.youtube.paso4.aviso_testing') }}
           </q-banner>
@@ -123,7 +123,7 @@ function continuar() {
 
       <template v-else>
         <q-step :name="1" :title="t('asistente_credenciales.kick.paso1.titulo')" :done="paso > 1">
-          <p class="text-body2">
+          <p class="ss-t-14">
             {{ t('asistente_credenciales.kick.paso1.texto') }}
           </p>
           <q-stepper-navigation>
@@ -131,14 +131,14 @@ function continuar() {
           </q-stepper-navigation>
         </q-step>
         <q-step :name="2" :title="t('asistente_credenciales.kick.paso2.titulo')" :done="paso > 2">
-          <p class="text-body2">{{ t('asistente_credenciales.kick.paso2.texto') }}</p>
+          <p class="ss-t-14">{{ t('asistente_credenciales.kick.paso2.texto') }}</p>
           <q-stepper-navigation>
             <q-btn unelevated no-caps color="primary" :label="t('asistente_credenciales.siguiente')" @click="paso = 3" />
             <q-btn flat no-caps :label="t('asistente_credenciales.atras')" class="q-ml-sm" @click="paso = 1" />
           </q-stepper-navigation>
         </q-step>
         <q-step :name="3" :title="t('asistente_credenciales.kick.paso3.titulo')" :done="paso > 3">
-          <p class="text-body2">
+          <p class="ss-t-14">
             {{ t('asistente_credenciales.kick.paso3.texto_pre') }}
             <b>{{ t('asistente_credenciales.kick.paso3.enfasis') }}</b>{{ t('asistente_credenciales.kick.paso3.texto_post') }}
           </p>
@@ -153,7 +153,7 @@ function continuar() {
         </q-step>
         <q-step :name="4" :title="t('asistente_credenciales.kick.paso4.titulo')" :done="paso > 4">
           <template v-if="hayUrlPublica">
-            <p class="text-body2">
+            <p class="ss-t-14">
               {{ t('asistente_credenciales.kick.paso4.texto_url_publica') }}
             </p>
             <div class="row items-center no-wrap q-gutter-sm campo-copiable">
@@ -161,11 +161,11 @@ function continuar() {
               <q-btn flat round dense :icon="iCopiar" :aria-label="t('asistente_credenciales.kick.paso4.copiar_webhook')" @click="copiar(webhookUrl)" />
             </div>
           </template>
-          <q-banner v-else dense class="bg-grey-9 text-grey-3 rounded-borders">
+          <q-banner v-else dense class="bg-grey-9 ss-muted rounded-borders">
             <template #avatar><q-icon :name="iAviso" color="warning" /></template>
             {{ t('asistente_credenciales.kick.paso4.sin_url_publica') }}
           </q-banner>
-          <p class="text-body2 q-mt-sm">
+          <p class="ss-t-14 q-mt-sm">
             {{ t('asistente_credenciales.kick.paso4.texto_final_pre') }}
             <code>client_id</code> {{ t('asistente_credenciales.kick.paso4.texto_final_mid') }} <code>client_secret</code>
             {{ t('asistente_credenciales.kick.paso4.texto_final_post') }}
@@ -180,7 +180,7 @@ function continuar() {
 
     <div>
       <q-btn flat dense no-caps color="primary" class="ss-t-14 enlace" :label="t('asistente_credenciales.por_que_pregunta')" @click="porQue = !porQue" />
-      <p v-if="porQue" class="text-body2 text-grey-5 q-mt-xs">
+      <p v-if="porQue" class="ss-t-14 ss-muted q-mt-xs">
         <template v-if="plataforma === 'youtube'">
           {{ t('asistente_credenciales.por_que_youtube') }}
         </template>

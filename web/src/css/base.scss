@@ -56,4 +56,4 @@ body, .q-body--dark {
   box-shadow: none;
 }
 .q-menu, .q-dialog .q-card { background: var(--ss-surface-2); box-shadow: var(--ss-shadow-2); }
-.q-dialog__backdrop { background: rgba(0, 0, 0, 0.6); }
+.q-dialog__backdrop { background: var(--ss-overlay); }
