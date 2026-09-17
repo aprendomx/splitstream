@@ -34,15 +34,17 @@ body, .q-body--dark {
 .q-toggle:focus-visible {
   outline: 2px solid var(--ss-ring);
   outline-offset: 2px;
-  border-radius: var(--ss-radius-sm);
 }
-// QBtn lleva la clase .no-outline de Quasar (outline: 0 !important), que pisa la regla
-// anterior: solo un !important la recupera. Se limita a :focus-visible para no pintar el
-// anillo al hacer clic con el ratón.
-.q-btn.no-outline:focus-visible {
+// Quasar pone la clase .no-outline (outline: 0 !important) en QBtn, QToggle, QCheckbox,
+// QRadio… y pisa la regla anterior: solo un !important la recupera. Se limita a
+// :focus-visible para no pintar el anillo al hacer clic con el ratón.
+.no-outline:focus-visible {
   outline: 2px solid var(--ss-ring) !important;
   outline-offset: 2px;
 }
+// Objetivos táctiles ≥ 44 px (spec §3.3), sin hacks locales por archivo.
+.q-btn:not(.q-btn--fab):not(.q-btn--fab-mini) { min-height: 44px; }
+.q-btn--round { min-width: 44px; }
 // Movimiento reducido: sin transiciones ni pulsos. Los componentes con animación propia
 // (indicador en vivo, arrastre) consultan la misma media query.
 @media (prefers-reduced-motion: reduce) {

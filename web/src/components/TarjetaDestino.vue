@@ -11,7 +11,7 @@ const props = defineProps({
   destino: { type: Object, required: true },
   haySesion: Boolean,
 })
-defineEmits(['editar', 'alternar', 'borrar', 'revelar', 'reintentar', 'probar', 'alAire', 'terminar'])
+defineEmits(['editar', 'alternar', 'borrar', 'revelar', 'reintentar', 'probar', 'alAire', 'terminar', 'mover'])
 
 const plat = computed(() => porId(props.destino.platform))
 const diag = computed(() => diagnosticar(props.destino, props.haySesion))
@@ -42,16 +42,22 @@ const etiquetaDetalles = computed(() => t(detallesAbiertos.value ? 'destino.ocul
 </script>
 
 <template>
-  <q-card flat bordered class="tarjeta-destino column no-wrap" :class="`tono-${diag.tono}`">
+  <q-card flat bordered class="tarjeta-destino column no-wrap" :class="`tono-${diag.tono}`" :data-id="destino.id">
     <!-- Cabecera: identidad y estado, que es lo que se lee de un vistazo. -->
     <div class="cabecera row items-center no-wrap">
-      <q-icon
-        :name="iArrastrar"
-        size="20px"
+      <!-- Asa de verdad, no un icono con tabindex: un q-icon lleva aria-hidden forzado por
+           Quasar y sería una parada de tabulación muda. El botón trae el reordenado por
+           teclado (↑/↓) además del arrastre con el ratón/dedo (handle=".arrastre" en el
+           <draggable> de Panel.vue sigue apuntando a esta misma clase). -->
+      <button
+        type="button"
         class="arrastre"
-        tabindex="0"
-        :aria-label="t('destino.reordenar', { nombre: destino.name })"
-      />
+        :aria-label="t('destino.arrastrar_ayuda')"
+        @keydown.up.prevent="$emit('mover', -1)"
+        @keydown.down.prevent="$emit('mover', 1)"
+      >
+        <q-icon :name="iArrastrar" size="20px" aria-hidden="true" />
+      </button>
       <!-- Con logo, la imagen identifica el canal y la plataforma baja a sello: se gana
            identidad sin perder de vista a qué servicio va. Sin logo, queda el icono. -->
       <div v-if="logo" class="avatar q-mr-sm">
@@ -149,7 +155,7 @@ const etiquetaDetalles = computed(() => t(detallesAbiertos.value ? 'destino.ocul
       dense
       :expand-icon="iDesplegarSeccion"
       :label="etiquetaDetalles"
-      header-class="pie-cabecera ss-t-14 ss-muted"
+      header-class="ss-t-14 ss-muted"
       class="pie-plegable"
     >
       <div class="ss-mono ss-t-14 ss-muted q-px-md q-pb-sm">
@@ -251,6 +257,12 @@ const etiquetaDetalles = computed(() => t(detallesAbiertos.value ? 'destino.ocul
   cursor: grab;
   touch-action: none;
   color: var(--ss-fg-subtle);
+  /* Es un <button>: quita el aspecto nativo para que siga pareciendo el asa de antes. */
+  background: none;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   /* Área táctil por encima del icono, que es pequeño a propósito: 44 px de alto. */
   padding: 12px 4px;
 }

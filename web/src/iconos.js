@@ -61,4 +61,6 @@ export {
   mdiRecordRec as iGrabacionActiva,
   mdiChevronUp as iPlegar,
   mdiChevronDown as iDesplegarSeccion,
+  mdiChevronLeft as iAnterior,
+  mdiChevronRight as iSiguiente,
 } from '@quasar/extras/mdi-v7'

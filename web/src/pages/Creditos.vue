@@ -86,7 +86,7 @@ const HERRAMIENTAS = [
             <q-item-label caption class="ss-t-14 ss-muted">{{ t(d.qKey) }}</q-item-label>
           </q-item-section>
           <q-item-section side>
-            <q-badge outline color="grey-6" :label="d.l" />
+            <q-badge outline color="grey-5" :label="d.l" />
           </q-item-section>
         </q-item>
       </q-list>
@@ -97,7 +97,7 @@ const HERRAMIENTAS = [
                 target="_blank" rel="noopener noreferrer">
           <q-item-section class="enlace">{{ d.n }}</q-item-section>
           <q-item-section side>
-            <q-badge outline color="grey-6" :label="d.l" />
+            <q-badge outline color="grey-5" :label="d.l" />
           </q-item-section>
         </q-item>
       </q-list>
@@ -111,7 +111,7 @@ const HERRAMIENTAS = [
             <q-item-label caption class="ss-t-14 ss-muted">{{ t(d.qKey) }}</q-item-label>
           </q-item-section>
           <q-item-section side>
-            <q-badge outline color="grey-6" :label="d.l" />
+            <q-badge outline color="grey-5" :label="d.l" />
           </q-item-section>
         </q-item>
       </q-list>

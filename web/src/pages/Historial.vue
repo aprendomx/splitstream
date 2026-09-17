@@ -96,9 +96,9 @@ function chipNivel(s) {
           </q-item-section>
           <q-item-section side>
             <div class="row items-center no-wrap q-gutter-sm">
-              <q-icon v-if="s.has_recording" :name="iGrabaciones" size="18px" class="ss-muted">
-                <q-tooltip>{{ t('historial.con_grabacion') }}</q-tooltip>
-              </q-icon>
+              <span v-if="s.has_recording" role="img" :aria-label="t('historial.con_grabacion')" :title="t('historial.con_grabacion')">
+                <q-icon :name="iGrabaciones" size="18px" class="ss-muted" />
+              </span>
               <ChipEstado tam="sm" :tono="chipNivel(s).tono" :texto="chipNivel(s).texto" />
             </div>
           </q-item-section>
@@ -106,7 +106,7 @@ function chipNivel(s) {
       </q-list>
 
       <div v-if="hayMas" class="text-center q-mt-md">
-        <q-btn flat no-caps :label="t('historial.cargar_mas')" :loading="cargando" @click="cargarMas" />
+        <q-btn outline no-caps :label="t('historial.cargar_mas')" :loading="cargando" @click="cargarMas" />
       </div>
     </div>
   </q-page>

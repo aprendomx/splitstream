@@ -342,7 +342,7 @@ async function guardar() {
     transition-show="jump-up"
     transition-hide="jump-down"
   >
-    <q-card class="dialogo column no-wrap" style="width: 640px; max-width: 100vw">
+    <q-card class="dialogo column no-wrap" style="width: 640px; max-width: 100%">
       <q-card-section class="row items-center no-wrap cabecera">
         <div class="col">
           <div class="ss-t-18">
@@ -441,10 +441,15 @@ async function guardar() {
         <div v-if="plataformaConProveedor" class="bloque-cuenta q-gutter-y-sm">
           <p class="ss-t-14 ss-muted">{{ t('dialogo_destino.cuenta_caption') }}</p>
           <div class="row items-center q-gutter-xs">
-            <q-chip v-for="c in ['title','category','chat','ingest_key','schedule']" :key="c" dense square size="sm"
-                    :color="capacidades?.[c] ? 'primary' : 'grey-8'" :text-color="capacidades?.[c] ? 'white' : 'grey-5'">
+            <!-- Insignia de verdad (span con borde), no q-chip: a size="sm" (10 px) quedaba
+                 por debajo del contraste mínimo. Mismo aspecto que .insignia del chat. -->
+            <span
+              v-for="c in ['title','category','chat','ingest_key','schedule']" :key="c"
+              class="insignia-capacidad ss-t-12"
+              :class="{ activa: capacidades?.[c] }"
+            >
               {{ t(CAP_CLAVE[c]) }}
-            </q-chip>
+            </span>
           </div>
           <q-select v-if="cuentas.length" v-model="cuentaId" :options="[{label: t('dialogo_destino.sin_cuenta_opcion'), value: null}, ...cuentas.map(c => ({label: c.display_name + (c.status === 'reauth' ? t('dialogo_destino.reconectar_sufijo') : ''), value: c.id}))]"
                     emit-value map-options outlined :label="t('dialogo_destino.cuenta_vinculada_label')" :dropdown-icon="iDesplegar" />
@@ -620,6 +625,19 @@ async function guardar() {
    objetivo táctil se mantiene en 44px. */
 .enlace {
   min-height: 44px;
+}
+/* Insignias de función, mismo aspecto que .insignia del chat: borde en vez de fondo
+   sólido, así que 12 px con peso 500 llega a 4.5:1 sin necesitar tonos aparte. */
+.insignia-capacidad {
+  display: inline-flex;
+  padding: 1px 8px;
+  border: 1px solid var(--ss-border);
+  border-radius: 999px;
+  color: var(--ss-fg-muted);
+}
+.insignia-capacidad.activa {
+  border-color: var(--ss-primary);
+  color: var(--ss-primary);
 }
 .rejilla-plataformas {
   display: grid;

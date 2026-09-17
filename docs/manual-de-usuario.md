@@ -20,7 +20,7 @@ En OBS: **Ajustes → Emisión**
 | --- | --- |
 | Servicio | `Personalizado…` |
 | Servidor | El que muestra el panel, algo como `rtmp://localhost:1935/live` |
-| Clave de retransmisión | La que muestra el panel (usa el botón de copiar) |
+| Clave de retransmisión | La que el panel te enseñó al pulsar **Rotar clave**: se muestra una sola vez, con su botón de copiar; después el panel solo enseña su final enmascarado |
 
 Después, en **Ajustes → Salida**, cambia el modo de salida a **Avanzado** y pon el
 **intervalo de fotogramas clave en 2 segundos**.

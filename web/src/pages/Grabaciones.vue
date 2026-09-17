@@ -93,7 +93,7 @@ const nombre = (g) => g.path.split('/').at(-1)
             <div class="row items-center no-wrap q-gutter-sm acciones">
               <q-btn outline no-caps size="md" :icon="iDescargar" :label="t('grabaciones.descargar')" :disable="g.in_progress"
                      type="a" :href="api.urlDescargaGrabacion(g.id)" />
-              <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative btn-touch" :aria-label="t('comun.eliminar')"
+              <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" :aria-label="t('comun.eliminar')"
                      :disable="g.in_progress" @click="borrar(g)" />
             </div>
           </q-item-section>
@@ -101,7 +101,7 @@ const nombre = (g) => g.path.split('/').at(-1)
       </q-list>
 
       <div v-if="hayMas" class="text-center q-mt-md">
-        <q-btn flat no-caps :label="t('grabaciones.cargar_mas')" :loading="cargando" @click="cargarMas" />
+        <q-btn outline no-caps :label="t('grabaciones.cargar_mas')" :loading="cargando" @click="cargarMas" />
       </div>
 
       <p class="ss-t-14 ss-muted q-mt-lg">
@@ -123,6 +123,4 @@ const nombre = (g) => g.path.split('/').at(-1)
   padding: var(--ss-space-6) var(--ss-space-4);
   text-align: center;
 }
-.acciones .q-btn { min-height: 44px; }
-.btn-touch { min-width: 44px; }
 </style>

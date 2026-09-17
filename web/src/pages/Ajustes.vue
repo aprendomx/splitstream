@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
-import { iMas, iEditar, iBorrar, iWebhook, iDescargar, iProbar, iGrabaciones, iDisco, iCuenta } from '@/iconos'
+import { iMas, iEditar, iBorrar, iWebhook, iDescargar, iProbar, iGrabaciones, iDisco, iCuenta, iAnterior, iSiguiente } from '@/iconos'
 import { api } from '@/api'
 import { bytesLegibles } from '@/diagnostico'
 import { usePanel } from '@/stores/panel'
@@ -182,20 +182,27 @@ const usoGrabacion = computed(() => {
 // El error manda sobre el código. Un fallo de red no obtiene respuesta y se guarda con
 // last_status en null, así que mirar el null primero pintaba «sin enviar aún» un aviso que
 // llevaba días sin llegar a su destino.
+//
+// El chip solo enseña el estado corto (ok / falló / sin enviar aún): el status HTTP y el
+// last_error —texto arbitrario que viene de la API— van en «detalle», que la plantilla
+// pinta aparte, bajo la etiqueta, para no desbordar el chip a 375 px.
 const estadoEntrega = (w) => {
   if (w.last_error) {
     return {
-      texto: t('ajustes.envio_fallo_status', { status: w.last_status ?? t('ajustes.sin_respuesta'), error: w.last_error }),
+      texto: t('ajustes.entrega_fallo'),
       color: 'negative',
+      detalle: t('ajustes.envio_fallo_status', { status: w.last_status ?? t('ajustes.sin_respuesta'), error: w.last_error }),
     }
   }
-  if (w.last_status === null) return { texto: t('ajustes.sin_enviar_aun'), color: 'grey-6' }
-  if (w.last_status >= 200 && w.last_status < 300) return { texto: t('ajustes.ultimo_envio_ok', { status: w.last_status }), color: 'positive' }
-  return { texto: t('ajustes.envio_fallo', { status: w.last_status }), color: 'negative' }
+  if (w.last_status === null) return { texto: t('ajustes.sin_enviar_aun'), color: 'grey-5' }
+  if (w.last_status >= 200 && w.last_status < 300) {
+    return { texto: t('ajustes.entrega_ok'), color: 'positive', detalle: t('ajustes.ultimo_envio_ok', { status: w.last_status }) }
+  }
+  return { texto: t('ajustes.entrega_fallo'), color: 'negative', detalle: t('ajustes.envio_fallo', { status: w.last_status }) }
 }
 // El tono del chip de estado de entrega sale del color que ya calculaba estadoEntrega: solo
 // se traduce a la paleta de ChipEstado (spec §3.4, estado nunca solo por color).
-const TONO_ENTREGA = { negative: 'fallo', positive: 'emitiendo', 'grey-6': 'neutro' }
+const TONO_ENTREGA = { negative: 'fallo', positive: 'emitiendo', 'grey-5': 'neutro' }
 const tonoEntrega = (w) => TONO_ENTREGA[estadoEntrega(w).color] ?? 'neutro'
 
 // Índice de secciones: pestañas que no navegan, solo desplazan hasta la sección
@@ -226,6 +233,7 @@ function irASeccion(id) {
         active-color="primary" indicator-color="primary"
         class="indice-secciones"
         :aria-label="t('ajustes.indice')"
+        :left-icon="iAnterior" :right-icon="iSiguiente"
         @update:model-value="irASeccion"
       >
         <q-tab v-for="s in secciones" :key="s.id" :name="s.id" :label="s.label" />
@@ -252,16 +260,19 @@ function irASeccion(id) {
         <q-list v-else bordered separator class="lista">
           <q-item v-for="w in webhooks" :key="w.id">
             <q-item-section>
-              <q-item-label>{{ w.name }} <q-badge outline color="grey-6" :label="w.format" class="q-ml-xs" /></q-item-label>
+              <q-item-label>{{ w.name }} <q-badge outline color="grey-5" :label="w.format" class="q-ml-xs" /></q-item-label>
               <q-item-label caption class="ellipsis ss-t-14 ss-muted">{{ w.url }}</q-item-label>
               <ChipEstado tam="sm" :tono="tonoEntrega(w)" :texto="estadoEntrega(w).texto" class="q-mt-xs" />
+              <q-item-label v-if="estadoEntrega(w).detalle" caption class="ss-t-14 ss-muted detalle-entrega">
+                {{ estadoEntrega(w).detalle }}
+              </q-item-label>
             </q-item-section>
             <q-item-section side>
               <div class="row items-center no-wrap q-gutter-sm acciones-fila">
-                <q-btn flat dense no-caps size="sm" :icon="iProbar" :label="t('destino.probar')" :loading="probando === w.id" class="btn-touch" @click="probar(w)" />
+                <q-btn flat dense no-caps size="sm" :icon="iProbar" :label="t('destino.probar')" :loading="probando === w.id" @click="probar(w)" />
                 <q-toggle :model-value="w.enabled" dense @update:model-value="alternar(w)" :aria-label="`${w.enabled ? t('ajustes.desactivar') : t('ajustes.activar')} ${w.name}`" />
-                <q-btn flat round dense :icon="iEditar" size="sm" class="btn-touch" :aria-label="t('comun.editar')" @click="abrirEdicion(w)" />
-                <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative btn-touch" :aria-label="t('comun.eliminar')" @click="borrar(w)" />
+                <q-btn flat round dense :icon="iEditar" size="sm" :aria-label="t('comun.editar')" @click="abrirEdicion(w)" />
+                <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" :aria-label="t('comun.eliminar')" @click="borrar(w)" />
               </div>
             </q-item-section>
           </q-item>
@@ -292,7 +303,7 @@ function irASeccion(id) {
               <q-item-label>
                 {{ c.display_name }}
                 <ChipEstado v-if="c.status === 'reauth'" tam="sm" tono="atencion" :texto="t('ajustes.reconectar_badge')" class="q-ml-xs" />
-                <q-badge v-if="c.own_app" outline color="grey-6" :label="t('ajustes.app_propia_badge')" class="q-ml-xs" />
+                <q-badge v-if="c.own_app" outline color="grey-5" :label="t('ajustes.app_propia_badge')" class="q-ml-xs" />
               </q-item-label>
               <q-item-label caption class="ss-t-14 ss-muted">
                 <template v-if="c.destinations.length">
@@ -303,11 +314,11 @@ function irASeccion(id) {
               </q-item-label>
               <q-item-label v-if="c.status === 'reauth'" caption class="ss-t-14 text-warning">
                 {{ t('ajustes.necesita_reconectar') }}
-                <q-btn flat dense no-caps size="sm" :label="t('ajustes.ir_al_panel')" :to="{ name: 'panel' }" class="q-ml-xs btn-touch" />
+                <q-btn flat dense no-caps size="sm" :label="t('ajustes.ir_al_panel')" :to="{ name: 'panel' }" class="q-ml-xs" />
               </q-item-label>
             </q-item-section>
             <q-item-section side>
-              <q-btn flat dense no-caps size="sm" :icon="iBorrar" :label="t('ajustes.desconectar')" class="text-negative btn-touch"
+              <q-btn flat dense no-caps size="sm" :icon="iBorrar" :label="t('ajustes.desconectar')" class="text-negative"
                      @click="desconectar(c)" />
             </q-item-section>
           </q-item>
@@ -328,11 +339,11 @@ function irASeccion(id) {
               :disable="guardandoGrab" @update:model-value="alternarGrabacion"
             />
             <div class="row q-col-gutter-md">
-              <q-input v-model.number="formGrab.segment_min" type="number" min="0" max="240" outlined dense
+              <q-input v-model.number="formGrab.segment_min" type="number" min="0" max="240" outlined
                        :label="t('ajustes.minutos_por_segmento')" :hint="t('ajustes.minutos_hint')" class="col-12 col-sm-4" />
-              <q-input v-model.number="formGrab.max_gb" type="number" min="0.1" step="0.5" outlined dense
+              <q-input v-model.number="formGrab.max_gb" type="number" min="0.1" step="0.5" outlined
                        :label="t('ajustes.tope_gb')" :hint="t('ajustes.tope_gb_hint')" class="col-12 col-sm-4" />
-              <q-input v-model.number="formGrab.keep_days" type="number" min="0" outlined dense
+              <q-input v-model.number="formGrab.keep_days" type="number" min="0" outlined
                        :label="t('ajustes.dias_retencion')" :hint="t('ajustes.dias_retencion_hint')" class="col-12 col-sm-4" />
             </div>
             <div class="row items-center q-gutter-sm">
@@ -375,6 +386,9 @@ function irASeccion(id) {
 .indice-secciones :deep(.q-tab) { min-height: 44px; }
 .titulo-seccion { margin-top: var(--ss-space-6); margin-bottom: var(--ss-space-2); }
 .lista :deep(.q-item) { min-height: 56px; }
+/* El mensaje de error de un webhook es texto arbitrario de la API: puede llegar sin
+   espacios donde partir línea, y a 375 px eso empujaría scroll horizontal. */
+.detalle-entrega { overflow-wrap: anywhere; }
 .vacio {
   display: flex;
   flex-direction: column;
@@ -383,5 +397,4 @@ function irASeccion(id) {
   padding: var(--ss-space-6) var(--ss-space-4);
   text-align: center;
 }
-.acciones-fila .btn-touch { min-height: 44px; min-width: 44px; }
 </style>

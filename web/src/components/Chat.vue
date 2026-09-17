@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useQuasar } from 'quasar'
-import { iCerrar, iChat } from '@/iconos'
+import { iCerrar, iChat, iAnterior, iSiguiente } from '@/iconos'
 import { usePanel } from '@/stores/panel'
 import { api } from '@/api'
 import { t, formatearNumero } from '@/i18n'
@@ -116,7 +116,8 @@ onUnmounted(() => {
   <q-card flat bordered class="chat column no-wrap q-mb-md">
     <!-- Cabecera: pestañas por plataforma (la de "todos" incluida) y, en vivo, el cierre. -->
     <div class="cabecera-tarjeta row items-center no-wrap">
-      <q-tabs v-model="pestaña" dense no-caps narrow-indicator class="col pestanas">
+      <q-tabs v-model="pestaña" dense no-caps narrow-indicator class="col pestanas"
+              :left-icon="iAnterior" :right-icon="iSiguiente">
         <q-tab name="todos" :label="t('chat.todos')" />
         <q-tab v-for="p in plataformas" :key="p" :name="p" :icon="porId(p).icono" :label="nombrePorId(p)" />
       </q-tabs>

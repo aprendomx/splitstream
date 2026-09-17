@@ -259,7 +259,7 @@ const nombreGrabacion = (g) => g.path.split('/').at(-1)
             </q-item-section>
             <q-item-section side>
               <q-btn
-                flat round dense size="sm" :icon="iDescargar" class="btn-touch"
+                flat round dense size="sm" :icon="iDescargar"
                 :aria-label="t('grabaciones.descargar')" :disable="g.in_progress"
                 type="a" :href="api.urlDescargaGrabacion(g.id)"
               />
@@ -331,5 +331,4 @@ const nombreGrabacion = (g) => g.path.split('/').at(-1)
   padding: var(--ss-space-6) var(--ss-space-4);
   text-align: center;
 }
-.btn-touch { min-width: 44px; min-height: 44px; }
 </style>

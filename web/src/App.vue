@@ -1,5 +1,5 @@
 <script setup>
-import { iAjustes, iBroadcast, iDesplegar, iGrabaciones, iHistorial, iInfo, iMasOpciones, iOcultar, iOk, iPanel, iSalir, iTraducir, iVer } from '@/iconos'
+import { iAjustes, iAnterior, iBroadcast, iDesplegar, iGrabaciones, iHistorial, iInfo, iMasOpciones, iOcultar, iOk, iPanel, iSalir, iSiguiente, iTraducir, iVer } from '@/iconos'
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePanel } from '@/stores/panel'
@@ -18,6 +18,22 @@ const entrando = ref(false)
 // Nombre completo del idioma activo: aparece como etiqueta del menú (≥ 600 px) y en su
 // aria-label, tanto con etiqueta visible como sin ella (móvil).
 const nombreIdioma = computed(() => idiomas.find((l) => l.id === idioma.value)?.nombre ?? idioma.value)
+
+// La ficha de una sesión (/historial/:id) no es ninguna de las cuatro pestañas: sin este
+// mapeo se abre con todas las pestañas apagadas. Pertenece a Historial.
+const pestanaActiva = computed(() => ({ sesion: 'historial' })[route.name] ?? route.name)
+
+// QTabs vigila la ruta por su cuenta (para <q-route-tab>) y, en cada cambio de fullPath,
+// RECALCULA la pestaña activa comparando el :to de cada una contra la ruta actual —esto
+// pisa :model-value después de que se aplique, porque corre en un tick posterior (ver
+// QTabs.js verifyRouteModel/updateActiveRoute). Como «historial» y «sesion» son rutas
+// hermanas, no anidadas, ese recálculo nunca encuentra coincidencia y deja la pestaña
+// apagada pese al mapeo de arriba. En vez de pelear con ese mecanismo, se le da lo que
+// busca: mientras se ve una sesión, el :to de la pestaña Historial apunta a esa misma
+// sesión, así que la propia detección de Quasar la reconoce como activa.
+const destinoHistorial = computed(() =>
+  route.name === 'sesion' ? { name: 'sesion', params: route.params } : { name: 'historial' },
+)
 
 onMounted(() => panel.cargar())
 
@@ -76,13 +92,14 @@ async function entrar() {
         <!-- Las cuatro pestañas con icono + etiqueta no caben a 375 px junto al logo, el
              idioma y «más»: por debajo de 480 px se quita la etiqueta visible (el icono y
              el aria-label bastan) para que quepan sin scroll horizontal. -->
-        <q-tabs v-if="panel.autenticado" :model-value="route.name" dense no-caps narrow-indicator
+        <q-tabs v-if="panel.autenticado" :model-value="pestanaActiva" dense no-caps narrow-indicator
                 active-color="primary" indicator-color="primary" class="pestanas"
+                :left-icon="iAnterior" :right-icon="iSiguiente"
                 :aria-label="t('app.navegacion')">
           <q-route-tab name="panel" :to="{ name: 'panel' }" :icon="iPanel"
                         :label="$q.screen.width >= 480 ? t('app.panel') : undefined"
                         :aria-label="t('app.panel')" exact />
-          <q-route-tab name="historial" :to="{ name: 'historial' }" :icon="iHistorial"
+          <q-route-tab name="historial" :to="destinoHistorial" :icon="iHistorial"
                         :label="$q.screen.width >= 480 ? t('app.historial') : undefined"
                         :aria-label="t('app.historial')" />
           <q-route-tab name="grabaciones" :to="{ name: 'grabaciones' }" :icon="iGrabaciones"
@@ -96,7 +113,7 @@ async function entrar() {
 
         <q-btn-dropdown flat dense no-caps :icon="iTraducir" :dropdown-icon="iDesplegar"
                         :label="$q.screen.gt.xs ? nombreIdioma : undefined"
-                        :aria-label="t('app.idioma_actual', { nombre: nombreIdioma })" class="q-ml-sm">
+                        :aria-label="t('app.idioma_actual', { nombre: nombreIdioma })" class="q-ml-sm idioma">
           <q-list role="menu">
             <q-item v-for="l in idiomas" :key="l.id" clickable v-close-popup role="menuitemradio"
                     :active="l.id === idioma" :aria-checked="l.id === idioma" @click="cambiarIdioma(l.id)">
@@ -210,6 +227,23 @@ async function entrar() {
   }
   .pestanas :deep(.q-tab__icon) {
     font-size: 20px;
+  }
+}
+// A 375 px la barra completa (logo + título + 4 pestañas + idioma + «más») no cabe: el
+// título se quita (queda el logo como marca), las pestañas y el hueco entre elementos se
+// aprietan, y la flechita del desplegable de idioma se quita para ahorrar los últimos px.
+@media (max-width: 479px) {
+  .q-toolbar__title {
+    display: none;
+  }
+  .pestanas .q-tab {
+    padding: 0 var(--ss-space-1);
+  }
+  .idioma :deep(.q-btn-dropdown__arrow) {
+    display: none;
+  }
+  .barra {
+    gap: 0;
   }
 }
 </style>

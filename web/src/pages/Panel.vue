@@ -1,6 +1,6 @@
 <script setup>
 import { iBroadcast, iChat, iCopiar, iGrabacionActiva, iMas, iRotar, iSenal, iSinSenal } from '@/iconos'
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useQuasar } from 'quasar'
 import draggable from 'vuedraggable'
 import { usePanel } from '@/stores/panel'
@@ -255,6 +255,25 @@ async function revelar(d) {
   }
 }
 
+/**
+ * Reordena con el teclado (↑/↓ desde el asa): intercambia el destino con su vecino,
+ * sin salir de los límites de la lista, y persiste con la misma función que usa el
+ * arrastre. Al terminar, el foco vuelve al asa de la misma tarjeta —ya en su nueva
+ * posición— para poder seguir moviéndola sin buscarla de nuevo con Tab.
+ */
+async function mover(destino, delta) {
+  const i = lista.value.findIndex((d) => d.id === destino.id)
+  const j = i + delta
+  if (i === -1 || j < 0 || j >= lista.value.length) return
+  const copia = [...lista.value]
+  ;[copia[i], copia[j]] = [copia[j], copia[i]]
+  lista.value = copia
+  arrastrando.value = true
+  await guardarOrden()
+  await nextTick()
+  document.querySelector(`[data-id="${destino.id}"] .arrastre`)?.focus()
+}
+
 async function guardarOrden() {
   const ids = lista.value.map((d) => d.id)
   try {
@@ -364,6 +383,7 @@ async function rotarClave() {
           :icono="panel.haySesion ? iSenal : iSinSenal"
           :pulso="panel.haySesion"
           :texto="panel.haySesion ? t('panel.en_vivo') : t('panel.sin_senal')"
+          anuncia
         />
         <div class="col ss-t-14 ss-muted ss-tabular linea-sesion">
           <template v-if="panel.haySesion">
@@ -440,7 +460,7 @@ async function rotarClave() {
         :label="t('panel.todos')"
         dense
         class="q-mr-sm"
-        :aria-label="todosEncendidos ? t('panel.apagar_todos_canales') : t('panel.encender_todos_canales')"
+        :aria-label="`${t('panel.todos')} — ${todosEncendidos ? t('panel.apagar_todos_canales') : t('panel.encender_todos_canales')}`"
         @update:model-value="alternarTodos(!todosEncendidos)"
       >
         <q-tooltip>
@@ -491,6 +511,7 @@ async function rotarClave() {
           @probar="probar(element)"
           @al-aire="alAire(element)"
           @terminar="terminar(element)"
+          @mover="mover(element, $event)"
         />
       </template>
     </draggable>
@@ -534,6 +555,13 @@ async function rotarClave() {
   padding: 8px 12px;
   border-radius: var(--ss-radius-sm);
   margin-top: 2px;
+}
+/* Un host largo en la URL RTMP no debe empujar la fila fuera de la pantalla a 375 px
+   (Minor 13 de la revisión): sin min-width: 0 un hijo flex no encoge por debajo de su
+   contenido, y overflow-wrap deja partir la palabra si hace falta. */
+.valor-ingesta .col {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .rejilla-canales {
   display: grid;
