@@ -456,7 +456,7 @@ fuentes: [`docs/comparativa.md`](docs/comparativa.md).
 
 ## Desarrollo
 
-Hace falta Go 1.25+ y Node 20+. Docker y ffmpeg solo para los tests de integración.
+Hace falta Go 1.26+ y Node 20+. Docker y ffmpeg solo para los tests de integración.
 
 ```bash
 make build             # panel + binario

@@ -460,7 +460,7 @@ sources: [`docs/comparison.md`](docs/comparison.md).
 
 ## Development
 
-You need Go 1.25+ and Node 20+. Docker and ffmpeg only for the integration tests.
+You need Go 1.26+ and Node 20+. Docker and ffmpeg only for the integration tests.
 
 ```bash
 make build             # panel + binary
