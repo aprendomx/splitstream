@@ -521,6 +521,31 @@ no tienen una API viable para esto. Sin multi-tenant. Si necesitas cambiar la re
 el bitrate por destino, esto no es la herramienta: hace falta transcodificar, y eso es
 otro producto.
 
+### Emitir desde la cámara del navegador (planeado)
+
+La siguiente fuente después de OBS es la cámara del teléfono o del portátil desde el que
+se abre el panel: el navegador codifica H.264 y AAC con WebCodecs y se los manda al
+binario, que los reenvía exactamente igual que a OBS, sin transcodificar. Antes de
+construirlo comprobamos qué pueden hacer de verdad los navegadores, y estos límites no
+están en nuestra mano:
+
+- **Necesita HTTPS.** Los navegadores solo exponen la cámara y los codificadores en un
+  origen seguro. Abrir el panel por `http://` en una dirección de la LAN no da cámara;
+  solo `localhost` se libra. Usa el TLS integrado, un proxy con certificado o un túnel que
+  termine HTTPS (Tailscale, Cloudflare Tunnel).
+- **Ni en Firefox ni en Chrome para Linux.** Codifican H.264 sin problema, pero no tienen
+  codificador AAC, y las plataformas no aceptan otra cosa. Funciona en Chrome y Edge en
+  Windows, macOS, Android y ChromeOS, y en Safari.
+- **iOS necesita Safari 26 o posterior.** Las versiones anteriores no tienen codificador
+  de audio.
+- **El teléfono tiene que quedarse en la página.** Bloquear la pantalla o cambiar de app
+  suspende la cámara en todos los navegadores móviles; la emisión se corta hasta que
+  vuelves.
+- **No es una webcam enchufada al servidor.** Capturar una cámara USB desde el binario
+  exigiría meter dentro captura y codificación (ffmpeg), que es el «otro producto» de
+  arriba. Tampoco es ingesta WebRTC/WHIP: su audio es Opus y habría que transcodificarlo
+  a AAC.
+
 ## Licencia
 
 MIT. Las dependencias y sus licencias están en el panel, en **Créditos**.
