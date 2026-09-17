@@ -19,7 +19,7 @@ RUN npm run build
 # ── 2. El binario ─────────────────────────────────────────────────────────────
 # --platform=$BUILDPLATFORM: la etapa corre en la arquitectura del runner y Go cruza a la
 # de destino. Sin esto, buildx emularía arm64 con QEMU y el build tardaría diez veces más.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS binario
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS binario
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 
