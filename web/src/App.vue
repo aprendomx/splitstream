@@ -78,11 +78,7 @@ async function entrar() {
 
         <!-- Autenticado: pestañas de navegación. Sin sesión: solo el espacio, para que el
              menú de idioma quede a la derecha igual que en la pantalla de entrada. -->
-        <!-- :model-value="route.name": QTabs trae su propia detección automática de la
-             pestaña activa por ruta, pero solo la recalcula cuando cambia route.fullPath;
-             en la carga inicial de «/» esa comprobación corre antes de que el router
-             termine de resolver, y como la ruta no vuelve a cambiar se queda pegada en
-             «ninguna activa». Fijar el modelo a route.name evita la carrera. -->
+        <!-- :model-value="pestanaActiva": ver el comentario del script; no hay :to. -->
         <!-- Las cuatro pestañas con icono + etiqueta no caben a 375 px junto al logo, el
              idioma y «más»: por debajo de 480 px se quita la etiqueta visible (el icono y
              el aria-label bastan) para que quepan sin scroll horizontal. -->
