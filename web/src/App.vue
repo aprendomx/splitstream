@@ -1,7 +1,7 @@
 <script setup>
 import { iAjustes, iAnterior, iBroadcast, iDesplegar, iGrabaciones, iHistorial, iInfo, iMasOpciones, iOcultar, iOk, iPanel, iSalir, iSiguiente, iTraducir, iVer } from '@/iconos'
 import { ref, computed, nextTick, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { usePanel } from '@/stores/panel'
 import Asistente from '@/components/Asistente.vue'
 import { ApiError } from '@/api'
@@ -9,6 +9,7 @@ import { t, idioma, cambiarIdioma, idiomas } from '@/i18n'
 
 const panel = usePanel()
 const route = useRoute()
+const router = useRouter()
 const password = ref('')
 const passwordRef = ref(null)
 const verPassword = ref(false)
@@ -23,17 +24,10 @@ const nombreIdioma = computed(() => idiomas.find((l) => l.id === idioma.value)?.
 // mapeo se abre con todas las pestañas apagadas. Pertenece a Historial.
 const pestanaActiva = computed(() => ({ sesion: 'historial' })[route.name] ?? route.name)
 
-// QTabs vigila la ruta por su cuenta (para <q-route-tab>) y, en cada cambio de fullPath,
-// RECALCULA la pestaña activa comparando el :to de cada una contra la ruta actual —esto
-// pisa :model-value después de que se aplique, porque corre en un tick posterior (ver
-// QTabs.js verifyRouteModel/updateActiveRoute). Como «historial» y «sesion» son rutas
-// hermanas, no anidadas, ese recálculo nunca encuentra coincidencia y deja la pestaña
-// apagada pese al mapeo de arriba. En vez de pelear con ese mecanismo, se le da lo que
-// busca: mientras se ve una sesión, el :to de la pestaña Historial apunta a esa misma
-// sesión, así que la propia detección de Quasar la reconoce como activa.
-const destinoHistorial = computed(() =>
-  route.name === 'sesion' ? { name: 'sesion', params: route.params } : { name: 'historial' },
-)
+// Pestañas normales (no q-route-tab): QTabs solo marca una q-route-tab si su :to «está
+// activo» según vue-router, y /historial y /historial/:id son rutas hermanas, así que en la
+// ficha de una sesión ninguna quedaba encendida. Con q-tab + router.push, pestanaActiva es la
+// única autoridad y el mapeo de arriba basta.
 
 onMounted(() => panel.cargar())
 
@@ -96,18 +90,18 @@ async function entrar() {
                 active-color="primary" indicator-color="primary" class="pestanas"
                 :left-icon="iAnterior" :right-icon="iSiguiente"
                 :aria-label="t('app.navegacion')">
-          <q-route-tab name="panel" :to="{ name: 'panel' }" :icon="iPanel"
-                        :label="$q.screen.width >= 480 ? t('app.panel') : undefined"
-                        :aria-label="t('app.panel')" exact />
-          <q-route-tab name="historial" :to="destinoHistorial" :icon="iHistorial"
-                        :label="$q.screen.width >= 480 ? t('app.historial') : undefined"
-                        :aria-label="t('app.historial')" />
-          <q-route-tab name="grabaciones" :to="{ name: 'grabaciones' }" :icon="iGrabaciones"
-                        :label="$q.screen.width >= 480 ? t('app.grabaciones') : undefined"
-                        :aria-label="t('app.grabaciones')" />
-          <q-route-tab name="ajustes" :to="{ name: 'ajustes' }" :icon="iAjustes"
-                        :label="$q.screen.width >= 480 ? t('app.ajustes') : undefined"
-                        :aria-label="t('app.ajustes')" />
+          <q-tab name="panel" :icon="iPanel"
+                 :label="$q.screen.width >= 480 ? t('app.panel') : undefined"
+                 :aria-label="t('app.panel')" @click="router.push({ name: 'panel' })" />
+          <q-tab name="historial" :icon="iHistorial"
+                 :label="$q.screen.width >= 480 ? t('app.historial') : undefined"
+                 :aria-label="t('app.historial')" @click="router.push({ name: 'historial' })" />
+          <q-tab name="grabaciones" :icon="iGrabaciones"
+                 :label="$q.screen.width >= 480 ? t('app.grabaciones') : undefined"
+                 :aria-label="t('app.grabaciones')" @click="router.push({ name: 'grabaciones' })" />
+          <q-tab name="ajustes" :icon="iAjustes"
+                 :label="$q.screen.width >= 480 ? t('app.ajustes') : undefined"
+                 :aria-label="t('app.ajustes')" @click="router.push({ name: 'ajustes' })" />
         </q-tabs>
         <q-space v-else />
 
