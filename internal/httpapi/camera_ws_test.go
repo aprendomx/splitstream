@@ -17,12 +17,12 @@ import (
 	"github.com/aprendomx/splitstream/internal/relay"
 )
 
-func cameraServer(t *testing.T) (*fakeEngine, string, []*http.Cookie) {
+func cameraServer(t *testing.T) (*Server, *fakeEngine, string, []*http.Cookie) {
 	t.Helper()
 	srv, _, eng, _, cookies := newDestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return eng, "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/camera/ws", cookies
+	return srv, eng, "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/camera/ws", cookies
 }
 
 const startValido = `{"width":1280,"height":720,"framerate":30,"video_bitrate":2500000,"audio_bitrate":128000,"sample_rate":48000,"channels":2}`
@@ -83,7 +83,7 @@ func esperarTerminadas(t *testing.T, eng *fakeEngine, n int) {
 
 // El handshake lleva la cookie: sin sesión del panel no hay upgrade.
 func TestCameraRequiresASession(t *testing.T) {
-	_, url, _ := cameraServer(t)
+	_, _, url, _ := cameraServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -99,7 +99,7 @@ func TestCameraRequiresASession(t *testing.T) {
 
 // start es siempre lo primero: un frame antes de start no abre sesión y cierra con 4003.
 func TestCameraRejectsWhenStartIsNotFirst(t *testing.T) {
-	eng, url, cookies := cameraServer(t)
+	_, eng, url, cookies := cameraServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -120,7 +120,7 @@ func TestCameraRejectsWhenStartIsNotFirst(t *testing.T) {
 
 // Con OBS en el aire, la cámara no entra: 4002 con motivo en el idioma del panel.
 func TestCameraClosesBusyWhenASessionIsLive(t *testing.T) {
-	eng, url, cookies := cameraServer(t)
+	_, eng, url, cookies := cameraServer(t)
 	eng.setStartErr(relay.ErrSessionInProgress)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -147,7 +147,7 @@ func TestCameraClosesBusyWhenASessionIsLive(t *testing.T) {
 // start abre la sesión, publica el onMetaData construido con lo que declaró el cliente y
 // confirma con el id.
 func TestCameraStartsSessionAndPublishesMeta(t *testing.T) {
-	eng, url, cookies := cameraServer(t)
+	_, eng, url, cookies := cameraServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -185,7 +185,7 @@ func TestCameraStartsSessionAndPublishesMeta(t *testing.T) {
 // flags que Inspect* sacaría del tag equivalente de OBS, timestamps intactos, y el ASC
 // extraído aunque llegue dentro de un esds.
 func TestCameraWrapsFramesIntoRelayMessages(t *testing.T) {
-	eng, url, cookies := cameraServer(t)
+	_, eng, url, cookies := cameraServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -247,7 +247,7 @@ func TestCameraWrapsFramesIntoRelayMessages(t *testing.T) {
 // Un mensaje que no se puede envolver cierra con 4003 y termina la sesión: seguir
 // aceptando tras un frame corrupto mandaría basura a las plataformas.
 func TestCameraClosesOnMalformedMessage(t *testing.T) {
-	eng, url, cookies := cameraServer(t)
+	_, eng, url, cookies := cameraServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -268,7 +268,7 @@ func TestCameraClosesOnMalformedMessage(t *testing.T) {
 // Cuando el cliente se va —con cierre limpio o sin él— la sesión se cierra en el motor:
 // es lo que apaga los sinks y lo que WaitIdle necesita para el apagado limpio.
 func TestCameraEndsTheSessionWhenTheClientLeaves(t *testing.T) {
-	eng, url, cookies := cameraServer(t)
+	_, eng, url, cookies := cameraServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -292,7 +292,7 @@ func TestCameraEndsTheSessionWhenTheClientLeaves(t *testing.T) {
 // Un keyframe 1080p pasa de los 32 KiB que la librería acepta por defecto: el límite
 // tiene que ser mayor. Y uno mayor que el límite cierra la sesión en vez de colgarla.
 func TestCameraAcceptsBigFramesAndClosesOnHugeOnes(t *testing.T) {
-	eng, url, cookies := cameraServer(t)
+	_, eng, url, cookies := cameraServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -318,5 +318,27 @@ func TestCameraAcceptsBigFramesAndClosesOnHugeOnes(t *testing.T) {
 	escritura, cancelEscritura := context.WithTimeout(ctx, 8*time.Second)
 	_ = conn.Write(escritura, websocket.MessageBinary, append([]byte{cameraMsgVideoFrame}, enorme...))
 	cancelEscritura()
+	esperarTerminadas(t, eng, 1)
+}
+
+// El apagado ordenado corta la cámara como ingest.Close() corta a OBS: el cliente ve
+// 4004 y la sesión se cierra antes de que WaitIdle la espere.
+func TestCameraClosesWithShutdownCodeOnDisconnectCameras(t *testing.T) {
+	srv, eng, url, cookies := cameraServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, _, err := dialWS(ctx, url, cookies)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.CloseNow()
+	arrancar(t, ctx, conn)
+
+	srv.DisconnectCameras()
+
+	if got := esperarCierre(t, ctx, conn); got.Code != cameraCloseShutdown {
+		t.Errorf("código de cierre = %d, quería %d", got.Code, cameraCloseShutdown)
+	}
 	esperarTerminadas(t, eng, 1)
 }

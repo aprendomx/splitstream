@@ -83,6 +83,22 @@ func (s *Server) handleCameraWS(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(cameraReadLimit)
 	ctx := r.Context()
 
+	// El WebSocket queda secuestrado en cuanto Accept lo hijack-ea: net/http deja de
+	// vigilarlo, así que ni http.Server.Shutdown ni la cancelación del contexto de la
+	// petición llegan aquí solos. s.cameraCtx es el gancho que DisconnectCameras acciona
+	// desde main.go (el equivalente de Ingest.Close() para RTMP) para sacar al publisher
+	// ANTES de que el apagado ordenado espere WaitIdle.
+	//
+	// Esto llama a conn.Close directamente, NO cancela el contexto que usan los Read de
+	// abajo: coder/websocket trata cualquier Done() en el contexto de Read como un plazo
+	// vencido y cierra el socket en crudo sin trama de cierre (setupReadTimeout), que es
+	// justo lo que un cierre con código y motivo NO es. Cerrando aquí, el Read en curso
+	// se desbloquea solo, con la trama de cierre ya en camino.
+	stop := context.AfterFunc(s.cameraCtx, func() {
+		conn.Close(cameraCloseShutdown, traducir(lang, "el servidor se está apagando"))
+	})
+	defer stop()
+
 	// 1. start, o nada.
 	leer, cancel := context.WithTimeout(ctx, cameraStartWait)
 	tipo, data, err := conn.Read(leer)
@@ -115,8 +131,9 @@ func (s *Server) handleCameraWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Pase lo que pase a partir de aquí —cierre del cliente, plazo vencido, mensaje
-	// ilegal, apagado— la sesión se cierra: es lo que apaga los sinks y lo que WaitIdle
-	// necesita para que el apagado sea limpio.
+	// ilegal, o DisconnectCameras cerrando la conexión con el código 4004 en el apagado
+	// ordenado— la sesión se cierra: es lo que apaga los sinks y lo que WaitIdle necesita
+	// para que el apagado sea limpio.
 	defer s.engine.OnPublishEnd()
 
 	// 3. El onMetaData y la confirmación.
@@ -148,9 +165,8 @@ func (s *Server) handleCameraWS(w http.ResponseWriter, r *http.Request) {
 		tipo, data, err := conn.Read(leer)
 		cancel()
 		if err != nil {
-			if ctx.Err() != nil {
-				conn.Close(cameraCloseShutdown, traducir(lang, "el servidor se está apagando"))
-			}
+			// Si fue DisconnectCameras, el AfterFunc de más arriba ya mandó el 4004: no
+			// hay que cerrar dos veces, solo dejar constancia y volver.
 			s.logger.Info("cámara del navegador desconectada", "motivo", err)
 			return
 		}

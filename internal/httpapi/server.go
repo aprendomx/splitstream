@@ -248,6 +248,14 @@ type Server struct {
 	// goroutines de sondeo para que Wait() pueda esperarlas.
 	baseCtx context.Context
 	wg      sync.WaitGroup
+	// cameraCtx es el padre de cada WebSocket de la cámara del navegador (camera.go).
+	// Deliberadamente independiente de baseCtx: main.go cancela baseCtx (vía cancelSinks)
+	// DESPUÉS de WaitIdle, así que colgar la cámara de él no cortaría nada a tiempo.
+	// cancelCameras es lo que DisconnectCameras acciona, el equivalente de Ingest.Close()
+	// para RTMP: el gancho que el apagado ordenado necesita para sacar al publisher ANTES
+	// de que main.go espere WaitIdle.
+	cameraCtx     context.Context
+	cancelCameras context.CancelFunc
 }
 
 func New(cfg Config) (*Server, error) {
@@ -269,6 +277,7 @@ func New(cfg Config) (*Server, error) {
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
+	cameraCtx, cancelCameras := context.WithCancel(context.Background())
 
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
@@ -283,10 +292,12 @@ func New(cfg Config) (*Server, error) {
 		updateInfo: cfg.UpdateInfo,
 		platforms:  cfg.Platforms, tokens: cfg.Tokens, chat: cfg.Chat, chatStats: cfg.ChatStats,
 		chatIngest: cfg.ChatIngest, chatBudget: cfg.ChatBudget, ytQuota: cfg.YouTubeQuota, quota: cfg.Quota,
-		auths:       &authFlows{flows: map[string]*authFlow{}},
-		baseCtx:     baseCtx,
-		liveTimeout: liveTimeoutPorDefecto,
-		now:         time.Now,
+		auths:         &authFlows{flows: map[string]*authFlow{}},
+		baseCtx:       baseCtx,
+		liveTimeout:   liveTimeoutPorDefecto,
+		now:           time.Now,
+		cameraCtx:     cameraCtx,
+		cancelCameras: cancelCameras,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto
@@ -298,6 +309,12 @@ func New(cfg Config) (*Server, error) {
 // Handler envuelve el mux con conIdioma: así el idioma se negocia una vez por petición y
 // writeError lo encuentra sin que ninguno de sus ~90 sitios de llamada cambie.
 func (s *Server) Handler() http.Handler { return conIdioma(s.mux) }
+
+// DisconnectCameras corta las sesiones de la cámara del navegador en curso. Existe por
+// la misma razón que Ingest.Close() para RTMP: el apagado ordenado (main.go) necesita
+// que el publisher se vaya ANTES de WaitIdle, y una conexión WebSocket secuestrada no se
+// entera de http.Server.Shutdown ni de la cancelación del contexto de la petición.
+func (s *Server) DisconnectCameras() { s.cancelCameras() }
 
 // ruta es una entrada de la tabla de rutas: todo lo que hace falta saber de un endpoint,
 // tanto para registrarlo en el mux como para contarlo en docs/api.md (spec v1.0 §5.1).

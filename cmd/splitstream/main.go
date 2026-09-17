@@ -675,6 +675,11 @@ func run(ctx context.Context, out io.Writer) error {
 		logger.Error("cerrar la ingesta", "err", err)
 	}
 
+	// DisconnectCameras es el equivalente de ingest.Close() para la cámara del
+	// navegador: un WebSocket secuestrado no se entera de httpSrv.Shutdown ni de la
+	// cancelación del contexto de la petición, así que sin esto seguiría publicando.
+	api.DisconnectCameras()
+
 	// Cerrar la ingesta corta los sockets, pero go-rtmp atiende cada conexión en su
 	// propia goroutine y esa todavía tiene que disparar OnPublishEnd, que cierra la
 	// sesión en la base y para los sinks. Sin esta espera el proceso puede salir antes,
