@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/yutopp/go-rtmp v0.0.7
 	golang.org/x/crypto v0.57.0
-	golang.org/x/time v0.15.0
+	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.58.0
 )
 
