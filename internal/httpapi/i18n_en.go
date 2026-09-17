@@ -149,6 +149,15 @@ var traducciones = map[string]string{
 	"sin señal":          "no signal",
 	"la emisión terminó": "the broadcast ended",
 
+	// ---- camera.go: los motivos con los que se cierra el WebSocket de la cámara, que
+	// el panel enseña tal cual (Camara.vue) ----
+	"ya hay una emisión en curso":      "a broadcast is already in progress",
+	"el primer mensaje debe ser start": "the first message must be start",
+	"start mal formado":                "malformed start",
+	"mensaje mal formado":              "malformed message",
+	"el servidor se está apagando":     "the server is shutting down",
+	"mensaje de cámara mal formado":    "malformed camera message",
+
 	// ---- recording.go ----
 	"la grabación no está en el directorio de grabaciones": "the recording is not in the recordings directory",
 	"el archivo de la grabación ya no está en disco":       "the recording file is no longer on disk",

@@ -394,6 +394,7 @@ func (s *Server) rutas() []ruta {
 		protegida("DELETE", "/api/recordings/{id}", s.handleDeleteRecording, "recordings", "Borra una grabación y su archivo"),
 		protegida("GET", "/ws", s.handleWS, "ws", "Canal WebSocket con el estado del panel en tiempo real"),
 		protegida("GET", "/api/preview/ws", s.handlePreviewWS, "ws", "Canal WebSocket con la vista previa silenciada de la ingesta"),
+		protegida("GET", "/api/camera/ws", s.handleCameraWS, "ws", "Canal WebSocket por el que el navegador publica su cámara como fuente de la emisión"),
 
 		// Plataformas, flujo de autorización sondeado en el servidor, y cuentas (v0.11 §6.1).
 		protegida("GET", "/api/platforms", s.handleListPlatforms, "platforms", "Lista las plataformas soportadas y lo que cada una permite hacer"),

@@ -157,6 +157,7 @@ del panel y `sí (o token)` acepta además el token del recolector de métricas.
 
 | Método | Ruta | Sesión | Qué hace |
 | --- | --- | --- | --- |
+| GET | `/api/camera/ws` | sí | Canal WebSocket por el que el navegador publica su cámara como fuente de la emisión |
 | GET | `/api/preview/ws` | sí | Canal WebSocket con la vista previa silenciada de la ingesta |
 | GET | `/ws` | sí | Canal WebSocket con el estado del panel en tiempo real |
 
