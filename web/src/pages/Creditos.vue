@@ -44,12 +44,12 @@ const HERRAMIENTAS = [
 
 <template>
   <q-page class="q-pa-md q-pb-xl creditos">
-    <div class="contenido">
-      <div class="text-center q-mb-lg">
-        <q-icon :name="iBroadcast" size="40px" class="text-primary" />
-        <div class="text-h5 q-mt-sm">Splitstream</div>
-        <div class="text-caption text-grey-5">{{ t('creditos.version', { version }) }}</div>
-        <div class="text-body2 text-grey-4 q-mt-sm">
+    <div class="pagina">
+      <div class="cabecera text-center">
+        <q-icon :name="iBroadcast" size="48px" class="text-primary" aria-hidden="true" />
+        <div class="ss-t-28 q-mt-sm">Splitstream</div>
+        <div class="ss-t-14 ss-muted ss-tabular">{{ t('creditos.version', { version }) }}</div>
+        <div class="ss-t-14 ss-muted q-mt-sm">
           {{ t('creditos.subtitulo') }}
         </div>
         <q-btn
@@ -59,64 +59,64 @@ const HERRAMIENTAS = [
         />
       </div>
 
-      <q-card flat bordered class="q-mb-md">
-        <q-card-section>
-          <div class="text-subtitle1">{{ t('creditos.licencia_titulo') }}</div>
-          <p class="text-body2 text-grey-4 q-mt-sm q-mb-none">
-            {{ t('creditos.licencia_pre') }} <strong>MIT</strong>{{ t('creditos.licencia_post') }}
-          </p>
+      <q-card flat bordered class="q-mb-md q-mt-lg">
+        <div class="cabecera-tarjeta">
+          <span class="ss-t-16 titulo-texto">{{ t('creditos.licencia_titulo') }}</span>
+        </div>
+        <q-card-section class="ss-t-14">
+          {{ t('creditos.licencia_pre') }} <strong>MIT</strong>{{ t('creditos.licencia_post') }}
         </q-card-section>
       </q-card>
 
       <q-card flat bordered class="q-mb-md">
-        <q-card-section>
-          <div class="text-subtitle1">{{ t('creditos.gracias_titulo') }}</div>
-          <p class="text-body2 text-grey-4 q-mt-sm q-mb-none">
-            {{ t('creditos.gracias_texto') }}
-          </p>
+        <div class="cabecera-tarjeta">
+          <span class="ss-t-16 titulo-texto">{{ t('creditos.gracias_titulo') }}</span>
+        </div>
+        <q-card-section class="ss-t-14">
+          {{ t('creditos.gracias_texto') }}
         </q-card-section>
       </q-card>
 
-      <div class="text-subtitle2 text-grey-5 q-mb-sm">{{ t('creditos.el_motor') }}</div>
-      <q-list bordered separator class="rounded-borders q-mb-md">
+      <div class="ss-t-18 titulo-seccion">{{ t('creditos.el_motor') }}</div>
+      <q-list bordered separator class="lista q-mb-md">
         <q-item v-for="d in MOTOR" :key="d.n" clickable tag="a" :href="d.u"
                 target="_blank" rel="noopener noreferrer">
           <q-item-section>
-            <q-item-label>{{ d.n }}</q-item-label>
-            <q-item-label caption class="porque">{{ t(d.qKey) }}</q-item-label>
+            <q-item-label class="enlace">{{ d.n }}</q-item-label>
+            <q-item-label caption class="ss-t-14 ss-muted">{{ t(d.qKey) }}</q-item-label>
           </q-item-section>
           <q-item-section side>
-            <q-badge outline color="grey-6" :label="d.l" />
+            <q-badge outline color="grey-5" :label="d.l" />
           </q-item-section>
         </q-item>
       </q-list>
 
-      <div class="text-subtitle2 text-grey-5 q-mb-sm">{{ t('creditos.el_panel') }}</div>
-      <q-list bordered separator class="rounded-borders q-mb-md">
+      <div class="ss-t-18 titulo-seccion">{{ t('creditos.el_panel') }}</div>
+      <q-list bordered separator class="lista q-mb-md">
         <q-item v-for="d in PANEL" :key="d.n" clickable tag="a" :href="d.u"
                 target="_blank" rel="noopener noreferrer">
-          <q-item-section>{{ d.n }}</q-item-section>
+          <q-item-section class="enlace">{{ d.n }}</q-item-section>
           <q-item-section side>
-            <q-badge outline color="grey-6" :label="d.l" />
+            <q-badge outline color="grey-5" :label="d.l" />
           </q-item-section>
         </q-item>
       </q-list>
 
-      <div class="text-subtitle2 text-grey-5 q-mb-sm">{{ t('creditos.construir_probar') }}</div>
-      <q-list bordered separator class="rounded-borders q-mb-md">
+      <div class="ss-t-18 titulo-seccion">{{ t('creditos.construir_probar') }}</div>
+      <q-list bordered separator class="lista q-mb-md">
         <q-item v-for="d in HERRAMIENTAS" :key="d.n" clickable tag="a" :href="d.u"
                 target="_blank" rel="noopener noreferrer">
           <q-item-section>
-            <q-item-label>{{ d.n }}</q-item-label>
-            <q-item-label caption class="porque">{{ t(d.qKey) }}</q-item-label>
+            <q-item-label class="enlace">{{ d.n }}</q-item-label>
+            <q-item-label caption class="ss-t-14 ss-muted">{{ t(d.qKey) }}</q-item-label>
           </q-item-section>
           <q-item-section side>
-            <q-badge outline color="grey-6" :label="d.l" />
+            <q-badge outline color="grey-5" :label="d.l" />
           </q-item-section>
         </q-item>
       </q-list>
 
-      <p class="text-caption text-grey-6 text-center q-mt-lg">
+      <p class="ss-t-14 ss-muted text-center q-mt-lg">
         {{ t('creditos.marcas') }}
       </p>
     </div>
@@ -124,6 +124,11 @@ const HERRAMIENTAS = [
 </template>
 
 <style scoped>
-.contenido { max-width: 720px; margin: 0 auto; }
-.porque { line-height: 1.45; }
+.pagina { max-width: 720px; margin: 0 auto; padding: var(--ss-space-5) var(--ss-space-4); }
+.titulo-seccion { margin-top: var(--ss-space-6); margin-bottom: var(--ss-space-2); }
+.cabecera-tarjeta { padding: var(--ss-space-3) var(--ss-space-4); border-bottom: 1px solid var(--ss-border); }
+.titulo-texto { font-weight: 600; }
+/* Enlaces de la lista de dependencias: color y subrayado propios, el foco lo da el anillo
+   global (spec §3.4), no un color aparte. */
+.enlace { color: var(--ss-primary-hover); text-decoration: underline; }
 </style>

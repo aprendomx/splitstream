@@ -3,6 +3,8 @@ import { createPinia } from 'pinia'
 import { Quasar, Dark, Notify, Dialog } from 'quasar'
 // Sin importar el CSS de mdi-v7: los iconos entran uno a uno como SVG (ver src/iconos.js).
 import 'quasar/src/css/index.sass'
+import '@/css/tokens.scss'
+import '@/css/base.scss'
 // Aquí y no al final: los imports de ES se izan, así que el orden real es este.
 import '@/i18n'
 

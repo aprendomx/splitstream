@@ -93,14 +93,14 @@ onUnmounted(() => clearTimeout(temporizador))
            sigue abierto, que es lo que espera quien se arrepiente a mitad de pegar las
            credenciales y quiere volver al botón de conectar. -->
       <div>
-        <a href="#" class="text-caption enlace-cancelar" @click.prevent="cancelarAsistente">{{ t('comun.cancelar') }}</a>
+        <q-btn flat no-caps :label="t('comun.cancelar')" @click="cancelarAsistente" />
       </div>
     </template>
 
     <!-- Kick: vuelve por el navegador. Un enlace de verdad, nunca un window.open a mano: el
          segundo lo bloquea cualquier bloqueador de ventanas emergentes. -->
-    <div v-if="estado === 'pending' && inicio?.redirect_url" class="codigo-dispositivo q-pa-md rounded-borders">
-      <div class="text-body2 q-mb-sm">{{ t('conectar.autoriza_pestana') }}</div>
+    <div v-if="estado === 'pending' && inicio?.redirect_url">
+      <p class="ss-t-14">{{ t('conectar.autoriza_pestana') }}</p>
       <q-btn
         unelevated
         no-caps
@@ -110,20 +110,29 @@ onUnmounted(() => clearTimeout(temporizador))
         rel="noopener noreferrer"
         :label="t('conectar.abrir_para_autorizar', { nombre: nombre || plataforma })"
       />
-      <div class="text-caption text-grey-5 q-mt-sm"><q-spinner size="14px" class="q-mr-xs" />{{ t('conectar.esperando') }}</div>
+      <p class="ss-t-14 ss-muted q-mt-sm" role="status" aria-live="polite"><q-spinner size="14px" class="q-mr-xs" />{{ t('conectar.esperando') }}</p>
     </div>
 
-    <div v-else-if="estado === 'pending' && inicio" class="codigo-dispositivo q-pa-md rounded-borders">
-      <div class="text-body2">{{ t('conectar.abre_pre') }} <a :href="inicio.verification_uri" target="_blank" rel="noopener">{{ inicio.verification_uri.replace(/^https:\/\//, '') }}</a> {{ t('conectar.abre_post') }}</div>
-      <div class="codigo text-h4 q-my-sm">{{ inicio.user_code }}</div>
-      <div class="text-caption text-grey-5"><q-spinner size="14px" class="q-mr-xs" />{{ t('conectar.esperando_codigo', { mins: Math.round(inicio.expires_in / 60) }) }}</div>
+    <div v-else-if="estado === 'pending' && inicio">
+      <p class="ss-t-14">{{ t('conectar.abre_pre') }} <a :href="inicio.verification_uri" target="_blank" rel="noopener">{{ inicio.verification_uri.replace(/^https:\/\//, '') }}</a> {{ t('conectar.abre_post') }}</p>
+      <div class="caja-codigo ss-surface-2">
+        <div class="codigo ss-t-28 ss-mono ss-tabular">{{ inicio.user_code }}</div>
+      </div>
+      <p class="ss-t-14 ss-muted" role="status" aria-live="polite"><q-spinner size="14px" class="q-mr-xs" />{{ t('conectar.esperando_codigo', { mins: Math.round(inicio.expires_in / 60) }) }}</p>
     </div>
     <q-banner v-if="error" dense class="bg-red-10 text-red-2 rounded-borders" role="alert">{{ error }}</q-banner>
   </div>
 </template>
 
 <style scoped>
-.codigo-dispositivo { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); }
-.enlace-cancelar { color: rgba(255,255,255,0.7); text-decoration: underline; }
-.codigo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.2em; user-select: all; }
+.caja-codigo {
+  padding: var(--ss-space-4) var(--ss-space-5);
+  border: 1px solid var(--ss-border);
+  text-align: center;
+  margin: var(--ss-space-3) 0;
+}
+.codigo {
+  letter-spacing: 0.08em;
+  user-select: all;
+}
 </style>

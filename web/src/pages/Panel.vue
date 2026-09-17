@@ -1,6 +1,6 @@
 <script setup>
-import { iArrastrar, iBroadcast, iChat, iCopiar, iGrabar, iMas, iRotar } from '@/iconos'
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { iBroadcast, iChat, iCopiar, iGrabacionActiva, iMas, iRotar, iSenal, iSinSenal } from '@/iconos'
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useQuasar } from 'quasar'
 import draggable from 'vuedraggable'
 import { usePanel } from '@/stores/panel'
@@ -9,6 +9,7 @@ import { bitrateLegible, bytesLegibles, duracionLegible } from '@/diagnostico'
 import { t } from '@/i18n'
 import DialogoDestino from '@/components/DialogoDestino.vue'
 import TarjetaDestino from '@/components/TarjetaDestino.vue'
+import ChipEstado from '@/components/ChipEstado.vue'
 import VistaPrevia from '@/components/VistaPrevia.vue'
 import RegistroEventos from '@/components/RegistroEventos.vue'
 import TituloEnVivo from '@/components/TituloEnVivo.vue'
@@ -16,6 +17,10 @@ import Chat from '@/components/Chat.vue'
 
 const $q = useQuasar()
 const panel = usePanel()
+
+// Se calcula una sola vez al montar la página: no hace falta que sea reactivo, y así el
+// arrastre no reconsulta la preferencia del sistema en cada render.
+const reducido = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 const dialogo = ref(false)
 const editando = ref(null)
@@ -207,7 +212,7 @@ async function probar(d) {
     aviso()
     $q.dialog({
       title: titulo,
-      message: `${escaparHtml(r.message)}<br><br><span class="text-caption text-grey-5">${escaparHtml(r.stage)} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
+      message: `${escaparHtml(r.message)}<br><br><span class="ss-t-12 ss-muted">${escaparHtml(r.stage)} · ${(r.elapsed_ms / 1000).toFixed(1)} s</span>`,
       html: true,
       ok: { flat: true, noCaps: true, label: t('comun.cerrar') },
     })
@@ -248,6 +253,25 @@ async function revelar(d) {
   } catch (e) {
     $q.notify({ type: 'negative', message: e.message })
   }
+}
+
+/**
+ * Reordena con el teclado (↑/↓ desde el asa): intercambia el destino con su vecino,
+ * sin salir de los límites de la lista, y persiste con la misma función que usa el
+ * arrastre. Al terminar, el foco vuelve al asa de la misma tarjeta —ya en su nueva
+ * posición— para poder seguir moviéndola sin buscarla de nuevo con Tab.
+ */
+async function mover(destino, delta) {
+  const i = lista.value.findIndex((d) => d.id === destino.id)
+  const j = i + delta
+  if (i === -1 || j < 0 || j >= lista.value.length) return
+  const copia = [...lista.value]
+  ;[copia[i], copia[j]] = [copia[j], copia[i]]
+  lista.value = copia
+  arrastrando.value = true
+  await guardarOrden()
+  await nextTick()
+  document.querySelector(`[data-id="${destino.id}"] .arrastre`)?.focus()
 }
 
 async function guardarOrden() {
@@ -349,57 +373,71 @@ async function rotarClave() {
 </script>
 
 <template>
-  <q-page class="q-pa-md q-pb-xl">
+  <q-page class="q-pa-md q-pb-xl pagina-panel">
     <!-- Estado de la ingesta: lo primero que uno mira al abrir el panel. -->
     <q-card flat bordered class="q-mb-md">
-      <q-card-section class="row items-center q-gutter-md">
-        <div class="indicador" :class="panel.haySesion ? 'vivo' : 'apagado'" aria-hidden="true" />
-        <div class="col">
-          <div class="text-subtitle1">
-            {{ panel.haySesion ? t('panel.recibiendo_senal') : t('panel.sin_senal') }}
-          </div>
-          <div class="text-caption text-grey-5">
-            <template v-if="panel.haySesion">
-              <span v-if="panel.resolucion">{{ panel.resolucion }}</span>
-              <span v-else>{{ t('panel.resolucion_pendiente') }}</span>
-              · {{ bitrateLegible(panel.sesion.bitrate_bps) }}
-              <span v-if="tiempoEmitiendo"> · {{ tiempoEmitiendo }}</span>
-            </template>
-            <template v-else>{{ t('panel.arranca_obs') }}</template>
-          </div>
+      <q-card-section class="row items-center q-gutter-md wrap cabecera-sesion">
+        <ChipEstado
+          tam="lg"
+          :tono="panel.haySesion ? 'emitiendo' : 'neutro'"
+          :icono="panel.haySesion ? iSenal : iSinSenal"
+          :pulso="panel.haySesion"
+          :texto="panel.haySesion ? t('panel.en_vivo') : t('panel.sin_senal')"
+          anuncia
+        />
+        <div class="col ss-t-14 ss-muted ss-tabular linea-sesion">
+          <template v-if="panel.haySesion">
+            <span v-if="panel.resolucion">{{ panel.resolucion }}</span>
+            <span v-else>{{ t('panel.resolucion_pendiente') }}</span>
+            · {{ bitrateLegible(panel.sesion.bitrate_bps) }}
+            <span v-if="tiempoEmitiendo"> · {{ tiempoEmitiendo }}</span>
+          </template>
+          <template v-else>{{ t('panel.arranca_obs') }}</template>
         </div>
-        <q-chip
+        <span
           v-if="panel.grabacion?.active"
-          dense square :icon="iGrabar" text-color="white"
-          :color="panel.grabacion.degraded ? 'warning' : 'negative'"
+          :title="panel.grabacion.degraded
+            ? t('panel.disco_no_da_abasto')
+            : t('panel.segmento_detalle', { segmento: panel.grabacion.segments, libres: bytesLegibles(panel.grabacion.free_bytes) })"
         >
-          {{ t('panel.grabando_detalle', { bytes: bytesLegibles(panel.grabacion.bytes), pct: porcentajeGrabacion }) }}
-          <q-tooltip>
-            {{ panel.grabacion.degraded
-              ? t('panel.disco_no_da_abasto')
-              : t('panel.segmento_detalle', { segmento: panel.grabacion.segments, libres: bytesLegibles(panel.grabacion.free_bytes) }) }}
-          </q-tooltip>
-        </q-chip>
-        <q-btn v-if="panel.haySesion && !verPrevia" flat dense no-caps size="sm"
-               :label="t('panel.vista_previa_boton')" @click="verPrevia = true" />
-        <q-btn v-if="panel.haySesion && !verChat && panel.destinos.some((d) => d.account && d.capabilities?.chat)"
-               flat dense no-caps size="sm" :icon="iChat" :label="t('panel.chat_boton')" @click="verChat = true" />
+          <ChipEstado
+            tam="sm"
+            :tono="panel.grabacion.degraded ? 'atencion' : 'emitiendo'"
+            :icono="iGrabacionActiva"
+            :texto="t('panel.grabando_detalle', { bytes: bytesLegibles(panel.grabacion.bytes), pct: porcentajeGrabacion })"
+          />
+        </span>
+        <div class="row items-center q-gutter-sm botones-sesion">
+          <q-btn v-if="panel.haySesion && !verPrevia" outline no-caps size="md"
+                 :label="t('panel.vista_previa_boton')" @click="verPrevia = true" />
+          <q-btn v-if="panel.haySesion && !verChat && panel.destinos.some((d) => d.account && d.capabilities?.chat)"
+                 outline no-caps size="md" :icon="iChat" :label="t('panel.chat_boton')" @click="verChat = true" />
+        </div>
       </q-card-section>
 
       <q-separator />
 
       <q-card-section v-if="panel.ingesta" class="q-gutter-sm">
-        <div class="text-caption text-grey-5">{{ t('panel.configura_obs') }}</div>
+        <div class="ss-t-14 ss-muted">{{ t('panel.configura_obs') }}</div>
         <!-- Ancho acotado: el botón de copiar pegado al texto en vez de al otro extremo
              de un monitor de 27 pulgadas. -->
-        <div class="row items-center no-wrap q-gutter-sm bloque-ingesta">
-          <div class="col campo-mono">{{ panel.ingesta.url }}</div>
-          <q-btn flat round dense :icon="iCopiar" :aria-label="t('panel.copiar_servidor')"
-                 @click="copiar(panel.ingesta.url, t('panel.servidor'))" />
+        <div class="campo-ingesta">
+          <div class="ss-t-12 ss-subtle">{{ t('panel.servidor') }}</div>
+          <div class="row items-center no-wrap valor-ingesta ss-surface-2">
+            <div class="col ss-mono ss-t-14">{{ panel.ingesta.url }}</div>
+            <q-btn flat round dense :icon="iCopiar" size="md" :aria-label="t('panel.copiar_servidor')"
+                   @click="copiar(panel.ingesta.url, t('panel.servidor'))" />
+          </div>
         </div>
-        <div class="row items-center no-wrap q-gutter-sm bloque-ingesta">
-          <div class="col campo-mono">{{ panel.ingesta.key_mask }}</div>
-          <q-btn flat dense no-caps size="sm" :label="t('panel.rotar_clave')" :icon="iRotar"
+        <div class="campo-ingesta">
+          <div class="ss-t-12 ss-subtle">{{ t('panel.clave') }}</div>
+          <!-- Sin botón de copiar: esto es una máscara, no la clave real. Copiarla
+               engañaría a quien la pegue en OBS; la clave de verdad solo se ve (y se
+               copia) una vez, en el diálogo que abre «Rotar clave». -->
+          <div class="row items-center no-wrap valor-ingesta ss-surface-2">
+            <div class="col ss-mono ss-t-14">{{ panel.ingesta.key_mask }}</div>
+          </div>
+          <q-btn outline no-caps size="md" class="q-mt-sm" :label="t('panel.rotar_clave')" :icon="iRotar"
                  :loading="rotando" @click="confirmarRotacion" />
         </div>
       </q-card-section>
@@ -411,7 +449,7 @@ async function rotarClave() {
     <TituloEnVivo />
 
     <div class="row items-center q-mb-sm q-gutter-sm">
-      <div class="text-h6">{{ t('panel.canales') }}</div>
+      <div class="ss-t-22">{{ t('panel.canales') }}</div>
       <q-space />
       <q-toggle
         v-if="lista.length > 1"
@@ -422,25 +460,32 @@ async function rotarClave() {
         :label="t('panel.todos')"
         dense
         class="q-mr-sm"
-        :aria-label="todosEncendidos ? t('panel.apagar_todos_canales') : t('panel.encender_todos_canales')"
+        :aria-label="`${t('panel.todos')} — ${todosEncendidos ? t('panel.apagar_todos_canales') : t('panel.encender_todos_canales')}`"
         @update:model-value="alternarTodos(!todosEncendidos)"
       >
         <q-tooltip>
           {{ todosEncendidos ? t('panel.apagar_todos_canales') : t('panel.pasar_a_todos') }}
         </q-tooltip>
       </q-toggle>
-      <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('panel.vincular_canal')"
+      <q-btn unelevated no-caps color="primary" size="md" :icon="iMas" :label="t('panel.vincular_canal')"
              @click="abrirAlta" />
     </div>
 
+    <!-- Esqueleto mientras llega el primer estado: sin él, la rejilla aparece vacía un
+         instante y parece que no hay canales. -->
+    <div v-if="panel.cargando || !panel.estado" class="rejilla-canales" aria-busy="true">
+      <span class="sr-only">{{ t('panel.cargando_canales') }}</span>
+      <q-skeleton v-for="n in 3" :key="n" type="rect" height="180px" />
+    </div>
+
     <!-- Estado vacío con la acción, no solo un texto triste. -->
-    <q-card v-if="!lista.length" flat bordered class="q-pa-lg text-center">
-      <q-icon :name="iBroadcast" size="42px" class="text-grey-7" />
-      <div class="text-subtitle1 q-mt-sm">{{ t('panel.sin_canales_titulo') }}</div>
-      <div class="text-body2 text-grey-5 q-mt-xs q-mb-md">
+    <q-card v-else-if="!lista.length" flat bordered class="q-pa-lg text-center">
+      <q-icon :name="iBroadcast" size="42px" class="ss-muted" />
+      <div class="ss-t-18 q-mt-sm">{{ t('panel.sin_canales_titulo') }}</div>
+      <div class="ss-t-14 ss-muted q-mt-xs q-mb-md">
         {{ t('panel.sin_canales_detalle') }}
       </div>
-      <q-btn unelevated no-caps color="primary" :icon="iMas" :label="t('panel.vincular_primero')"
+      <q-btn unelevated no-caps color="primary" size="md" :icon="iMas" :label="t('panel.vincular_primero')"
              @click="abrirAlta" />
     </q-card>
 
@@ -449,29 +494,25 @@ async function rotarClave() {
       v-model="lista"
       item-key="id"
       handle=".arrastre"
-      :animation="180"
-      class="q-gutter-y-sm"
+      tag="div"
+      class="rejilla-canales"
+      :animation="reducido ? 0 : 180"
       @end="guardarOrden"
     >
       <template #item="{ element }">
-        <div class="row items-center no-wrap">
-          <!-- Asa explícita: sin ella, arrastrar y pulsar compiten en táctil. -->
-          <q-icon :name="iArrastrar" size="22px" class="arrastre text-grey-7 q-mr-xs"
-                  :aria-label="t('destino.reordenar', { nombre: element.name })" />
-          <TarjetaDestino
-            class="col"
-            :destino="element"
-            :hay-sesion="panel.haySesion"
-            @editar="abrirEdicion(element)"
-            @alternar="alternar(element)"
-            @borrar="borrar(element)"
-            @revelar="revelar(element)"
-            @reintentar="reintentar(element)"
-            @probar="probar(element)"
-            @al-aire="alAire(element)"
-            @terminar="terminar(element)"
-          />
-        </div>
+        <TarjetaDestino
+          :destino="element"
+          :hay-sesion="panel.haySesion"
+          @editar="abrirEdicion(element)"
+          @alternar="alternar(element)"
+          @borrar="borrar(element)"
+          @revelar="revelar(element)"
+          @reintentar="reintentar(element)"
+          @probar="probar(element)"
+          @al-aire="alAire(element)"
+          @terminar="terminar(element)"
+          @mover="mover(element, $event)"
+        />
       </template>
     </draggable>
 
@@ -488,9 +529,9 @@ async function rotarClave() {
   display: block;
   margin-top: 8px;
   padding: 10px 12px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border-radius: var(--ss-radius-sm);
+  background: var(--ss-surface-2);
+  font-family: var(--ss-font-mono);
   font-size: 14px;
   word-break: break-all;
   /* Seleccionable a mano: es el último recurso si el navegador no deja copiar. */
@@ -499,27 +540,38 @@ async function rotarClave() {
 </style>
 
 <style scoped>
-.indicador {
-  width: 12px; height: 12px; border-radius: 50%;
-  background: rgba(255, 255, 255, 0.2);
+.pagina-panel { max-width: 1280px; margin: 0 auto; }
+.cabecera-sesion { row-gap: var(--ss-space-2); }
+.linea-sesion { min-width: 180px; }
+.botones-sesion { margin-left: auto; }
+/* Bajo los 600 px los botones de sesión no caben junto al chip y la línea de resolución:
+   se van a una segunda fila, a la derecha. */
+@media (max-width: 599px) {
+  .botones-sesion { flex-basis: 100%; justify-content: flex-end; margin-left: 0; }
 }
-.indicador.vivo {
-  background: var(--q-positive);
-  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18);
+.campo-ingesta { max-width: 560px; }
+.campo-ingesta + .campo-ingesta { margin-top: var(--ss-space-3); }
+.valor-ingesta {
+  padding: 8px 12px;
+  border-radius: var(--ss-radius-sm);
+  margin-top: 2px;
 }
-.bloque-ingesta { max-width: 560px; }
-.campo-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-  word-break: break-all;
-  color: rgba(255, 255, 255, 0.85);
+/* Un host largo en la URL RTMP no debe empujar la fila fuera de la pantalla a 375 px
+   (Minor 13 de la revisión): sin min-width: 0 un hijo flex no encoge por debajo de su
+   contenido, y overflow-wrap deja partir la palabra si hace falta. */
+.valor-ingesta .col {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .rejilla-canales {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 12px;
-  /* Las tarjetas de una fila igualan altura: con alturas dispares la rejilla se ve rota,
-     y aquí las alturas varían según haya consejo de diagnóstico o no. */
-  align-items: stretch;
+  grid-template-columns: 1fr;
+  gap: var(--ss-space-4);
+}
+@media (min-width: 768px) {
+  .rejilla-canales { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 1280px) {
+  .rejilla-canales { grid-template-columns: repeat(3, 1fr); }
 }
 </style>

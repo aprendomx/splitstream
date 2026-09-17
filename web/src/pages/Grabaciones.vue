@@ -57,33 +57,41 @@ const nombre = (g) => g.path.split('/').at(-1)
 
 <template>
   <q-page class="q-pa-md q-pb-xl">
-    <div class="contenido">
-      <div class="row items-center q-mb-sm">
-        <div class="text-h6">{{ t('app.grabaciones') }}</div>
+    <div class="pagina">
+      <div class="row items-center q-mb-md">
+        <div class="ss-t-22">{{ t('app.grabaciones') }}</div>
         <q-space />
         <q-btn flat no-caps :label="t('app.ajustes')" :to="{ name: 'ajustes' }" />
       </div>
 
-      <q-card v-if="!lista.length && !cargando" flat bordered class="q-pa-lg text-center">
-        <q-icon :name="iGrabaciones" size="36px" class="text-grey-7" />
-        <div class="text-body2 text-grey-5 q-mt-sm">{{ t('grabaciones.sin_grabaciones') }}</div>
+      <div v-if="cargando && !lista.length" aria-busy="true">
+        <span class="sr-only">{{ t('app.cargando') }}</span>
+        <q-skeleton type="rect" height="64px" class="q-mb-sm" />
+        <q-skeleton type="rect" height="64px" class="q-mb-sm" />
+        <q-skeleton type="rect" height="64px" />
+      </div>
+
+      <q-card v-else-if="!lista.length" flat bordered class="vacio">
+        <q-icon :name="iGrabaciones" size="32px" class="ss-muted" aria-hidden="true" />
+        <div class="ss-t-16">{{ t('grabaciones.sin_grabaciones') }}</div>
+        <div class="ss-t-14 ss-muted">{{ t('grabaciones.sin_grabaciones_detalle') }}</div>
       </q-card>
 
-      <q-list v-else bordered separator class="rounded-borders">
+      <q-list v-else bordered separator class="lista">
         <q-item v-for="g in lista" :key="g.id">
           <q-item-section>
-            <q-item-label>
+            <q-item-label class="ss-t-16">
               {{ nombre(g) }}
               <q-badge v-if="g.in_progress" color="negative" :label="t('grabaciones.en_curso')" class="q-ml-xs" />
             </q-item-label>
-            <q-item-label caption>
+            <q-item-label caption class="ss-t-14 ss-muted ss-tabular">
               {{ formatearFecha(g.started_at) }} · {{ t('grabaciones.sesion', { id: g.session_id ?? '—' }) }} · {{ t('grabaciones.segmento', { n: g.segment }) }}
               · {{ duracionLegible(g.duration_ms / 1000) }} · {{ bytesLegibles(g.bytes) }}
             </q-item-label>
           </q-item-section>
           <q-item-section side>
-            <div class="row items-center no-wrap q-gutter-xs">
-              <q-btn flat round dense :icon="iDescargar" size="sm" :aria-label="t('grabaciones.descargar')" :disable="g.in_progress"
+            <div class="row items-center no-wrap q-gutter-sm acciones">
+              <q-btn outline no-caps size="md" :icon="iDescargar" :label="t('grabaciones.descargar')" :disable="g.in_progress"
                      type="a" :href="api.urlDescargaGrabacion(g.id)" />
               <q-btn flat round dense :icon="iBorrar" size="sm" class="text-negative" :aria-label="t('comun.eliminar')"
                      :disable="g.in_progress" @click="borrar(g)" />
@@ -93,10 +101,10 @@ const nombre = (g) => g.path.split('/').at(-1)
       </q-list>
 
       <div v-if="hayMas" class="text-center q-mt-md">
-        <q-btn flat no-caps :label="t('grabaciones.cargar_mas')" :loading="cargando" @click="cargarMas" />
+        <q-btn outline no-caps :label="t('grabaciones.cargar_mas')" :loading="cargando" @click="cargarMas" />
       </div>
 
-      <p class="text-caption text-grey-6 q-mt-lg">
+      <p class="ss-t-14 ss-muted q-mt-lg">
         {{ t('grabaciones.nota_flv') }}
         <code>ffmpeg -i grabacion.flv -c copy grabacion.mp4</code>
       </p>
@@ -105,5 +113,14 @@ const nombre = (g) => g.path.split('/').at(-1)
 </template>
 
 <style scoped>
-.contenido { max-width: 760px; margin: 0 auto; }
+.pagina { max-width: 960px; margin: 0 auto; padding: var(--ss-space-5) var(--ss-space-4); }
+.lista :deep(.q-item) { min-height: 64px; }
+.vacio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ss-space-2);
+  padding: var(--ss-space-6) var(--ss-space-4);
+  text-align: center;
+}
 </style>

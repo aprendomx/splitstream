@@ -21,7 +21,9 @@ export const TONOS = {
   emitiendo: { color: 'positive', icono: iOk },
   atencion: { color: 'warning', icono: iAviso },
   fallo: { color: 'negative', icono: iFallo },
-  neutro: { color: 'grey-6', icono: iNeutro },
+  // grey-5, no grey-6: es el tono que más se usa (destino apagado) y grey-6 quedaba en
+  // 3,77:1 sobre la superficie oscura; grey-5 da 6,5:1.
+  neutro: { color: 'grey-5', icono: iNeutro },
   trabajando: { color: 'info', icono: iTrabajando },
 }
 

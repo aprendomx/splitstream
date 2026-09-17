@@ -1,11 +1,11 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useQuasar } from 'quasar'
-import { iCerrar } from '@/iconos'
+import { iCerrar, iChat, iAnterior, iSiguiente } from '@/iconos'
 import { usePanel } from '@/stores/panel'
 import { api } from '@/api'
 import { t, formatearNumero } from '@/i18n'
-import { nombrePorId } from '@/plataformas'
+import { nombrePorId, porId } from '@/plataformas'
 
 const panel = usePanel()
 const $q = useQuasar()
@@ -114,25 +114,34 @@ onUnmounted(() => {
 
 <template>
   <q-card flat bordered class="chat column no-wrap q-mb-md">
-    <div class="row items-center q-px-sm q-pt-xs">
-      <q-tabs v-model="pestaña" dense no-caps class="col">
+    <!-- Cabecera: pestañas por plataforma (la de "todos" incluida) y, en vivo, el cierre. -->
+    <div class="cabecera-tarjeta row items-center no-wrap">
+      <q-tabs v-model="pestaña" dense no-caps narrow-indicator class="col pestanas"
+              :left-icon="iAnterior" :right-icon="iSiguiente">
         <q-tab name="todos" :label="t('chat.todos')" />
-        <q-tab v-for="p in plataformas" :key="p" :name="p" :label="nombrePorId(p)" />
+        <q-tab v-for="p in plataformas" :key="p" :name="p" :icon="porId(p).icono" :label="nombrePorId(p)" />
       </q-tabs>
-      <q-btn v-if="!lectura" flat round dense :icon="iCerrar" :aria-label="t('chat.cerrar_chat')" @click="emit('cerrar')" />
+      <q-btn v-if="!lectura" flat round dense :icon="iCerrar" class="cerrar-btn" :aria-label="t('chat.cerrar_chat')" @click="emit('cerrar')" />
     </div>
-    <div v-if="mostrarCuota && !lectura" class="q-px-sm q-pt-xs cuota">
-      <q-linear-progress :value="fraccionCuota" color="warning" track-color="grey-9" size="6px" rounded />
-      <div class="text-caption text-grey-5 q-mt-xs">
+    <div v-if="mostrarCuota && !lectura" class="cuota q-px-sm q-pt-xs">
+      <q-linear-progress
+        class="barra-cuota"
+        :value="fraccionCuota"
+        :color="fraccionCuota > 0.8 ? 'warning' : 'primary'"
+        size="4px"
+        rounded
+      />
+      <div class="ss-t-12 ss-subtle ss-tabular texto-cuota">
         {{ t('chat.cuota_texto', { usados: formatearNumero(cuentaConCuota.quota_used_today), presupuesto: formatearNumero(presupuesto) }) }}<template v-if="cuotaDiaria > 0"> {{ t('chat.cuota_diaria_texto', { cuota: formatearNumero(cuotaDiaria) }) }}</template>
         · {{ t('chat.cuota_pausa', { presupuesto: formatearNumero(presupuesto) }) }}
       </div>
     </div>
     <div ref="lista" class="col scroll mensajes q-px-sm q-pb-sm" :aria-live="lectura ? 'off' : 'polite'">
-      <div v-if="!visibles.length && !cargandoHistorial" class="text-caption text-grey-6 q-pa-md text-center">
-        {{ lectura ? t('chat.sin_guardado') : t('chat.vacio') }}
+      <div v-if="!visibles.length && !cargandoHistorial" class="vacio ss-t-14 ss-muted text-center column items-center q-pa-md">
+        <q-icon :name="iChat" size="28px" class="q-mb-sm" aria-hidden="true" />
+        <div>{{ lectura ? t('chat.sin_guardado') : t('chat.vacio') }}</div>
       </div>
-      <div v-for="(m, i) in visibles" :key="m.message_id || i" class="mensaje">
+      <div v-for="(m, i) in visibles" :key="m.message_id || i" class="mensaje ss-t-14">
         <span class="autor" :style="{ color: m.color || 'inherit' }">{{ m.author }}</span>
         <span v-if="m.badges?.some((b) => b.startsWith('moderator'))" class="insignia">{{ t('chat.insignia_mod') }}</span>:
         <span class="texto">{{ m.text }}</span>
@@ -146,8 +155,27 @@ onUnmounted(() => {
 
 <style scoped>
 .chat { height: 360px; }
-.mensajes { font-size: 13px; line-height: 1.4; overflow-anchor: none; }
+/* Patrón de cabecera de tarjeta (spec v1.1 §3.3), repetido a propósito en cada componente. */
+.cabecera-tarjeta {
+  padding: var(--ss-space-3) var(--ss-space-4);
+  border-bottom: 1px solid var(--ss-border);
+}
+/* Las pestañas son nodos internos de Quasar: hace falta :deep() para llegar a su alto. */
+.cabecera-tarjeta :deep(.q-tab) { min-height: 44px; }
+.cerrar-btn { width: 44px; height: 44px; }
+.barra-cuota :deep(.q-linear-progress__track) { background: var(--ss-surface-2); }
+.texto-cuota { text-align: right; margin-top: var(--ss-space-1); }
+.mensajes { overflow-anchor: none; }
 .mensaje { padding: 2px 0; word-break: break-word; }
 .autor { font-weight: 600; }
-.insignia { font-size: 10px; padding: 0 4px; margin-left: 4px; border-radius: 3px; background: rgba(255,255,255,0.12); vertical-align: middle; }
+.insignia {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border: 1px solid var(--ss-border);
+  border-radius: 999px;
+  color: var(--ss-fg-muted);
+  vertical-align: middle;
+}
 </style>

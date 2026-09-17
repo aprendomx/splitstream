@@ -20,7 +20,7 @@ En OBS: **Ajustes → Emisión**
 | --- | --- |
 | Servicio | `Personalizado…` |
 | Servidor | El que muestra el panel, algo como `rtmp://localhost:1935/live` |
-| Clave de retransmisión | La que muestra el panel (usa el botón de copiar) |
+| Clave de retransmisión | La que el panel te enseñó al pulsar **Rotar clave**: se muestra una sola vez, con su botón de copiar; después el panel solo enseña su final enmascarado |
 
 Después, en **Ajustes → Salida**, cambia el modo de salida a **Avanzado** y pon el
 **intervalo de fotogramas clave en 2 segundos**.
@@ -374,7 +374,7 @@ ffmpeg -i x.flv -c copy x.mp4
 ## 10. Historial
 
 Cada vez que OBS conecta empieza una **sesión**, y cada sesión queda guardada con lo que
-pasó dentro. El botón del reloj en la barra superior abre el **historial**.
+pasó dentro. La pestaña **Historial** de la barra superior abre el **historial**.
 
 **La lista** enseña una fila por sesión, de la más reciente a la más antigua: cuándo
 empezó, cuánto duró (las que siguen vivas llevan la etiqueta «en curso»), a qué resolución
@@ -526,10 +526,10 @@ respaldo es sobrevivir a que pierdas el original.
 ## 15. Preguntas frecuentes
 
 **¿Cómo cambio el idioma?**
-Con el selector de la barra superior del panel, el que enseña `ES` o `EN`. El cambio es
-inmediato y se recuerda en ese navegador. La primera vez, el panel elige por el idioma de
-tu navegador. El asistente de la primera configuración también lleva el selector, para que
-puedas empezar en tu idioma.
+Con el menú del icono de traducción de la barra superior del panel, que enseña el nombre
+del idioma activo («Español» o «English»). El cambio es inmediato y se recuerda en ese
+navegador. La primera vez, el panel elige por el idioma de tu navegador. El asistente de la
+primera configuración también lleva el selector, para que puedas empezar en tu idioma.
 
 **¿Por qué el registro sigue en español?**
 Porque no es interfaz: es evidencia. El registro de eventos, los avisos que salen por

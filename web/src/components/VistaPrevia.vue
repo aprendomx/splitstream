@@ -1,6 +1,7 @@
 <script setup>
 import { onBeforeUnmount, ref } from 'vue'
 import { t } from '@/i18n'
+import { iVer, iCerrar } from '@/iconos'
 
 // La vista previa silenciada: solo vídeo, decodificado con WebCodecs y pintado en un
 // canvas. Sin librerías — VideoDecoder y canvas son APIs del navegador, y el servidor
@@ -125,20 +126,50 @@ onBeforeUnmount(() => cerrar())
 
 <template>
   <q-card flat bordered class="q-mb-md">
-    <q-card-section class="row items-center q-py-xs">
-      <div class="text-caption text-grey-5">{{ t('vista_previa.encabezado') }}</div>
+    <!-- Cabecera: el botón «Vista previa» del panel no lleva icono propio hoy, así que se
+         usa uno que representa lo mismo (ver/observar) en vez de inventar un nombre que
+         iconos.js no exporta. -->
+    <div class="cabecera-tarjeta row items-center no-wrap">
+      <q-icon :name="iVer" size="20px" class="q-mr-sm" aria-hidden="true" />
+      <span class="ss-t-16 titulo-texto">{{ t('vista_previa.encabezado') }}</span>
       <q-space />
-      <q-btn flat dense no-caps size="sm" :label="t('comun.cerrar')" @click="cerrar()" />
-    </q-card-section>
-    <q-separator />
-    <q-card-section class="q-pa-none cuadro">
+      <q-btn flat round dense :icon="iCerrar" class="cerrar-btn" :aria-label="t('comun.cerrar')" @click="cerrar()" />
+    </div>
+    <!-- El recuadro reserva 16:9 desde el primer render, antes de que llegue ningún
+         fotograma: así no salta el layout cuando aparece el vídeo. -->
+    <div class="cuadro">
       <canvas ref="lienzo" class="lienzo" />
-      <div v-if="avisoKey" class="text-caption text-grey-5 q-pa-md">{{ t(avisoKey) }}</div>
-    </q-card-section>
+      <q-skeleton v-if="avisoKey" type="rect" class="esqueleto" aria-busy="true" />
+      <div v-if="avisoKey" class="aviso ss-t-14 ss-muted">{{ t(avisoKey) }}</div>
+    </div>
   </q-card>
 </template>
 
 <style scoped>
-.cuadro { background: #000; text-align: center; }
-.lienzo { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+/* Patrón de cabecera de tarjeta (spec v1.1 §3.3), repetido a propósito en cada componente. */
+.cabecera-tarjeta {
+  padding: var(--ss-space-3) var(--ss-space-4);
+  border-bottom: 1px solid var(--ss-border);
+}
+.titulo-texto { font-weight: 600; }
+.cerrar-btn { width: 44px; height: 44px; }
+.cuadro {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  /* Negro intencional: es el fondo de "sin señal" de cualquier pantalla de vídeo, y aquí
+     además reserva el hueco 16:9 completo mientras no hay fotograma que pintar. Es el
+     único color literal permitido en este componente. */
+  background: #000;
+}
+.lienzo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.esqueleto { position: absolute; inset: 0; width: 100%; height: 100%; }
+.aviso {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--ss-space-4);
+}
 </style>
