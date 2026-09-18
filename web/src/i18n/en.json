@@ -149,6 +149,7 @@
   "camara.permiso": "Allow access to the camera and microphone to continue.",
   "camara.permiso_denegado": "Without camera and microphone there is nothing to broadcast. Grant permission in the browser and reload.",
   "camara.se_corto": "The broadcast was cut off.",
+  "camara.sin_audio": "No audio is coming from the microphone. Check that another app isn't using it.",
   "camara.sin_aac": "Your browser can't encode AAC, which the platforms require. It works in Chrome, Edge and Safari, except on Linux.",
   "camara.sin_apis": "Your browser can't broadcast: it lacks the camera or the video encoders.",
   "camara.sin_destinos": "No destinations are on: you are broadcasting, but it reaches no platform.",

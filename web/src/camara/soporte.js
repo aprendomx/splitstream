@@ -6,8 +6,10 @@ export const CODEC_AUDIO = 'mp4a.40.2' // AAC-LC
 
 export async function detectarSoporte() {
   if (!window.isSecureContext) return { ok: false, motivoKey: 'camara.sin_https' }
+  // requestVideoFrameCallback: captura de vídeo en el Emisor (sin MediaStreamTrackProcessor).
   if (!navigator.mediaDevices?.getUserMedia || typeof VideoEncoder === 'undefined' ||
-      typeof AudioEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
+      typeof AudioEncoder === 'undefined' || typeof VideoFrame === 'undefined' ||
+      !('requestVideoFrameCallback' in HTMLVideoElement.prototype)) {
     return { ok: false, motivoKey: 'camara.sin_apis' }
   }
   const video = await VideoEncoder.isConfigSupported({

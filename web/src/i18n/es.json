@@ -149,6 +149,7 @@
   "camara.permiso": "Permite el acceso a la cámara y al micrófono para continuar.",
   "camara.permiso_denegado": "Sin cámara y micrófono no se puede emitir. Da permiso en el navegador y recarga la página.",
   "camara.se_corto": "La emisión se cortó.",
+  "camara.sin_audio": "No llega audio del micrófono. Comprueba que otra app no lo esté usando.",
   "camara.sin_aac": "Tu navegador no codifica AAC, que las plataformas exigen. Funciona en Chrome, Edge y Safari, salvo en Linux.",
   "camara.sin_apis": "Tu navegador no puede emitir: le faltan la cámara o los codificadores de vídeo.",
   "camara.sin_destinos": "No hay destinos encendidos: se emite, pero no llega a ninguna plataforma.",

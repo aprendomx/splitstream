@@ -20,6 +20,10 @@ const MSG_VIDEO_FRAME = 0x02
 const MSG_AUDIO_CONFIG = 0x03
 const MSG_AUDIO_FRAME = 0x04
 
+function bytesDe(d) {
+  return ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d)
+}
+
 export class Emisor {
   constructor({ video, stream, calidad, onFin }) {
     this.video = video
@@ -41,13 +45,31 @@ export class Emisor {
     this.descartando = false
     this.terminado = false
     this.rvfc = 0
+    this.silencio = null
   }
 
   async iniciar() {
+    try {
+      await this.arrancar()
+    } catch (e) {
+      // Cualquier fallo antes de emitir deja todo como estaba: sin AudioContext abierto (Chrome
+      // limita cuántos puede tener una página), sin micrófono retenido y sin socket huérfano.
+      this.limpiar()
+      throw e
+    }
+  }
+
+  async arrancar() {
     // 1. Audio primero: hace falta saber cuántos canales entrega el micrófono antes de
     // declarar el start, y eso solo lo dice el primer bloque del worklet.
     const canales = await this.prepararAudio()
+    if (this.terminado) throw new Error('')
     const sampleRate = this.audioCtx.sampleRate
+
+    // La cámara no siempre entrega el tamaño pedido (una webcam 4:3 da 960×720 aunque se
+    // pida 720p): el codificador y el onMetaData declaran lo que de verdad llega.
+    const width = (this.video.videoWidth || this.calidad.width) & ~1
+    const height = (this.video.videoHeight || this.calidad.height) & ~1
 
     // 2. WebSocket y start.
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -58,9 +80,10 @@ export class Emisor {
       this.ws.onerror = () => rechazar(new Error('ws'))
       this.ws.onclose = (ev) => rechazar(new Error(ev.reason || 'ws'))
     })
+    if (this.terminado) throw new Error('')
     const start = {
-      width: this.calidad.width, height: this.calidad.height, framerate: FPS,
-      video_bitrate: this.calidad.videoBitrate, audio_bitrate: AUDIO_BITRATE[canales],
+      width, height, framerate: FPS,
+      video_bitrate: this.calidad.videoBitrate, audio_bitrate: AUDIO_BITRATE[canales] ?? 128_000,
       sample_rate: sampleRate, channels: canales,
     }
     this.ws.send(this.mensaje(MSG_START, new TextEncoder().encode(JSON.stringify(start))))
@@ -68,13 +91,14 @@ export class Emisor {
       this.ws.onmessage = (ev) => { if (typeof ev.data === 'string') resolver() }
       this.ws.onclose = (ev) => rechazar(new Error(ev.reason || 'ws'))
     })
+    if (this.terminado) throw new Error('')
     // A partir de aquí el servidor solo habla para cerrar, y ese motivo es para el usuario.
     this.ws.onmessage = null
     this.ws.onclose = (ev) => this.terminar(ev.reason || '')
 
     // 3. Codificadores y captura.
     this.origen = performance.now()
-    this.configurarVideo(this.calidad)
+    this.configurarVideo({ width, height, videoBitrate: this.calidad.videoBitrate, codec: this.calidad.codec })
     this.configurarAudio(canales, sampleRate)
     this.capturarVideo()
   }
@@ -83,13 +107,25 @@ export class Emisor {
     this.audioCtx = new AudioContext({ sampleRate: 48000 })
     await this.audioCtx.audioWorklet.addModule(new URL('./worklet-audio.js', import.meta.url))
     const fuente = this.audioCtx.createMediaStreamSource(this.stream)
-    this.nodo = new AudioWorkletNode(this.audioCtx, 'acumulador', { numberOfInputs: 1, numberOfOutputs: 0 })
+    this.nodo = new AudioWorkletNode(this.audioCtx, 'acumulador', {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+      channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
+    })
     fuente.connect(this.nodo)
+    // El grafo de Web Audio solo procesa lo que cuelga del destino: un nodo sin salida puede
+    // no ejecutarse nunca (WebKit). Se conecta a través de una ganancia a cero: el
+    // procesador no escribe en su salida, así que no suena nada.
+    this.silencio = new GainNode(this.audioCtx, { gain: 0 })
+    this.nodo.connect(this.silencio).connect(this.audioCtx.destination)
     // Safari arranca el AudioContext suspendido hasta un gesto; el gesto fue pulsar
     // «Emitir», así que resume() aquí funciona.
     await this.audioCtx.resume()
-    return new Promise((resolver) => {
+    return new Promise((resolver, rechazar) => {
+      // Sin bloque en 3 s no hay audio que emitir: micrófono muerto, pista sin datos o
+      // worklet que el navegador no llegó a ejecutar. Colgarse aquí dejaría «Emitir» sin salida.
+      const plazo = setTimeout(() => rechazar(new Error('sin_audio')), 3000)
       this.nodo.port.onmessage = ({ data }) => {
+        clearTimeout(plazo)
         // Hasta que haya codificador (después del start) los bloques se tiran.
         if (this.audioEnc) this.codificarAudio(data)
         resolver(data.canales)
@@ -101,7 +137,7 @@ export class Emisor {
     this.videoEnc = new VideoEncoder({
       output: (chunk, meta) => {
         if (meta?.decoderConfig?.description) {
-          this.enviar(this.mensaje(MSG_VIDEO_CONFIG, new Uint8Array(meta.decoderConfig.description)), false)
+          this.enviar(this.mensaje(MSG_VIDEO_CONFIG, bytesDe(meta.decoderConfig.description)), false)
         }
         const esKey = chunk.type === 'key'
         const buf = new Uint8Array(6 + chunk.byteLength)
@@ -125,7 +161,7 @@ export class Emisor {
     this.audioEnc = new AudioEncoder({
       output: (chunk, meta) => {
         if (meta?.decoderConfig?.description) {
-          this.enviar(this.mensaje(MSG_AUDIO_CONFIG, new Uint8Array(meta.decoderConfig.description)), false)
+          this.enviar(this.mensaje(MSG_AUDIO_CONFIG, bytesDe(meta.decoderConfig.description)), false)
         }
         const buf = new Uint8Array(5 + chunk.byteLength)
         buf[0] = MSG_AUDIO_FRAME
@@ -135,7 +171,7 @@ export class Emisor {
       },
       error: () => this.terminar('fallo_codificar'),
     })
-    this.audioEnc.configure({ codec: CODEC_AUDIO, sampleRate, numberOfChannels: canales, bitrate: AUDIO_BITRATE[canales] })
+    this.audioEnc.configure({ codec: CODEC_AUDIO, sampleRate, numberOfChannels: canales, bitrate: AUDIO_BITRATE[canales] ?? 128_000 })
   }
 
   codificarAudio({ planar, canales, frames }) {
@@ -149,8 +185,11 @@ export class Emisor {
       format: 'f32-planar', sampleRate: this.audioCtx.sampleRate, numberOfFrames: frames,
       numberOfChannels: canales, timestamp, data: planar,
     })
-    this.audioEnc.encode(datos)
-    datos.close()
+    try {
+      this.audioEnc.encode(datos)
+    } finally {
+      datos.close()
+    }
   }
 
   // Un VideoFrame por cada fotograma que pinta el <video>. Es el camino que funciona en
@@ -166,11 +205,15 @@ export class Emisor {
       const timestamp = Math.round((performance.now() - this.origen) * 1000)
       const keyFrame = this.forzarKey || timestamp - this.ultimoKey >= KEYFRAME_US
       if (keyFrame) { this.ultimoKey = timestamp; this.forzarKey = false }
-      const frame = new VideoFrame(this.video, { timestamp })
+      let frame = null
       try {
+        frame = new VideoFrame(this.video, { timestamp })
         this.videoEnc.encode(frame, { keyFrame })
+      } catch {
+        this.terminar('fallo_codificar')
+        return
       } finally {
-        frame.close()
+        frame?.close()
       }
     }
     this.rvfc = this.video.requestVideoFrameCallback(paso)
@@ -226,6 +269,7 @@ export class Emisor {
     if (this.audioEnc && this.audioEnc.state !== 'closed') this.audioEnc.close()
     this.videoEnc = this.audioEnc = null
     if (this.nodo) { this.nodo.port.onmessage = null; this.nodo.disconnect() }
+    if (this.silencio) this.silencio.disconnect()
     if (this.audioCtx) this.audioCtx.close().catch(() => {})
     if (this.ws) {
       this.ws.onclose = null
