@@ -31,6 +31,9 @@ export class Emisor {
     this.calidad = CALIDADES[calidad] ?? CALIDADES['720p']
     this.onFin = onFin
     this.ws = null
+    // Rechazo pendiente del handshake en curso (si lo hay): limpiar() lo usa para no dejar
+    // iniciar() colgado si parar() llega mientras se espera al servidor.
+    this.rechazarPendiente = null
     this.videoEnc = null
     this.audioEnc = null
     this.audioCtx = null
@@ -49,6 +52,8 @@ export class Emisor {
   }
 
   async iniciar() {
+    // Instancia de un solo uso: una vez terminada (por parar() o por un fallo) no arranca de nuevo.
+    if (this.terminado) throw new Error('')
     try {
       await this.arrancar()
     } catch (e) {
@@ -76,10 +81,12 @@ export class Emisor {
     this.ws = new WebSocket(`${proto}://${location.host}/api/camera/ws`)
     this.ws.binaryType = 'arraybuffer'
     await new Promise((resolver, rechazar) => {
+      this.rechazarPendiente = rechazar
       this.ws.onopen = resolver
       this.ws.onerror = () => rechazar(new Error('ws'))
       this.ws.onclose = (ev) => rechazar(new Error(ev.reason || 'ws'))
     })
+    this.rechazarPendiente = null
     if (this.terminado) throw new Error('')
     const start = {
       width, height, framerate: FPS,
@@ -88,9 +95,11 @@ export class Emisor {
     }
     this.ws.send(this.mensaje(MSG_START, new TextEncoder().encode(JSON.stringify(start))))
     await new Promise((resolver, rechazar) => {
+      this.rechazarPendiente = rechazar
       this.ws.onmessage = (ev) => { if (typeof ev.data === 'string') resolver() }
       this.ws.onclose = (ev) => rechazar(new Error(ev.reason || 'ws'))
     })
+    this.rechazarPendiente = null
     if (this.terminado) throw new Error('')
     // A partir de aquí el servidor solo habla para cerrar, y ese motivo es para el usuario.
     this.ws.onmessage = null
@@ -271,6 +280,9 @@ export class Emisor {
     if (this.nodo) { this.nodo.port.onmessage = null; this.nodo.disconnect() }
     if (this.silencio) this.silencio.disconnect()
     if (this.audioCtx) this.audioCtx.close().catch(() => {})
+    // Si limpiar() llega durante el handshake, quita ws.onclose antes de cerrar: sin esto,
+    // el Promise pendiente de iniciar() nunca se resolvería ni se rechazaría.
+    if (this.rechazarPendiente) { this.rechazarPendiente(new Error('')); this.rechazarPendiente = null }
     if (this.ws) {
       this.ws.onclose = null
       if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) this.ws.close(1000)

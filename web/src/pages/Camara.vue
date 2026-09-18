@@ -1,16 +1,15 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { useQuasar } from 'quasar'
 import { usePanel } from '@/stores/panel'
 import { t } from '@/i18n'
 import { iCamara, iMicrofono, iSenal } from '@/iconos'
 import ChipEstado from '@/components/ChipEstado.vue'
 import { diagnosticar } from '@/diagnostico'
 import { detectarSoporte } from '@/camara/soporte'
+import { Emisor } from '@/camara/emisor'
 
 // La cámara del navegador como fuente (spec cámara §5). Esta página es dueña del stream
 // de captura y de su ciclo de vida; codificar y enviar es cosa de Emisor (camara/emisor.js).
-const $q = useQuasar()
 const panel = usePanel()
 
 const soporte = ref(null)       // null = comprobando; {ok, motivoKey}
@@ -89,10 +88,13 @@ async function abrirCamara() {
   }
   stream = nuevo
   videoEl.value.srcObject = stream
+  for (const pista of stream.getTracks()) pista.addEventListener('ended', alTerminarPista)
   calidadAbierta = calidad.value
   hayStream.value = true
   // Las etiquetas de enumerateDevices solo se rellenan tras conceder permiso.
   const dispositivos = await navigator.mediaDevices.enumerateDevices()
+  // Otra llamada a abrirCamara() pudo haber reemplazado el stream durante este await.
+  if (mia !== generacion) return
   camaras.value = dispositivos.filter((d) => d.kind === 'videoinput')
   microfonos.value = dispositivos.filter((d) => d.kind === 'audioinput')
   camaraId.value = stream.getVideoTracks()[0]?.getSettings().deviceId ?? camaraId.value
@@ -111,10 +113,91 @@ onBeforeUnmount(() => { pararStream() })
 // están deshabilitados, así que aquí nunca hay emisión en curso.
 watch([camaraId, microfonoId, calidad], () => { if (!emitiendo.value && !yaAbierto()) abrirCamara() })
 
-function emitir() {
-  $q.notify({ type: 'info', message: t('camara.conectando') })
+let emisor = null
+let wakeLock = null
+
+function textoFin(motivo) {
+  if (!motivo) return t('camara.se_corto')
+  // Plantilla, no concatenación: 'camara.' + motivo haría que i18n-check.mjs (que busca
+  // llamadas a t con cadena literal) confundiera "camara." con una clave real.
+  return motivo.includes(' ') ? motivo : t(`camara.${motivo}`)
 }
-function parar() {}
+
+async function pedirWakeLock() {
+  try { wakeLock = await navigator.wakeLock?.request('screen') } catch { wakeLock = null }
+}
+function soltarWakeLock() {
+  wakeLock?.release().catch(() => {})
+  wakeLock = null
+}
+
+async function emitir() {
+  if (!listo.value) return
+  motivoFin.value = null
+  conectando.value = true
+  const nuevo = new Emisor({
+    video: videoEl.value, stream, calidad: calidad.value,
+    onFin: (motivo) => {
+      emitiendo.value = false
+      soltarWakeLock()
+      motivoFin.value = textoFin(motivo)
+      emisor = null
+    },
+  })
+  // Se asigna antes de iniciar(): si onBeforeUnmount llama a parar() mientras arranca,
+  // debe poder cortar este intento en vuelo, no uno ya sustituido.
+  emisor = nuevo
+  try {
+    await nuevo.iniciar()
+    emitiendo.value = true
+    await pedirWakeLock()
+  } catch (e) {
+    nuevo.parar()
+    emisor = null
+    motivoFin.value = textoFin(e.message === 'ws' ? '' : e.message)
+  } finally {
+    conectando.value = false
+  }
+}
+
+function parar() {
+  emisor?.parar()
+  emisor = null
+  emitiendo.value = false
+  soltarWakeLock()
+}
+
+// Página oculta = cámara suspendida en el móvil (spec §1.4): se para y se dice por qué,
+// en vez de dejar una emisión medio viva que la plataforma corta un minuto después.
+function alCambiarVisibilidad() {
+  if (document.hidden && emitiendo.value) {
+    parar()
+    motivoFin.value = t('camara.parada_oculta')
+  }
+}
+// Si la cámara o el micrófono desaparecen (cable, otro app que los toma), no hay nada
+// que codificar: se para con motivo.
+function alTerminarPista() {
+  if (emitiendo.value) {
+    parar()
+    motivoFin.value = t('camara.parada_dispositivo')
+  }
+}
+function antesDeSalir(ev) {
+  if (!emitiendo.value) return
+  ev.preventDefault()
+  ev.returnValue = t('camara.aviso_salir')
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', alCambiarVisibilidad)
+  window.addEventListener('beforeunload', antesDeSalir)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', alCambiarVisibilidad)
+  window.removeEventListener('beforeunload', antesDeSalir)
+  parar()
+})
 </script>
 
 <template>
