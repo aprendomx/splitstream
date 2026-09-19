@@ -338,6 +338,32 @@ resto de destinos.
 
 ---
 
+### Emitir desde el teléfono
+
+Abre el panel en el teléfono o el portátil, entra en **Cámara**, permite la cámara y el
+micrófono, elige la calidad y pulsa **Emitir**. El navegador codifica H.264 y AAC con
+WebCodecs y se los manda al binario, que los reenvía exactamente igual que a OBS: sigue
+sin transcodificar, y la grabación, la vista previa y las métricas funcionan igual. OBS y
+la cámara se turnan: mientras una emite, la otra es rechazada.
+
+Lo que imponen los navegadores, y Splitstream no puede cambiar:
+
+- **Necesita HTTPS.** Los navegadores solo exponen la cámara y los codificadores en un
+  origen seguro. Abrir el panel por `http://` en una dirección de la LAN no da cámara;
+  solo `localhost` se libra. Usa el TLS integrado (`SPLITSTREAM_TLS_DOMAIN`), un proxy
+  con certificado o un túnel que termine HTTPS (Tailscale con `tailscale cert`,
+  Cloudflare Tunnel).
+- **Chrome, Edge o Safari.** Firefox y Chrome en Linux codifican H.264 pero no tienen
+  codificador AAC, y las plataformas no aceptan otra cosa. iOS necesita Safari 26 o
+  posterior.
+- **La página, delante.** Bloquear la pantalla o cambiar de app suspende la cámara; la
+  emisión se para y el panel dice por qué.
+- **Orientación y calidad se eligen antes de emitir.** Cambiarlas a mitad la corta.
+- **No es una webcam enchufada al servidor**, ni WebRTC/WHIP: las dos exigirían meter
+  captura o transcodificación en el binario.
+
+---
+
 ## Con Docker
 
 ```bash
@@ -511,7 +537,7 @@ exactamente esos parches.
 
 ## Alcance
 
-Retransmisión y grabación local. Graba en FLV, sin transcodificar: lo que entra por RTMP
+Retransmisión desde OBS o desde la cámara del navegador, y grabación local. Graba en FLV, sin transcodificar: lo que entra por RTMP
 se muxea tal cual a disco, igual que se reenvía tal cual a cada destino. Sin
 transcodificación, chat de **lectura** en el panel, por plataforma y solo donde la API lo
 permite (hoy Twitch, YouTube y Kick — este último solo con el panel accesible por URL
@@ -520,31 +546,6 @@ retransmitir»: Facebook exige verificación de negocio para su API de canal, y 
 no tienen una API viable para esto. Sin multi-tenant. Si necesitas cambiar la resolución o
 el bitrate por destino, esto no es la herramienta: hace falta transcodificar, y eso es
 otro producto.
-
-### Emitir desde la cámara del navegador (planeado)
-
-La siguiente fuente después de OBS es la cámara del teléfono o del portátil desde el que
-se abre el panel: el navegador codifica H.264 y AAC con WebCodecs y se los manda al
-binario, que los reenvía exactamente igual que a OBS, sin transcodificar. Antes de
-construirlo comprobamos qué pueden hacer de verdad los navegadores, y estos límites no
-están en nuestra mano:
-
-- **Necesita HTTPS.** Los navegadores solo exponen la cámara y los codificadores en un
-  origen seguro. Abrir el panel por `http://` en una dirección de la LAN no da cámara;
-  solo `localhost` se libra. Usa el TLS integrado, un proxy con certificado o un túnel que
-  termine HTTPS (Tailscale, Cloudflare Tunnel).
-- **Ni en Firefox ni en Chrome para Linux.** Codifican H.264 sin problema, pero no tienen
-  codificador AAC, y las plataformas no aceptan otra cosa. Funciona en Chrome y Edge en
-  Windows, macOS, Android y ChromeOS, y en Safari.
-- **iOS necesita Safari 26 o posterior.** Las versiones anteriores no tienen codificador
-  de audio.
-- **El teléfono tiene que quedarse en la página.** Bloquear la pantalla o cambiar de app
-  suspende la cámara en todos los navegadores móviles; la emisión se corta hasta que
-  vuelves.
-- **No es una webcam enchufada al servidor.** Capturar una cámara USB desde el binario
-  exigiría meter dentro captura y codificación (ffmpeg), que es el «otro producto» de
-  arriba. Tampoco es ingesta WebRTC/WHIP: su audio es Opus y habría que transcodificarlo
-  a AAC.
 
 ## Licencia
 

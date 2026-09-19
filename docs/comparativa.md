@@ -31,7 +31,7 @@ Los cinco productos no son la misma clase de cosa, y eso condiciona todo lo dem�
 
 | Producto | Relay a varios destinos | Grabación local | Título y chat de plataformas | Panel web | Instalación | Dónde corre | Fuente |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Splitstream** | Sí: N destinos RTMP/RTMPS a la vez, sin transcodificar | Sí: FLV en tu disco, con segmentos, tope en GB y retención | Título en Twitch, YouTube y Kick con la cuenta conectada; chat de lectura en esas tres | Sí, dentro del mismo binario | Binario único: Homebrew, winget, script o Docker | Tu equipo o tu servidor | [S] |
+| **Splitstream** | Sí: N destinos RTMP/RTMPS a la vez, sin transcodificar; desde OBS o desde la cámara del navegador | Sí: FLV en tu disco, con segmentos, tope en GB y retención | Título en Twitch, YouTube y Kick con la cuenta conectada; chat de lectura en esas tres | Sí, dentro del mismo binario | Binario único: Homebrew, winget, script o Docker | Tu equipo o tu servidor | [S] |
 | **Restream** | Sí, a las plataformas de su catálogo | No documentado | Sí: chat unificado y cambio de título en los destinos que lo permiten | Sí, aplicación web | Cuenta en su web; no se instala nada | Sus servidores | [R] |
 | **Castr** | Sí, a las plataformas de su catálogo | No documentado | No documentado | Sí, aplicación web | Cuenta en su web; no se instala nada | Sus servidores | [C] |
 | **nginx-rtmp** (módulo `rtmp` de nginx) | Sí: una directiva `push` por destino | Sí: directiva `record`, en FLV | No | No; expone una página de estadísticas (`stat`) en XML con hoja XSL | Compilar nginx con `--add-module` | Tu equipo o tu servidor | [N] |

@@ -340,6 +340,31 @@ costs the other destinations no CPU.
 
 ---
 
+### Streaming from your phone
+
+Open the panel on the phone or laptop, go to **Camera**, allow the camera and microphone,
+pick the quality and press **Go live**. The browser encodes H.264 and AAC with WebCodecs
+and sends them to the binary, which forwards them exactly as it forwards OBS: still no
+transcoding, and recording, preview and metrics work the same. OBS and the camera take
+turns: while one is live the other is refused.
+
+What the browsers impose, and Splitstream cannot change:
+
+- **Needs HTTPS.** Browsers only expose the camera and the encoders on a secure origin.
+  Opening the panel over plain `http://` at a LAN address gives no camera; only
+  `localhost` is exempt. Use the built-in TLS (`SPLITSTREAM_TLS_DOMAIN`), a proxy with a
+  certificate, or a tunnel that terminates HTTPS (Tailscale with `tailscale cert`,
+  Cloudflare Tunnel).
+- **Chrome, Edge or Safari.** Firefox and Chrome on Linux encode H.264 but have no AAC
+  encoder, and the platforms accept nothing else. iOS needs Safari 26 or later.
+- **Keep the page in front.** Locking the screen or switching apps suspends the camera;
+  the broadcast stops and the panel says why.
+- **Pick orientation and quality before going live.** Changing them mid-stream stops it.
+- **Not a webcam plugged into the server**, and not WebRTC/WHIP: both would need a
+  capture or transcoding stack inside the binary.
+
+---
+
 ## With Docker
 
 ```bash
@@ -513,7 +538,7 @@ keeps confirming the copy is upstream plus exactly those patches.
 
 ## Scope
 
-Restreaming and local recording. It records in FLV, without transcoding: what comes in
+Restreaming from OBS or from the browser camera, and local recording. It records in FLV, without transcoding: what comes in
 over RTMP is muxed to disk as-is, the same way it is forwarded as-is to each destination.
 No transcoding, **read-only** chat in the panel, per platform and only where the API
 allows it (today Twitch, YouTube and Kick — the last one only with the panel reachable at
@@ -522,28 +547,6 @@ at "restream only": Facebook demands business verification for its channel API, 
 TikTok have no viable API for this. No multi-tenancy. If you need to change the resolution
 or the bitrate per destination, this is not the tool: that requires transcoding, and that
 is a different product.
-
-### Streaming from the browser camera (planned)
-
-The next source after OBS is the camera of the phone or laptop the panel is open on:
-the browser encodes H.264 and AAC with WebCodecs and sends them to the binary, which
-forwards them exactly as it forwards OBS, still without transcoding. Before building it
-we checked what the browsers can actually do, and these limits are not ours to fix:
-
-- **Needs HTTPS.** Browsers only expose the camera and the encoders on a secure origin.
-  Opening the panel over plain `http://` at a LAN address gives no camera at all; only
-  `localhost` is exempt. Use the built-in TLS, a proxy with a certificate, or a tunnel
-  that terminates HTTPS (Tailscale, Cloudflare Tunnel).
-- **Not on Firefox, not on Chrome for Linux.** They encode H.264 fine but have no AAC
-  encoder, and the platforms don't accept anything else. It works on Chrome and Edge on
-  Windows, macOS, Android and ChromeOS, and on Safari.
-- **iOS needs Safari 26 or later.** Earlier versions have no audio encoder at all.
-- **The phone has to stay on the page.** Locking the screen or switching apps suspends
-  the camera in every mobile browser; the stream drops until you come back.
-- **Not a webcam plugged into the server.** Capturing a USB camera from the binary would
-  need a capture and encoding stack (ffmpeg) inside it, which is the "different product"
-  above. Neither is WebRTC/WHIP ingest: its audio is Opus, which would have to be
-  transcoded to AAC.
 
 ## License
 
