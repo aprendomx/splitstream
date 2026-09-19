@@ -54,6 +54,9 @@ export class Emisor {
     // Tamaño con el que se configuró el codificador; se compara con el de cada fotograma.
     this.ancho = 0
     this.alto = 0
+    // true mientras ancho/alto sean los nominales de la calidad porque el <video> todavía
+    // no tenía metadatos al arrancar: el primer fotograma real dirá el tamaño de verdad.
+    this.tamanoNominal = false
   }
 
   async iniciar() {
@@ -80,6 +83,9 @@ export class Emisor {
     // pida 720p): el codificador y el onMetaData declaran lo que de verdad llega.
     const width = (this.video.videoWidth || this.calidad.width) & ~1
     const height = (this.video.videoHeight || this.calidad.height) & ~1
+    // Si el <video> aún no había cargado metadatos, lo de arriba son los nominales de la
+    // calidad, no lo que entrega la cámara: queda anotado para adoptarlo al primer frame.
+    this.tamanoNominal = !this.video.videoWidth || !this.video.videoHeight
 
     // 2. WebSocket y start.
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -114,7 +120,7 @@ export class Emisor {
     this.origen = performance.now()
     this.ancho = width
     this.alto = height
-    this.configurarVideo({ width, height, videoBitrate: this.calidad.videoBitrate, codec: this.calidad.codec })
+    this.configurarVideo(width, height)
     this.configurarAudio(canales, sampleRate)
     this.capturarVideo()
   }
@@ -149,7 +155,16 @@ export class Emisor {
     })
   }
 
-  configurarVideo({ width, height, videoBitrate, codec }) {
+  // Las opciones del codificador en un solo sitio: la configuración inicial y la
+  // reconfiguración al adoptar el tamaño real tienen que ser idénticas salvo el tamaño.
+  configVideo(width, height) {
+    return {
+      codec: this.calidad.codec, width, height, bitrate: this.calidad.videoBitrate, framerate: FPS,
+      avc: { format: 'avc' }, latencyMode: 'realtime',
+    }
+  }
+
+  configurarVideo(width, height) {
     this.videoEnc = new VideoEncoder({
       output: (chunk, meta) => {
         if (meta?.decoderConfig?.description) {
@@ -165,10 +180,7 @@ export class Emisor {
       },
       error: () => this.terminar('fallo_codificar'),
     })
-    this.videoEnc.configure({
-      codec, width, height, bitrate: videoBitrate, framerate: FPS,
-      avc: { format: 'avc' }, latencyMode: 'realtime',
-    })
+    this.videoEnc.configure(this.configVideo(width, height))
   }
 
   configurarAudio(canales, sampleRate) {
@@ -218,14 +230,32 @@ export class Emisor {
       // Si el codificador va por detrás, se salta este fotograma: encolar más solo
       // añade latencia y acaba en un error de memoria en móviles.
       if (this.videoEnc.encodeQueueSize > COLA_MAX) return
-      // Girar el teléfono o cambiar de cámara cambia el tamaño de la captura, y el
-      // codificador quedó configurado con el anterior: WebCodecs escalaría en silencio en
-      // vez de fallar, y la emisión seguiría con la imagen deformada. El spec §6 y los
-      // manuales prometen una parada limpia con motivo, así que se para.
-      if (this.video.videoWidth && this.video.videoHeight &&
-          (this.video.videoWidth !== this.ancho || this.video.videoHeight !== this.alto)) {
-        this.terminar('parada_dispositivo')
-        return
+      // El tamaño se compara redondeado a par, igual que se guardó: una captura impar
+      // (1281 de ancho) no es un cambio de dispositivo, es el mismo fotograma de siempre.
+      const w = this.video.videoWidth & ~1
+      const h = this.video.videoHeight & ~1
+      if (this.video.videoWidth && this.video.videoHeight && (w !== this.ancho || h !== this.alto)) {
+        if (this.tamanoNominal) {
+          // Arrancamos con el tamaño nominal de la calidad porque el <video> no tenía
+          // metadatos: este primer fotograma es el que dice el real (una webcam 4:3 da
+          // 960×720 aunque se pida 720p). No es motivo para cortar; lo correcto es adoptarlo
+          // reconfigurando el codificador, que WebCodecs permite en caliente. El siguiente
+          // fotograma tiene que ser clave: el avcC cambia y un delta contra el anterior no
+          // vale. El onMetaData ya declaró el nominal, pero es declarativo y las plataformas
+          // leen el tamaño real del SPS (spec base §3.8), así que el servidor no toca nada.
+          this.videoEnc.configure(this.configVideo(w, h))
+          this.forzarKey = true
+          this.ancho = w
+          this.alto = h
+          this.tamanoNominal = false
+        } else {
+          // Girar el teléfono o cambiar de cámara sí cambia el tamaño de la captura, y el
+          // codificador quedó configurado con el anterior: WebCodecs escalaría en silencio en
+          // vez de fallar, y la emisión seguiría con la imagen deformada. El spec §6 y los
+          // manuales prometen una parada limpia con motivo, así que se para.
+          this.terminar('parada_dispositivo')
+          return
+        }
       }
       const timestamp = Math.round((performance.now() - this.origen) * 1000)
       const keyFrame = this.forzarKey || timestamp - this.ultimoKey >= KEYFRAME_US
