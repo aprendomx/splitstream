@@ -118,9 +118,12 @@ let wakeLock = null
 
 function textoFin(motivo) {
   if (!motivo) return t('camara.se_corto')
+  if (motivo.includes(' ')) return motivo
   // Plantilla, no concatenación: 'camara.' + motivo haría que i18n-check.mjs (que busca
   // llamadas a t con cadena literal) confundiera "camara." con una clave real.
-  return motivo.includes(' ') ? motivo : t(`camara.${motivo}`)
+  const clave = `camara.${motivo}`
+  // Una clave corta que no exista (motivo inesperado) no debe enseñar la clave cruda.
+  return t(clave) === clave ? t('camara.se_corto') : t(clave)
 }
 
 async function pedirWakeLock() {
@@ -132,7 +135,9 @@ function soltarWakeLock() {
 }
 
 async function emitir() {
-  if (!listo.value) return
+  // conectando.value cubre el caso de un clic repetido mientras QBtn debería ignorarlo:
+  // no depender solo de que el botón esté deshabilitado a tiempo.
+  if (!listo.value || conectando.value) return
   motivoFin.value = null
   conectando.value = true
   const nuevo = new Emisor({
@@ -151,10 +156,17 @@ async function emitir() {
     await nuevo.iniciar()
     emitiendo.value = true
     await pedirWakeLock()
+    // onFin pudo llegar mientras se pedía el wake lock (encoder, servidor o subida): si ya
+    // no estamos emitiendo, el candado quedaría pedido para siempre sin nadie que lo suelte.
+    if (!emitiendo.value) soltarWakeLock()
   } catch (e) {
     nuevo.parar()
-    emisor = null
-    motivoFin.value = textoFin(e.message === 'ws' ? '' : e.message)
+    // Si parar() ya lo soltó (página oculta o pista perdida durante la conexión), el
+    // motivo ya está puesto y este fallo es consecuencia, no causa.
+    if (emisor === nuevo) {
+      emisor = null
+      motivoFin.value = textoFin(e.message === 'ws' ? '' : e.message)
+    }
   } finally {
     conectando.value = false
   }
@@ -168,17 +180,19 @@ function parar() {
 }
 
 // Página oculta = cámara suspendida en el móvil (spec §1.4): se para y se dice por qué,
-// en vez de dejar una emisión medio viva que la plataforma corta un minuto después.
+// en vez de dejar una emisión medio viva que la plataforma corta un minuto después. También
+// cubre mientras se conecta: ocultar la pestaña durante el handshake dejaría la emisión
+// arrancar oculta y congelada (rVFC no corre en segundo plano), sin ningún aviso.
 function alCambiarVisibilidad() {
-  if (document.hidden && emitiendo.value) {
+  if (document.hidden && (emitiendo.value || conectando.value)) {
     parar()
     motivoFin.value = t('camara.parada_oculta')
   }
 }
 // Si la cámara o el micrófono desaparecen (cable, otro app que los toma), no hay nada
-// que codificar: se para con motivo.
+// que codificar: se para con motivo, tanto si ya emitía como si estaba conectando.
 function alTerminarPista() {
-  if (emitiendo.value) {
+  if (emitiendo.value || conectando.value) {
     parar()
     motivoFin.value = t('camara.parada_dispositivo')
   }
