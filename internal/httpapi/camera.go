@@ -61,10 +61,13 @@ type cameraStart struct {
 	Channels     int     `json:"channels"`
 }
 
+// valida acota lo que el cliente declara. El sample rate se acota al rango que AAC-LC
+// admite (8000–96000 Hz): fuera de ahí no hay índice en la tabla del AudioSpecificConfig,
+// así que un valor cualquiera acabaría en un onMetaData que miente y en un ASC imposible.
 func (c cameraStart) valida() bool {
 	return c.Width >= 16 && c.Width <= 4096 && c.Height >= 16 && c.Height <= 4096 &&
 		c.Framerate > 0 && c.Framerate <= 120 && c.VideoBitrate > 0 && c.AudioBitrate > 0 &&
-		c.SampleRate > 0 && (c.Channels == 1 || c.Channels == 2)
+		c.SampleRate >= 8000 && c.SampleRate <= 96000 && (c.Channels == 1 || c.Channels == 2)
 }
 
 // handleCameraWS es la ingesta de la cámara del navegador (spec cámara §4): la API es el
@@ -117,8 +120,13 @@ func (s *Server) handleCameraWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. La sesión. Sin validador de clave: la cookie ya autenticó.
+	// El motivo de cierre lo LEE una persona en el teléfono: va traducido y siempre el
+	// mismo. El err de verdad se queda en el log del servidor, que es donde sirve; mandarlo
+	// por el socket enseñaría entrañas (ruta de la base, dirección del destino) a quien solo
+	// necesita saber que no se pudo empezar.
 	if s.engine == nil {
-		conn.Close(websocket.StatusInternalError, "sin motor")
+		s.logger.Error("la cámara del navegador llegó sin motor configurado")
+		conn.Close(websocket.StatusInternalError, traducir(lang, "no se pudo abrir la sesión de la cámara"))
 		return
 	}
 	if err := s.engine.StartLocalSession(); err != nil {
@@ -127,7 +135,7 @@ func (s *Server) handleCameraWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.logger.Error("no se pudo abrir la sesión de la cámara", "err", err)
-		conn.Close(websocket.StatusInternalError, err.Error())
+		conn.Close(websocket.StatusInternalError, traducir(lang, "no se pudo abrir la sesión de la cámara"))
 		return
 	}
 	// Pase lo que pase a partir de aquí —cierre del cliente, plazo vencido, mensaje
@@ -146,18 +154,22 @@ func (s *Server) handleCameraWS(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.logger.Error("no se pudo construir el onMetaData de la cámara", "err", err)
-		conn.Close(websocket.StatusInternalError, err.Error())
+		conn.Close(websocket.StatusInternalError, traducir(lang, "no se pudo abrir la sesión de la cámara"))
 		return
 	}
 	s.engine.OnMessage(&relay.Message{Kind: relay.KindMeta, Payload: meta})
 
+	// Un solo Session() para la confirmación y para el log: son la misma sesión, y
+	// preguntarlo dos veces permitiría que el log nombrara otra si la primera se cerró
+	// entre medias.
+	sesionID := s.engine.Session().ID
 	escritura, cancelEscritura := context.WithTimeout(ctx, wsWriteTimeout)
-	err = wsjson.Write(escritura, conn, map[string]int64{"session_id": s.engine.Session().ID})
+	err = wsjson.Write(escritura, conn, map[string]int64{"session_id": sesionID})
 	cancelEscritura()
 	if err != nil {
 		return
 	}
-	s.logger.Info("cámara del navegador aceptada", "sesion_id", s.engine.Session().ID)
+	s.logger.Info("cámara del navegador aceptada", "sesion_id", sesionID)
 
 	// 4. Media hasta que el cliente se vaya.
 	for {

@@ -11,6 +11,8 @@ export const CALIDADES = {
 }
 const FPS = 30
 const KEYFRAME_US = 2_000_000 // un keyframe cada 2 s: las plataformas piden GOP ≤ 4 s
+// El nodo del worklet se fuerza a dos canales (channelCountMode: 'explicit'), así que hoy
+// siempre se usa la entrada 2: la de 1 se conserva por si vuelve el mono.
 const AUDIO_BITRATE = { 1: 96_000, 2: 128_000 }
 const COLA_MAX = 2 // frames pendientes en el codificador antes de descartar la captura
 
@@ -49,6 +51,9 @@ export class Emisor {
     this.terminado = false
     this.rvfc = 0
     this.silencio = null
+    // Tamaño con el que se configuró el codificador; se compara con el de cada fotograma.
+    this.ancho = 0
+    this.alto = 0
   }
 
   async iniciar() {
@@ -107,6 +112,8 @@ export class Emisor {
 
     // 3. Codificadores y captura.
     this.origen = performance.now()
+    this.ancho = width
+    this.alto = height
     this.configurarVideo({ width, height, videoBitrate: this.calidad.videoBitrate, codec: this.calidad.codec })
     this.configurarAudio(canales, sampleRate)
     this.capturarVideo()
@@ -211,6 +218,15 @@ export class Emisor {
       // Si el codificador va por detrás, se salta este fotograma: encolar más solo
       // añade latencia y acaba en un error de memoria en móviles.
       if (this.videoEnc.encodeQueueSize > COLA_MAX) return
+      // Girar el teléfono o cambiar de cámara cambia el tamaño de la captura, y el
+      // codificador quedó configurado con el anterior: WebCodecs escalaría en silencio en
+      // vez de fallar, y la emisión seguiría con la imagen deformada. El spec §6 y los
+      // manuales prometen una parada limpia con motivo, así que se para.
+      if (this.video.videoWidth && this.video.videoHeight &&
+          (this.video.videoWidth !== this.ancho || this.video.videoHeight !== this.alto)) {
+        this.terminar('parada_dispositivo')
+        return
+      }
       const timestamp = Math.round((performance.now() - this.origen) * 1000)
       const keyFrame = this.forzarKey || timestamp - this.ultimoKey >= KEYFRAME_US
       if (keyFrame) { this.ultimoKey = timestamp; this.forzarKey = false }
@@ -274,6 +290,9 @@ export class Emisor {
     if (this.terminado) return
     this.terminado = true
     if (this.rvfc) this.video.cancelVideoFrameCallback(this.rvfc)
+    // Se cierra sin flush() a propósito: parar tiene que ser inmediato, y flush() esperaría
+    // a que se vacíe la cola del codificador. Lo que se pierde son los últimos fotogramas,
+    // que ya nadie va a ver.
     if (this.videoEnc && this.videoEnc.state !== 'closed') this.videoEnc.close()
     if (this.audioEnc && this.audioEnc.state !== 'closed') this.audioEnc.close()
     this.videoEnc = this.audioEnc = null
@@ -283,6 +302,8 @@ export class Emisor {
     // Si limpiar() llega durante el handshake, quita ws.onclose antes de cerrar: sin esto,
     // el Promise pendiente de iniciar() nunca se resolvería ni se rechazaría.
     if (this.rechazarPendiente) { this.rechazarPendiente(new Error('')); this.rechazarPendiente = null }
+    // Las pistas de captura NO se paran aquí: son de la página, que las abrió y sigue
+    // enseñando la vista previa local después de parar la emisión.
     if (this.ws) {
       this.ws.onclose = null
       if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) this.ws.close(1000)

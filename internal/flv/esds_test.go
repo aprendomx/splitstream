@@ -57,7 +57,7 @@ func TestAudioSpecificConfigAcceptsShortLengths(t *testing.T) {
 }
 
 func TestAudioSpecificConfigRejectsTruncatedESDS(t *testing.T) {
-	for corte := 1; corte < 32; corte++ {
+	for corte := 1; corte < len(esdsSafari); corte++ {
 		if _, err := flv.AudioSpecificConfig(esdsSafari[:corte]); !errors.Is(err, flv.ErrMalformedESDS) {
 			t.Errorf("esds cortado en %d bytes: err = %v, quería ErrMalformedESDS", corte, err)
 		}

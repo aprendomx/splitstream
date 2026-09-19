@@ -582,8 +582,9 @@ func TestStatusCarriesTheUpdateNotice(t *testing.T) {
 	}
 }
 
-// El panel deshabilita «Emitir» en la página de cámara cuando lo que hay en el aire es
-// OBS, y al revés: para eso necesita saber el origen, no solo que hay sesión.
+// El campo source es lo que le permite al panel distinguir las dos fuentes de ingesta.
+// Hoy la página de cámara solo mira si hay sesión (el copy de «ocupado» ya nombra a OBS y a
+// la cámara de otro dispositivo), pero sin este campo la distinción no sería ni posible.
 func TestStatusReportsTheSessionSource(t *testing.T) {
 	srv, _, eng, _, cookies := newDestServer(t)
 	eng.setSesion(relay.LiveSession{ID: 7, StartedAt: time.Now(), Source: relay.SourceBrowser})

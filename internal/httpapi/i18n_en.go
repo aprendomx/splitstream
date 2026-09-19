@@ -151,12 +151,13 @@ var traducciones = map[string]string{
 
 	// ---- camera.go: los motivos con los que se cierra el WebSocket de la cámara, que
 	// el panel enseña tal cual (Camara.vue) ----
-	"ya hay una emisión en curso":      "a broadcast is already in progress",
-	"el primer mensaje debe ser start": "the first message must be start",
-	"start mal formado":                "malformed start",
-	"mensaje mal formado":              "malformed message",
-	"el servidor se está apagando":     "the server is shutting down",
-	"mensaje de cámara mal formado":    "malformed camera message",
+	"ya hay una emisión en curso":             "a broadcast is already in progress",
+	"el primer mensaje debe ser start":        "the first message must be start",
+	"start mal formado":                       "malformed start",
+	"mensaje mal formado":                     "malformed message",
+	"el servidor se está apagando":            "the server is shutting down",
+	"mensaje de cámara mal formado":           "malformed camera message",
+	"no se pudo abrir la sesión de la cámara": "the camera session could not be opened",
 
 	// ---- recording.go ----
 	"la grabación no está en el directorio de grabaciones": "the recording is not in the recordings directory",

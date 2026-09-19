@@ -28,7 +28,10 @@ export default defineConfig({
     // la cookie httpOnly SameSite=Lax viaje igual que en producción, donde todo es el
     // mismo origen.
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8099', changeOrigin: false },
+      // ws: true porque bajo /api viven también los WebSockets de la cámara, la vista
+      // previa y el chat: sin él, en desarrollo el proxy no hace el upgrade y esas páginas
+      // solo fallan contra el servidor de Vite, nunca contra el binario.
+      '/api': { target: 'http://127.0.0.1:8099', changeOrigin: false, ws: true },
       '/ws': { target: 'ws://127.0.0.1:8099', ws: true },
     },
   },

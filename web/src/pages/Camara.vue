@@ -34,8 +34,11 @@ let calidadAbierta = null
 let generacion = 0
 
 // Se deshabilita cuando hay sesión de OTRA fuente: OBS o una cámara en otro dispositivo.
-// Cuando la sesión es la nuestra, el botón es «Parar».
-const ocupado = computed(() => panel.haySesion && !emitiendo.value)
+// Cuando la sesión es la nuestra, el botón es «Parar». conectando entra en la condición
+// porque el socket de estado pone haySesion en cuanto el servidor abre la sesión, y eso
+// pasa antes de que emitiendo sea true: sin él, el aviso de «ocupado» parpadearía a mitad
+// de un arranque que va bien.
+const ocupado = computed(() => panel.haySesion && !emitiendo.value && !conectando.value)
 const listo = computed(() => soporte.value?.ok && hayStream.value && !ocupado.value)
 
 const opcionesCalidad = computed(() => [
@@ -101,17 +104,11 @@ async function abrirCamara() {
   microfonoId.value = stream.getAudioTracks()[0]?.getSettings().deviceId ?? microfonoId.value
 }
 
-onMounted(async () => {
-  soporte.value = await detectarSoporte()
-  if (!soporte.value.ok) return
-  permisoKey.value = 'camara.permiso'
-  await abrirCamara()
+// Cambiar de dispositivo o de calidad reabre la captura; mientras se emite o se conecta los
+// controles están deshabilitados, así que aquí nunca hay emisión en curso ni en vuelo.
+watch([camaraId, microfonoId, calidad], () => {
+  if (!emitiendo.value && !conectando.value && !yaAbierto()) abrirCamara()
 })
-onBeforeUnmount(() => { pararStream() })
-
-// Cambiar de dispositivo o de calidad reabre la captura; mientras se emite los controles
-// están deshabilitados, así que aquí nunca hay emisión en curso.
-watch([camaraId, microfonoId, calidad], () => { if (!emitiendo.value && !yaAbierto()) abrirCamara() })
 
 let emisor = null
 let wakeLock = null
@@ -203,14 +200,24 @@ function antesDeSalir(ev) {
   ev.returnValue = t('camara.aviso_salir')
 }
 
-onMounted(() => {
+// Un solo par de hooks: con dos, el orden entre ellos depende del orden de declaración y
+// es fácil romperlo al mover código. Aquí queda a la vista.
+onMounted(async () => {
   document.addEventListener('visibilitychange', alCambiarVisibilidad)
   window.addEventListener('beforeunload', antesDeSalir)
+  soporte.value = await detectarSoporte()
+  if (!soporte.value.ok) return
+  permisoKey.value = 'camara.permiso'
+  await abrirCamara()
 })
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', alCambiarVisibilidad)
   window.removeEventListener('beforeunload', antesDeSalir)
+  // parar() antes que pararStream(): los codificadores y el socket se cierran mientras las
+  // pistas siguen vivas. Al revés, el último VideoFrame se construiría sobre una pista ya
+  // parada y el cierre acabaría en un error en vez de en una salida limpia.
   parar()
+  pararStream()
 })
 </script>
 
@@ -241,19 +248,19 @@ onBeforeUnmount(() => {
           <div class="row q-col-gutter-md">
             <div class="col-12 col-sm-6">
               <q-select v-model="camaraId" :options="camaras.map((d, i) => ({ label: nombre(d, i), value: d.deviceId }))"
-                        emit-value map-options outlined dense :label="t('camara.camara')" :disable="emitiendo">
+                        emit-value map-options outlined dense :label="t('camara.camara')" :disable="emitiendo || conectando">
                 <template #prepend><q-icon :name="iCamara" /></template>
               </q-select>
             </div>
             <div class="col-12 col-sm-6">
               <q-select v-model="microfonoId" :options="microfonos.map((d, i) => ({ label: nombre(d, i), value: d.deviceId }))"
-                        emit-value map-options outlined dense :label="t('camara.microfono')" :disable="emitiendo">
+                        emit-value map-options outlined dense :label="t('camara.microfono')" :disable="emitiendo || conectando">
                 <template #prepend><q-icon :name="iMicrofono" /></template>
               </q-select>
             </div>
             <div class="col-12">
               <q-btn-toggle v-model="calidad" :options="opcionesCalidad" no-caps outline toggle-color="primary"
-                            :disable="emitiendo" :aria-label="t('camara.calidad')" />
+                            :disable="emitiendo || conectando" :aria-label="t('camara.calidad')" />
             </div>
           </div>
           <p class="ss-t-14 ss-muted q-mt-md q-mb-none">{{ t('camara.consejo_orientacion') }}</p>

@@ -70,6 +70,12 @@ type Engine struct {
 	newSinks      SinkProvider
 	sessionID     int64
 	sessionSource string
+	// arrancando marca la ventana en la que hay una sesión abriéndose pero todavía sin
+	// id: startSession suelta el mutex para hablar con la base. Sin esta bandera, dos
+	// arranques simultáneos —dos teléfonos en la página de la cámara— pasarían los dos la
+	// comprobación de sessionID y dejarían dos filas de sesión abiertas, cuando el spec §6
+	// promete un 4002 al segundo.
+	arrancando bool
 
 	sessionWidth   int
 	sessionHeight  int
@@ -171,15 +177,26 @@ func (e *Engine) StartLocalSession() error {
 
 // startSession es lo común a las dos entradas: abre la sesión en la base, arranca los
 // sinks del proveedor y deja constancia. Vuelve a comprobar que no haya sesión porque
-// OnPublishStart soltó el mutex para validar.
+// OnPublishStart soltó el mutex para validar, y toma arrancando bajo el MISMO candado que
+// esa comprobación: entre aquí y la escritura de sessionID hay un viaje a la base con el
+// mutex suelto, y quien llegue en ese hueco tiene que ver el motor ocupado.
 func (e *Engine) startSession(source, app, mensaje string) error {
 	e.mu.Lock()
-	if e.sessionID != 0 {
+	if e.sessionID != 0 || e.arrancando {
 		e.mu.Unlock()
 		return ErrSessionInProgress
 	}
+	e.arrancando = true
 	provider := e.newSinks
 	e.mu.Unlock()
+
+	// A partir de aquí toda salida suelta la bandera: si un fallo de la base la dejara
+	// puesta, el motor rechazaría para siempre sin que haya ninguna sesión abierta.
+	defer func() {
+		e.mu.Lock()
+		e.arrancando = false
+		e.mu.Unlock()
+	}()
 
 	ctx := context.Background()
 	id, err := e.store.StartSession(ctx)

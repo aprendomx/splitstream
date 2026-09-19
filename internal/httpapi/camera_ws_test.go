@@ -318,6 +318,71 @@ func TestCameraAcceptsBigFramesAndClosesOnHugeOnes(t *testing.T) {
 	escritura, cancelEscritura := context.WithTimeout(ctx, 8*time.Second)
 	_ = conn.Write(escritura, websocket.MessageBinary, append([]byte{cameraMsgVideoFrame}, enorme...))
 	cancelEscritura()
+	// El límite lo aplica la propia librería, que cierra con 1009 antes de que el handler
+	// vea nada: el cliente tiene que enterarse del motivo, no solo de que el socket murió.
+	if got := esperarCierre(t, ctx, conn); got.Code != websocket.StatusMessageTooBig {
+		t.Errorf("código de cierre = %d, quería %d", got.Code, websocket.StatusMessageTooBig)
+	}
+	esperarTerminadas(t, eng, 1)
+}
+
+// Los dos tests que siguen son lentos a propósito: los dos plazos que prueban —5 s para el
+// start y 10 s entre mensajes— son lo único que le devuelve la sesión al servicio cuando un
+// teléfono se queda sin red y no llega a mandar la trama de cierre. Sin ellos la sesión
+// quedaría abierta con los destinos colgando de ella hasta que se rindiera el TCP.
+
+// Un socket que se abre y no dice nada no retiene nada: el servidor lo cierra al vencer
+// cameraStartWait y no llega a abrir sesión.
+func TestCameraClosesWhenStartIsLate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("tarda varios segundos; la CI no usa -short, así que allí sí corre")
+	}
+
+	_, eng, url, cookies := cameraServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	conn, _, err := dialWS(ctx, url, cookies)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.CloseNow()
+
+	leer, cancelLeer := context.WithTimeout(ctx, 7*time.Second)
+	_, _, err = conn.Read(leer)
+	cancelLeer()
+	if err == nil {
+		t.Fatal("el servidor siguió esperando a un cliente que no mandó start")
+	}
+	if eng.sesionesLocales() != 0 {
+		t.Errorf("sesiones locales = %d, quería 0: sin start no hay sesión", eng.sesionesLocales())
+	}
+}
+
+// Un teléfono que pierde la red deja de mandar sin cerrar: al vencer cameraReadTimeout el
+// servidor corta y cierra la sesión, que es lo que apaga los sinks.
+func TestCameraEndsTheSessionOnReadTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("tarda varios segundos; la CI no usa -short, así que allí sí corre")
+	}
+
+	_, eng, url, cookies := cameraServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	conn, _, err := dialWS(ctx, url, cookies)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.CloseNow()
+	arrancar(t, ctx, conn)
+
+	leer, cancelLeer := context.WithTimeout(ctx, 15*time.Second)
+	_, _, err = conn.Read(leer)
+	cancelLeer()
+	if err == nil {
+		t.Fatal("el servidor siguió con la sesión abierta sin recibir nada")
+	}
 	esperarTerminadas(t, eng, 1)
 }
 

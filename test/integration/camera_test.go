@@ -64,6 +64,11 @@ func leerFLV(t *testing.T, path string) []tagFLV {
 // TestCameraEndToEnd hace de navegador: manda por /api/camera/ws lo que WebCodecs
 // entregaría —avcC, NALUs AVCC, ASC y AAC crudo, sacados de un FLV que genera ffmpeg— y
 // comprueba que un sink RTMP real recibe un stream decodificable con vídeo y audio.
+//
+// La reconstrucción byte a byte que describe el spec §8 ya está fijada por
+// TestWrapRoundTripsThroughInspect y TestCameraWrapsFramesIntoRelayMessages; lo que añade
+// este test es la propiedad más fuerte, y la única que importa de verdad: que un sink real
+// decodifique h264 y aac de lo que sale por el otro extremo.
 func TestCameraEndToEnd(t *testing.T) {
 	requireTool(t, "ffmpeg")
 	requireTool(t, "ffprobe")
