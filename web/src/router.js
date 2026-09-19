@@ -6,6 +6,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', name: 'panel', component: () => import('@/pages/Panel.vue') },
+    { path: '/camara', name: 'camara', component: () => import('@/pages/Camara.vue') },
     { path: '/creditos', name: 'creditos', component: () => import('@/pages/Creditos.vue') },
     { path: '/ajustes', name: 'ajustes', component: () => import('@/pages/Ajustes.vue') },
     { path: '/grabaciones', name: 'grabaciones', component: () => import('@/pages/Grabaciones.vue') },

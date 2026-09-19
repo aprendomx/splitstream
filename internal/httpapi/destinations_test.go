@@ -29,6 +29,11 @@ type fakeEngine struct {
 	tapCh        chan *relay.Message
 	tapLiberados int
 	videoCfg     []byte
+
+	startErr  error
+	locales   int
+	acabadas  int
+	recibidos []*relay.Message
 }
 
 func (f *fakeEngine) Session() relay.LiveSession {
@@ -134,6 +139,57 @@ func (f *fakeEngine) liberados() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.tapLiberados
+}
+
+// StartLocalSession simula la ingesta de la cámara (spec cámara §4): abre una sesión
+// con id fijo, o falla con lo que el test haya fijado en setStartErr.
+func (f *fakeEngine) StartLocalSession() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.startErr != nil {
+		return f.startErr
+	}
+	f.locales++
+	f.sesion = relay.LiveSession{ID: 42, StartedAt: time.Now(), Source: relay.SourceBrowser}
+	return nil
+}
+
+func (f *fakeEngine) OnMessage(m *relay.Message) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recibidos = append(f.recibidos, m)
+}
+
+func (f *fakeEngine) OnPublishEnd() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.acabadas++
+	f.sesion = relay.LiveSession{}
+}
+
+func (f *fakeEngine) setStartErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startErr = err
+}
+
+func (f *fakeEngine) sesionesLocales() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.locales
+}
+
+func (f *fakeEngine) terminadas() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.acabadas
+}
+
+// mensajes devuelve una copia de lo que llegó por OnMessage, en orden.
+func (f *fakeEngine) mensajes() []*relay.Message {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*relay.Message(nil), f.recibidos...)
 }
 
 // fakeSinks construye sinks que no conectan a ninguna parte: basta con que tengan el id

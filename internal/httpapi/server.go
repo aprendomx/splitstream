@@ -87,6 +87,13 @@ type EngineView interface {
 	// tests son un canal y un slice que el test controla.
 	Tap() (<-chan *relay.Message, func())
 	VideoConfig() []byte
+
+	// StartLocalSession, OnMessage y OnPublishEnd son la ingesta de la cámara del
+	// navegador (spec cámara §4): aquí la API ES el publisher. Son los mismos métodos
+	// con los que rtmpio alimenta al motor, a través de una interfaz que no lo importa.
+	StartLocalSession() error
+	OnMessage(msg *relay.Message)
+	OnPublishEnd()
 }
 
 // WebhookSender manda un evento a un webhook. Lo cumple *alerts.WebhookDispatcher; la API
@@ -241,6 +248,14 @@ type Server struct {
 	// goroutines de sondeo para que Wait() pueda esperarlas.
 	baseCtx context.Context
 	wg      sync.WaitGroup
+	// cameraCtx es el padre de cada WebSocket de la cámara del navegador (camera.go).
+	// Deliberadamente independiente de baseCtx: main.go cancela baseCtx (vía cancelSinks)
+	// DESPUÉS de WaitIdle, así que colgar la cámara de él no cortaría nada a tiempo.
+	// cancelCameras es lo que DisconnectCameras acciona, el equivalente de Ingest.Close()
+	// para RTMP: el gancho que el apagado ordenado necesita para sacar al publisher ANTES
+	// de que main.go espere WaitIdle.
+	cameraCtx     context.Context
+	cancelCameras context.CancelFunc
 }
 
 func New(cfg Config) (*Server, error) {
@@ -262,6 +277,7 @@ func New(cfg Config) (*Server, error) {
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
+	cameraCtx, cancelCameras := context.WithCancel(context.Background())
 
 	s := &Server{
 		db: cfg.DB, cipher: cfg.Cipher, engine: cfg.Engine,
@@ -276,10 +292,12 @@ func New(cfg Config) (*Server, error) {
 		updateInfo: cfg.UpdateInfo,
 		platforms:  cfg.Platforms, tokens: cfg.Tokens, chat: cfg.Chat, chatStats: cfg.ChatStats,
 		chatIngest: cfg.ChatIngest, chatBudget: cfg.ChatBudget, ytQuota: cfg.YouTubeQuota, quota: cfg.Quota,
-		auths:       &authFlows{flows: map[string]*authFlow{}},
-		baseCtx:     baseCtx,
-		liveTimeout: liveTimeoutPorDefecto,
-		now:         time.Now,
+		auths:         &authFlows{flows: map[string]*authFlow{}},
+		baseCtx:       baseCtx,
+		liveTimeout:   liveTimeoutPorDefecto,
+		now:           time.Now,
+		cameraCtx:     cameraCtx,
+		cancelCameras: cancelCameras,
 	}
 	if _, puerto, err := net.SplitHostPort(cfg.RTMPAddr); err == nil {
 		s.rtmpPort = puerto
@@ -291,6 +309,12 @@ func New(cfg Config) (*Server, error) {
 // Handler envuelve el mux con conIdioma: así el idioma se negocia una vez por petición y
 // writeError lo encuentra sin que ninguno de sus ~90 sitios de llamada cambie.
 func (s *Server) Handler() http.Handler { return conIdioma(s.mux) }
+
+// DisconnectCameras corta las sesiones de la cámara del navegador en curso. Existe por
+// la misma razón que Ingest.Close() para RTMP: el apagado ordenado (main.go) necesita
+// que el publisher se vaya ANTES de WaitIdle, y una conexión WebSocket secuestrada no se
+// entera de http.Server.Shutdown ni de la cancelación del contexto de la petición.
+func (s *Server) DisconnectCameras() { s.cancelCameras() }
 
 // ruta es una entrada de la tabla de rutas: todo lo que hace falta saber de un endpoint,
 // tanto para registrarlo en el mux como para contarlo en docs/api.md (spec v1.0 §5.1).
@@ -387,6 +411,7 @@ func (s *Server) rutas() []ruta {
 		protegida("DELETE", "/api/recordings/{id}", s.handleDeleteRecording, "recordings", "Borra una grabación y su archivo"),
 		protegida("GET", "/ws", s.handleWS, "ws", "Canal WebSocket con el estado del panel en tiempo real"),
 		protegida("GET", "/api/preview/ws", s.handlePreviewWS, "ws", "Canal WebSocket con la vista previa silenciada de la ingesta"),
+		protegida("GET", "/api/camera/ws", s.handleCameraWS, "ws", "Canal WebSocket por el que el navegador publica su cámara como fuente de la emisión"),
 
 		// Plataformas, flujo de autorización sondeado en el servidor, y cuentas (v0.11 §6.1).
 		protegida("GET", "/api/platforms", s.handleListPlatforms, "platforms", "Lista las plataformas soportadas y lo que cada una permite hacer"),

@@ -33,7 +33,7 @@ The five products are not the same kind of thing, and that conditions everything
 
 | Product | Relay to several destinations | Local recording | Platform title and chat | Web panel | Install | Where it runs | Source |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Splitstream** | Yes: N RTMP/RTMPS destinations at once, without transcoding | Yes: FLV on your disk, with segments, a cap in GB and retention | Title on Twitch, YouTube and Kick with the account connected; read-only chat on those three | Yes, inside the same binary | Single binary: Homebrew, winget, script or Docker | Your machine or your server | [S] |
+| **Splitstream** | Yes: N RTMP/RTMPS destinations at once, no transcoding; from OBS or from the browser camera | Yes: FLV on your disk, with segments, a cap in GB and retention | Title on Twitch, YouTube and Kick with the account connected; read-only chat on those three | Yes, inside the same binary | Single binary: Homebrew, winget, script or Docker | Your machine or your server | [S] |
 | **Restream** | Yes, to the platforms in its catalogue | Not documented | Yes: unified chat and title changes on the destinations that allow it | Yes, web application | An account on their site; nothing to install | Their servers | [R] |
 | **Castr** | Yes, to the platforms in its catalogue | Not documented | Not documented | Yes, web application | An account on their site; nothing to install | Their servers | [C] |
 | **nginx-rtmp** (nginx `rtmp` module) | Yes: one `push` directive per destination | Yes: `record` directive, in FLV | No | No; it exposes a statistics page (`stat`) in XML with an XSL stylesheet | Compile nginx with `--add-module` | Your machine or your server | [N] |

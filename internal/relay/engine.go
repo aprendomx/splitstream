@@ -39,6 +39,13 @@ type SinkProvider func(sessionID int64) ([]*Sink, error)
 // segunda intercalaría frames de dos codificadores en el mismo stream de salida.
 var ErrSessionInProgress = errors.New("ya hay una publicación en curso")
 
+// Origen de la sesión en curso: de dónde entran los mensajes. El panel lo enseña; no se
+// persiste (spec cámara §10).
+const (
+	SourceRTMP    = "rtmp"    // OBS o cualquier publisher RTMP
+	SourceBrowser = "browser" // la cámara del navegador por /api/camera/ws
+)
+
 // EngineConfig son los datos para construir el motor.
 type EngineConfig struct {
 	Hub    *Hub
@@ -58,10 +65,17 @@ type Engine struct {
 	log     *slog.Logger
 	baseCtx context.Context
 
-	mu        sync.Mutex
-	validate  func(app, key string) error
-	newSinks  SinkProvider
-	sessionID int64
+	mu            sync.Mutex
+	validate      func(app, key string) error
+	newSinks      SinkProvider
+	sessionID     int64
+	sessionSource string
+	// arrancando marca la ventana en la que hay una sesión abriéndose pero todavía sin
+	// id: startSession suelta el mutex para hablar con la base. Sin esta bandera, dos
+	// arranques simultáneos —dos teléfonos en la página de la cámara— pasarían los dos la
+	// comprobación de sessionID y dejarían dos filas de sesión abiertas, cuando el spec §6
+	// promete un 4002 al segundo.
+	arrancando bool
 
 	sessionWidth   int
 	sessionHeight  int
@@ -137,7 +151,7 @@ func (e *Engine) WaitIdle(ctx context.Context) error {
 	}
 }
 
-// OnPublishStart valida al publisher y abre la sesión.
+// OnPublishStart valida al publisher RTMP y abre la sesión.
 func (e *Engine) OnPublishStart(app, streamKey string) error {
 	e.mu.Lock()
 	if e.sessionID != 0 {
@@ -145,12 +159,44 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 		return ErrSessionInProgress
 	}
 	validate := e.validate
-	provider := e.newSinks
 	e.mu.Unlock()
 
 	if err := validate(app, streamKey); err != nil {
 		return err
 	}
+	return e.startSession(SourceRTMP, app, "el publisher conectó")
+}
+
+// StartLocalSession abre una sesión para la cámara del navegador (spec cámara §4). No
+// pasa por el validador: quien llega aquí ya se autenticó con la cookie del panel, y la
+// clave de ingesta es cosa de RTMP. Todo lo demás es idéntico a OnPublishStart, y la
+// sesión se cierra con el mismo OnPublishEnd.
+func (e *Engine) StartLocalSession() error {
+	return e.startSession(SourceBrowser, "browser", "la cámara del navegador conectó")
+}
+
+// startSession es lo común a las dos entradas: abre la sesión en la base, arranca los
+// sinks del proveedor y deja constancia. Vuelve a comprobar que no haya sesión porque
+// OnPublishStart soltó el mutex para validar, y toma arrancando bajo el MISMO candado que
+// esa comprobación: entre aquí y la escritura de sessionID hay un viaje a la base con el
+// mutex suelto, y quien llegue en ese hueco tiene que ver el motor ocupado.
+func (e *Engine) startSession(source, app, mensaje string) error {
+	e.mu.Lock()
+	if e.sessionID != 0 || e.arrancando {
+		e.mu.Unlock()
+		return ErrSessionInProgress
+	}
+	e.arrancando = true
+	provider := e.newSinks
+	e.mu.Unlock()
+
+	// A partir de aquí toda salida suelta la bandera: si un fallo de la base la dejara
+	// puesta, el motor rechazaría para siempre sin que haya ninguna sesión abierta.
+	defer func() {
+		e.mu.Lock()
+		e.arrancando = false
+		e.mu.Unlock()
+	}()
 
 	ctx := context.Background()
 	id, err := e.store.StartSession(ctx)
@@ -160,6 +206,7 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 
 	e.mu.Lock()
 	e.sessionID = id
+	e.sessionSource = source
 	e.sessionWidth, e.sessionHeight = 0, 0
 	e.sessionBytes = 0
 	e.sessionStarted = time.Now()
@@ -176,8 +223,8 @@ func (e *Engine) OnPublishStart(app, streamKey string) error {
 		e.AddSink(s)
 	}
 
-	e.logEvent(ctx, &id, nil, "info", "publisher_connected", "el publisher conectó")
-	e.log.Info("sesión iniciada", "sesion_id", id, "app", app)
+	e.logEvent(ctx, &id, nil, "info", "publisher_connected", mensaje)
+	e.log.Info("sesión iniciada", "sesion_id", id, "app", app, "origen", source)
 	return nil
 }
 
@@ -246,6 +293,9 @@ type LiveSession struct {
 	Width      int
 	Height     int
 	BitrateBPS int
+	// Source es SourceRTMP o SourceBrowser: el panel enseña de dónde viene lo que está
+	// en el aire y deshabilita la otra entrada.
+	Source string
 }
 
 // Session devuelve lo que se sabe de la sesión en curso, sin esperar a que termine.
@@ -268,6 +318,7 @@ func (e *Engine) Session() LiveSession {
 		StartedAt: e.sessionStarted,
 		Width:     e.sessionWidth,
 		Height:    e.sessionHeight,
+		Source:    e.sessionSource,
 	}
 	if elapsed := time.Since(e.sessionStarted); elapsed > 0 {
 		out.BitrateBPS = int(float64(e.sessionBytes*8) / elapsed.Seconds())
@@ -311,6 +362,7 @@ func (e *Engine) OnPublishEnd() {
 
 	e.mu.Lock()
 	e.sessionID = 0
+	e.sessionSource = ""
 	e.mu.Unlock()
 
 	e.log.Info("sesión terminada", "sesion_id", id)

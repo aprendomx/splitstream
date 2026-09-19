@@ -14,6 +14,8 @@ export {
   mdiKey as iClave,
   mdiEye as iVer,
   mdiEyeOff as iOcultar,
+  mdiVideo as iCamara,
+  mdiMicrophone as iMicrofono,
   mdiDotsVertical as iMenu,
   mdiDragVertical as iArrastrar,
   mdiContentCopy as iCopiar,

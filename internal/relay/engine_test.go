@@ -45,6 +45,22 @@ func (f *fakeStore) LogEvent(ctx context.Context, e EngineEvent) error {
 	return nil
 }
 
+// storeLento retiene StartSession hasta que el test lo suelta. Es la única forma de
+// ponerse DENTRO de la ventana en la que la sesión se está abriendo pero todavía no tiene
+// id, que es donde vivía la carrera entre dos arranques simultáneos.
+type storeLento struct {
+	*fakeStore
+	dentro chan struct{} // se cierra al entrar en StartSession
+	soltar chan struct{} // el test lo cierra para dejar seguir
+	unaVez sync.Once
+}
+
+func (s *storeLento) StartSession(ctx context.Context) (int64, error) {
+	s.unaVez.Do(func() { close(s.dentro) })
+	<-s.soltar
+	return s.fakeStore.StartSession(ctx)
+}
+
 func TestEngineRejectsBadKey(t *testing.T) {
 	st := &fakeStore{}
 	e := NewEngine(EngineConfig{Hub: NewHub(nil), Store: st})
@@ -87,6 +103,42 @@ func TestEngineOpensAndClosesSession(t *testing.T) {
 	if st.started != 1 || st.ended != 1 {
 		t.Errorf("sesiones: abiertas=%d cerradas=%d, quería 1 y 1", st.started, st.ended)
 	}
+}
+
+// Dos teléfonos pulsando «Emitir» a la vez: el segundo tiene que ver el motor ocupado
+// aunque el primero siga esperando a la base. Sin la bandera arrancando los dos pasaban la
+// comprobación de sessionID y la base acababa con dos sesiones abiertas.
+func TestEngineRejectsASecondStartWhileTheFirstIsStillOpening(t *testing.T) {
+	st := &storeLento{fakeStore: &fakeStore{}, dentro: make(chan struct{}), soltar: make(chan struct{})}
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: st})
+	e.SetValidator(func(string, string) error { return nil })
+
+	hecho := make(chan error, 1)
+	go func() { hecho <- e.StartLocalSession() }()
+
+	select {
+	case <-st.dentro:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartSession no llegó a ejecutarse")
+	}
+
+	if err := e.OnPublishStart("live", "ok"); !errors.Is(err, ErrSessionInProgress) {
+		t.Errorf("el segundo arranque = %v, quería ErrSessionInProgress", err)
+	}
+
+	close(st.soltar)
+	if err := <-hecho; err != nil {
+		t.Fatalf("StartLocalSession: %v", err)
+	}
+	st.mu.Lock()
+	abiertas := st.started
+	st.mu.Unlock()
+	if abiertas != 1 {
+		t.Errorf("sesiones abiertas = %d, quería 1", abiertas)
+	}
+	e.OnPublishEnd()
 }
 
 func TestEngineForwardsMessagesToHub(t *testing.T) {
@@ -595,4 +647,79 @@ func TestRecorderSinkIDIsNegative(t *testing.T) {
 	if RecorderSinkID >= 0 {
 		t.Fatalf("RecorderSinkID = %d: debe ser negativo para no chocar con AUTOINCREMENT", RecorderSinkID)
 	}
+}
+
+// La cámara del navegador no pasa por el validador: quien llega ya se autenticó con la
+// cookie del panel, y la clave de ingesta es cosa de RTMP (spec cámara §4). Todo lo
+// demás —sesión en el store, sinks, evento, cierre— es idéntico a OBS.
+func TestEngineStartLocalSessionSkipsTheValidator(t *testing.T) {
+	st := &fakeStore{}
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: st})
+	e.SetValidator(func(string, string) error { return errors.New("nadie pasa por aquí") })
+	var provisto int64
+	e.SetSinkProvider(func(id int64) ([]*Sink, error) { provisto = id; return nil, nil })
+
+	if err := e.StartLocalSession(); err != nil {
+		t.Fatalf("StartLocalSession: %v", err)
+	}
+	ses := e.Session()
+	if ses.ID == 0 || ses.Source != SourceBrowser {
+		t.Fatalf("Session() = %+v, quería una sesión con Source browser", ses)
+	}
+	if provisto != ses.ID {
+		t.Errorf("el proveedor de sinks recibió la sesión %d, quería %d", provisto, ses.ID)
+	}
+	st.mu.Lock()
+	eventos := append([]EngineEvent(nil), st.events...)
+	st.mu.Unlock()
+	if len(eventos) != 1 || eventos[0].Kind != "publisher_connected" {
+		t.Errorf("eventos = %+v, quería solo publisher_connected", eventos)
+	}
+
+	e.OnPublishEnd()
+	if e.SessionID() != 0 {
+		t.Error("OnPublishEnd no cerró la sesión local")
+	}
+	st.mu.Lock()
+	ended := st.ended
+	st.mu.Unlock()
+	if ended != 1 {
+		t.Errorf("FinishSession se llamó %d veces, quería 1", ended)
+	}
+}
+
+// OBS y la cámara comparten el motor: una excluye a la otra, en los dos sentidos, y al
+// cerrar la que estaba la otra vuelve a poder entrar.
+func TestEngineLocalAndRTMPSessionsExcludeEachOther(t *testing.T) {
+	st := &fakeStore{}
+	h := NewHub(nil)
+	defer h.Close()
+	e := NewEngine(EngineConfig{Hub: h, Store: st})
+	e.SetValidator(func(string, string) error { return nil })
+
+	if err := e.StartLocalSession(); err != nil {
+		t.Fatalf("StartLocalSession: %v", err)
+	}
+	if err := e.OnPublishStart("live", "ok"); !errors.Is(err, ErrSessionInProgress) {
+		t.Errorf("OnPublishStart con la cámara en el aire = %v, quería ErrSessionInProgress", err)
+	}
+	e.OnPublishEnd()
+
+	if err := e.OnPublishStart("live", "ok"); err != nil {
+		t.Fatalf("OnPublishStart tras cerrar la local: %v", err)
+	}
+	if got := e.Session().Source; got != SourceRTMP {
+		t.Errorf("Source = %q, quería %q", got, SourceRTMP)
+	}
+	if err := e.StartLocalSession(); !errors.Is(err, ErrSessionInProgress) {
+		t.Errorf("StartLocalSession con OBS en el aire = %v, quería ErrSessionInProgress", err)
+	}
+	e.OnPublishEnd()
+
+	if err := e.StartLocalSession(); err != nil {
+		t.Fatalf("StartLocalSession tras cerrar la RTMP: %v", err)
+	}
+	e.OnPublishEnd()
 }

@@ -178,6 +178,25 @@ Dos cosas que conviene saber:
 
 Si la emisión se corta, la vista se cierra sola avisando. No se reabre por su cuenta.
 
+### Emitir desde el teléfono, sin OBS
+
+En la pestaña **Cámara** del panel eliges cámara, micrófono y calidad (720p o 1080p) y
+pulsas **Emitir**. Lo que ves en el recuadro es lo que sale hacia tus canales; los chips
+de abajo dicen cómo va cada uno. **Parar** cierra la sesión como si desconectaras OBS.
+
+Tres cosas que conviene saber antes:
+
+- El panel tiene que abrirse por **HTTPS** (o en `localhost`). Por `http://` en la IP de
+  la red local el navegador no da acceso a la cámara, y la página te lo dice.
+- Funciona en **Chrome, Edge y Safari** (iOS 26 o posterior). En Firefox y en Chrome
+  para Linux no: les falta el codificador de audio que exigen las plataformas.
+- **Deja la página delante.** Si bloqueas el teléfono o cambias de app, el navegador
+  suspende la cámara y la emisión se para. Gira el teléfono y elige la calidad antes de
+  pulsar «Emitir»: cambiarlas a mitad también la corta.
+
+Si OBS está emitiendo, el botón queda deshabilitado con el aviso «Ya hay una emisión en
+curso», y al revés: mientras la cámara emite, OBS es rechazado.
+
 ---
 
 ## 4. Qué significa cada estado

@@ -581,3 +581,22 @@ func TestStatusCarriesTheUpdateNotice(t *testing.T) {
 		t.Errorf("update = %+v", st.Update)
 	}
 }
+
+// El campo source es lo que le permite al panel distinguir las dos fuentes de ingesta.
+// Hoy la página de cámara solo mira si hay sesión (el copy de «ocupado» ya nombra a OBS y a
+// la cámara de otro dispositivo), pero sin este campo la distinción no sería ni posible.
+func TestStatusReportsTheSessionSource(t *testing.T) {
+	srv, _, eng, _, cookies := newDestServer(t)
+	eng.setSesion(relay.LiveSession{ID: 7, StartedAt: time.Now(), Source: relay.SourceBrowser})
+
+	st := decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if !st.Session.Live || st.Session.Source != "browser" {
+		t.Errorf("session = %+v, quería live con source browser", st.Session)
+	}
+
+	eng.setSesion(relay.LiveSession{})
+	st = decodeStatus(t, do(t, srv, cookies, http.MethodGet, "/api/status", ""))
+	if st.Session.Source != "" {
+		t.Errorf("sin sesión, source = %q, quería vacío", st.Session.Source)
+	}
+}

@@ -41,6 +41,7 @@ func (s *Server) status(ctx context.Context, r *http.Request) (statusDTO, error)
 		if ses := s.engine.Session(); ses.ID != 0 {
 			out.Session.Live = true
 			out.Session.ID = ses.ID
+			out.Session.Source = ses.Source
 			// En UTC: el motor lo tiene en hora local, y el resto de timestamps del
 			// JSON —los que salen de la base— van en Z. Mezclar husos en el mismo
 			// contrato es una fuente de confusión gratuita para el frontend.

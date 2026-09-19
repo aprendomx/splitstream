@@ -232,6 +232,9 @@ type sessionDTO struct {
 	Width      *int       `json:"width"`
 	Height     *int       `json:"height"`
 	BitrateBPS *int       `json:"bitrate_bps"`
+	// Source dice de dónde viene la sesión: "rtmp" (OBS) o "browser" (la cámara del
+	// panel). Vacío cuando Live es false.
+	Source string `json:"source"`
 }
 
 // ingestDTO es la tarjeta de ingesta del panel: dónde publicar y con qué app. La clave va
