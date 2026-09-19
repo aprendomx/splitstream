@@ -538,15 +538,15 @@ keeps confirming the copy is upstream plus exactly those patches.
 
 ## Scope
 
-Restreaming from OBS or from the browser camera, and local recording. It records in FLV, without transcoding: what comes in
-over RTMP is muxed to disk as-is, the same way it is forwarded as-is to each destination.
-No transcoding, **read-only** chat in the panel, per platform and only where the API
-allows it (today Twitch, YouTube and Kick — the last one only with the panel reachable at
-a public HTTPS URL); writing and moderating are out of scope. Facebook, X and TikTok stay
-at "restream only": Facebook demands business verification for its channel API, and X and
-TikTok have no viable API for this. No multi-tenancy. If you need to change the resolution
-or the bitrate per destination, this is not the tool: that requires transcoding, and that
-is a different product.
+Restreaming from OBS or from the browser camera, and local recording. It records in
+FLV, without transcoding: what comes in over RTMP is muxed to disk as-is, the same way
+it is forwarded as-is to each destination. No transcoding, **read-only** chat in the
+panel, per platform and only where the API allows it (today Twitch, YouTube and Kick —
+the last one only with the panel reachable at a public HTTPS URL); writing and moderating
+are out of scope. Facebook, X and TikTok stay at "restream only": Facebook demands
+business verification for its channel API, and X and TikTok have no viable API for this.
+No multi-tenancy. If you need to change the resolution or the bitrate per destination,
+this is not the tool: that requires transcoding, and that is a different product.
 
 ## License
 

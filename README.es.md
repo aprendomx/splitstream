@@ -537,15 +537,15 @@ exactamente esos parches.
 
 ## Alcance
 
-Retransmisión desde OBS o desde la cámara del navegador, y grabación local. Graba en FLV, sin transcodificar: lo que entra por RTMP
-se muxea tal cual a disco, igual que se reenvía tal cual a cada destino. Sin
-transcodificación, chat de **lectura** en el panel, por plataforma y solo donde la API lo
-permite (hoy Twitch, YouTube y Kick — este último solo con el panel accesible por URL
-pública HTTPS); escribir y moderar quedan fuera. Facebook, X y TikTok se quedan en «solo
-retransmitir»: Facebook exige verificación de negocio para su API de canal, y X y TikTok
-no tienen una API viable para esto. Sin multi-tenant. Si necesitas cambiar la resolución o
-el bitrate por destino, esto no es la herramienta: hace falta transcodificar, y eso es
-otro producto.
+Retransmisión desde OBS o desde la cámara del navegador, y grabación local. Graba en
+FLV, sin transcodificar: lo que entra por RTMP se muxea tal cual a disco, igual que se
+reenvía tal cual a cada destino. Sin transcodificación, chat de **lectura** en el panel,
+por plataforma y solo donde la API lo permite (hoy Twitch, YouTube y Kick — este último
+solo con el panel accesible por URL pública HTTPS); escribir y moderar quedan fuera.
+Facebook, X y TikTok se quedan en «solo retransmitir»: Facebook exige verificación de
+negocio para su API de canal, y X y TikTok no tienen una API viable para esto. Sin
+multi-tenant. Si necesitas cambiar la resolución o el bitrate por destino, esto no es
+la herramienta: hace falta transcodificar, y eso es otro producto.
 
 ## Licencia
 
