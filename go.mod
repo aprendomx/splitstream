@@ -4,7 +4,7 @@ go 1.26.8
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/yutopp/go-amf0 v0.1.0
+	github.com/yutopp/go-amf0 v0.1.1
 	github.com/yutopp/go-rtmp v0.0.7
 	golang.org/x/crypto v0.57.0
 	golang.org/x/time v0.16.0
